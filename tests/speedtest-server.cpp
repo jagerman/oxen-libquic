@@ -58,19 +58,22 @@ int main(int argc, char* argv[])
     auto [listen_addr, listen_port] = parse_addr(server_addr, 5500);
     opt::local_addr server_local{listen_addr, listen_port};
 
-    stream_open_callback_t stream_cb = [&](Stream& s) {
-        log::debug(log_cat, "Stream open callback called");
+    auto stream_opened = [&](Stream& s) {
+        log::warning(test_cat, "Stream {} opened!", s.stream_id);
         return 0;
     };
+    auto stream_data = [&](Stream& s, bstring_view data) {
+        log::warning(test_cat, "Got some stream data from stream {}: {}B", s.stream_id, data.size());
+    };
 
-    log::debug(log_cat, "Calling 'server_listen'...");
-    auto server = server_net.server_listen(server_local, server_tls, stream_cb);
+    log::debug(test_cat, "Calling 'server_listen'...");
+    auto server = server_net.server_listen(server_local, server_tls, stream_opened, stream_data);
 
-    log::debug(log_cat, "Starting event loop thread...");
+    log::debug(test_cat, "Starting event loop thread...");
     auto [ev_thread, running, done] = spawn_event_loop(server_net);
 
     while (done.wait_for(3s) != std::future_status::ready)
-        log::info(log_cat, "waiting...");
+        log::info(test_cat, "waiting...");
 
     ev_thread.join();
 
