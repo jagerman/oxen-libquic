@@ -514,7 +514,7 @@ namespace oxen::quic
 
         log::info(log_cat, "Expiry delta: {}", ngtcp2_expiry_delta.count());
 
-        auto expires_in = std::max(0ms, ngtcp2_expiry_delta);
+        auto expires_in = std::max(1ms, ngtcp2_expiry_delta);
         retransmit_timer->stop();
         retransmit_timer->start(expires_in, 0ms);
     }
