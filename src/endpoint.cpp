@@ -257,18 +257,53 @@ namespace oxen::quic
         return {rv};
     }
 
-    io_result Endpoint::send_packet(Address& remote, bstring_view data)
+    io_result Endpoint::send_packets(Path& p, send_buffer_t& buf, size_t n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        auto handle = get_handle(remote);
+        auto handle = get_handle(p);
 
-        if (!handle)
-            throw std::invalid_argument("Error: could not query UDP handle for packet transmission");
+        assert(handle != nullptr);
 
-        log::info(log_cat, "Sending udp to {}:{}...", remote.ip.c_str(), remote.port);
-        handle->send(remote, const_cast<char*>(reinterpret_cast<const char*>(data.data())), data.length());
+        auto raw_handle = handle->raw();
 
-        return io_result{0};
+        // We need to allocate the data until libuv is ready to send it; we do *one* allocation into
+        // a big vector with the packet data appended end-to-end, i.e. [PKT1][PKT2]...
+        auto packet_data = std::make_unique<std::vector<char>>();
+        size_t agg_size = 0;
+        for (int i = 0; i < n_pkts; i++)
+            agg_size += buf[i].second;
+        packet_data->resize(agg_size);
+
+        std::array<uv_buf_t, batch_size> raw_bufs;
+
+        log::info(log_cat, "Sending udp batch to {}:{}...", p.remote.ip.c_str(), p.remote.port);
+
+        char* packet_data_pos = packet_data->data();
+        for (int i = 0; i < n_pkts; ++i)
+        {
+            assert(buf[i].second > 0);
+
+            std::memcpy(packet_data_pos, buf[i].first.data(), buf[i].second);
+            raw_bufs[i].base = packet_data_pos;
+            raw_bufs[i].len = buf[i].second;
+            packet_data_pos += buf[i].second;
+
+#ifndef NDEBUG
+            buf[i].second = 0;
+#endif
+        }
+        assert(packet_data_pos - packet_data->data() == agg_size);
+
+        auto* send_req = new uv_udp_send_t{};
+        send_req->data = packet_data.release();
+        auto deleter = [](uv_udp_send_t* send_req, int) {
+            delete static_cast<std::vector<char>*>(send_req->data);
+            // delete send_req;
+        };
+
+        auto rv = uv_udp_send(send_req, raw_handle, raw_bufs.data(), n_pkts, p.remote, deleter);
+
+        return io_result{rv};
     }
 
     io_result Endpoint::send_packet(Path& p, bstring_view data)

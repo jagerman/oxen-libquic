@@ -251,19 +251,29 @@ namespace oxen::quic
         schedule_retransmit();
     }
 
-    io_result Connection::send()
+    io_result Connection::send(uint64_t ts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        assert(send_buffer_size <= send_buffer.size());
-        io_result rv{};
-        bstring_view send_data{send_buffer.data(), send_buffer_size};
+        if (n_packets == 0)
+            return io_result{0};
 
-        log::trace(log_cat, "Sending to {}: {}", path.remote.to_string(), buffer_printer{send_data});
+        auto sent = endpoint.send_packets(path, send_buffer, n_packets);
+        if (sent.blocked())
+        {
+            log::warning(log_cat, "Error: Packet send blocked, scheduling retransmit");
+            ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+            schedule_retransmit();
+        }
+        else if (!sent)
+        {
+            log::warning(log_cat, "Error: I/O error while trying to send packet");
+            ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+        }
+        else
+            n_packets = 0;
 
-        if (!send_data.empty())
-            rv = endpoint.send_packet(path, send_data);
-
-        return rv;
+        log::trace(log_cat, "Packets away!");
+        return sent;
     }
 
     void Connection::flush_streams()
@@ -273,35 +283,13 @@ namespace oxen::quic
         // schedule another event loop call of ourselves (so that we don't starve the loop)
         auto max_udp_payload_size = ngtcp2_conn_get_path_max_tx_udp_payload_size(conn.get());
         auto max_stream_packets = ngtcp2_conn_get_send_quantum(conn.get()) / max_udp_payload_size;
-        ngtcp2_ssize ndatalen;
         uint16_t stream_packets = 0;
+        // packet counter held as member attribute
+        n_packets = 0;
+        ngtcp2_ssize ndatalen;
         uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
         uint64_t ts = get_timestamp();
         pkt_info = {};
-
-        auto send_packet = [&](auto nwrite) -> int {
-            send_buffer_size = nwrite;
-
-            auto sent = send();
-            if (sent.blocked())
-            {
-                log::warning(log_cat, "Error: Packet send blocked, scheduling retransmit");
-                ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                schedule_retransmit();
-                return 0;
-            }
-
-            send_buffer_size = 0;
-
-            if (!sent)
-            {
-                log::warning(log_cat, "Error: I/O error while trying to send packet");
-                ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                return 0;
-            }
-            log::trace(log_cat, "Packet away!");
-            return 1;
-        };
 
         std::list<Stream*> strs;
         for (auto& [stream_id, stream_ptr] : streams)
@@ -323,8 +311,7 @@ namespace oxen::quic
         {
             for (auto it = strs.begin(); it != strs.end();)
             {
-                log::trace(
-                        log_cat, "Max stream packets: {}\nCurrent stream packets: {}", max_stream_packets, stream_packets);
+                log::trace(log_cat, " Writing packet {} of {} batch stream packets", n_packets, batch_size);
 
                 auto& stream = **it;
                 auto bufs = stream.pending();
@@ -350,13 +337,14 @@ namespace oxen::quic
                 then in the next loop (for(;;)), call writev_stream differently based on that, and
                 if we send_packet there we're also no longer in the middle of a packet
                 */
+                auto& buf = send_buffer[n_packets];
 
                 auto nwrite = ngtcp2_conn_writev_stream(
                         conn.get(),
                         &path.path,
                         &pkt_info,
-                        u8data(send_buffer),
-                        send_buffer.size(),
+                        u8data(buf.first),
+                        buf.first.size(),
                         &ndatalen,
                         flags,
                         stream.stream_id,
@@ -368,7 +356,7 @@ namespace oxen::quic
 
                 if (nwrite < 0)
                 {
-                    if (nwrite == -240)  // NGTCP2_ERR_WRITE_MORE
+                    if (nwrite == NGTCP2_ERR_WRITE_MORE)  // -240
                     {
                         log::debug(
                                 log_cat, "Consumed {} bytes from stream {} and have space left", ndatalen, stream.stream_id);
@@ -407,28 +395,35 @@ namespace oxen::quic
                     stream.wrote(ndatalen);
                 }
 
-                if (nwrite == 0)  //  we are congested
+                if (nwrite == 0)  // we are congested
                 {
                     log::info(log_cat, "Done stream writing to {} (connection is congested)", stream.stream_id);
 
                     ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                    //  we are congested, so clear pending streams to exit outer loop
-                    //  and enter next loop to flush unsent stuff
+                    // we are congested, so clear pending streams to exit outer loop
+                    // and enter next loop to flush unsent stuff
                     strs.clear();
                     break;
                 }
 
-                log::info(log_cat, "Sending stream data packet");
-                if (!send_packet(nwrite))
-                    return;
+                buf.second = nwrite;
+                n_packets += 1;
+                stream_packets += 1;
 
-                ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-                if (stream.unsent() == 0)
-                    it = strs.erase(it);
-                else
-                    ++it;
+                if (n_packets == batch_size)
+                {
+                    log::info(log_cat, "Sending stream data packet batch");
+                    if (auto rv = send(ts); rv != 0)
+                        return;
 
-                if (++stream_packets == max_stream_packets)
+                    ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+                    if (stream.unsent() == 0)
+                        it = strs.erase(it);
+                    else
+                        ++it;
+                }
+
+                if (stream_packets == max_stream_packets)
                 {
                     log::info(log_cat, "Max stream packets ({}) reached", max_stream_packets);
                     ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
@@ -443,12 +438,14 @@ namespace oxen::quic
         {
             log::info(log_cat, "Calling add_stream_data for empty stream");
 
+            auto& buf = send_buffer[n_packets];
+
             auto nwrite = ngtcp2_conn_writev_stream(
                     conn.get(),
                     &path.path,
                     &pkt_info,
-                    u8data(send_buffer),
-                    send_buffer.size(),
+                    u8data(buf.first),
+                    buf.first.size(),
                     &ndatalen,
                     flags,
                     -1,
@@ -488,12 +485,23 @@ namespace oxen::quic
                 break;
             }
 
-            log::info(log_cat, "Sending data packet with non-stream data frames");
-            if (auto rv = send_packet(nwrite); rv != 0)
-                return;
-            ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+            buf.second = nwrite;
+            n_packets += 1;
+
+            if (n_packets == batch_size)
+            {
+                log::info(log_cat, "Sending packet batch with non-stream data frames");
+                if (auto rv = send(ts); rv != 0)
+                    return;
+
+                ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
+            }
         }
 
+        log::info(log_cat, "Sending packet batch with remaining data frames");
+        if (auto rv = send(ts); rv != 0)
+            return;
+        ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
         log::info(log_cat, "Exiting flush_streams()");
     }
 
