@@ -15,11 +15,6 @@
 
 using namespace oxen::quic;
 
-namespace oxen::quic
-{
-    extern uint64_t RETRANSMITS, PKT_READS0, IO_READY_CALLS;
-}
-
 constexpr size_t operator""_kiB(unsigned long long int x)
 {
     return x * 1024;
@@ -231,7 +226,6 @@ int main(int argc, char* argv[])
     auto elapsed = std::chrono::duration<double>{std::chrono::steady_clock::now() - started_at}.count();
     fmt::print("Elapsed time: {:.3f}s\n", elapsed);
     fmt::print("Speed: {:.3f}MB/s\n", size / 1'000'000.0 / elapsed);
-    fmt::print("Calls: rexmit: {}, reads: {}, io_ready: {}\n", RETRANSMITS, PKT_READS0, IO_READY_CALLS);
 
     client_net.ev_loop->stop();
     ev_thread.join();

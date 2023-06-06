@@ -1,5 +1,8 @@
 add_subdirectory(Catch2)
 
+# command-line arguments (for test programs)
+add_subdirectory(CLI11)
+
 add_executable(test_all
     001-handshake.cpp
     002-send-receive.cpp
@@ -32,7 +35,7 @@ if(NOT TARGET sodium)
     target_link_libraries(sodium INTERFACE PkgConfig::SODIUM)
 endif()
 
-foreach(x IN speedtest-client speedtest-server)
+foreach(x speedtest-client speedtest-server)
     add_executable(${x} ${x}.cpp)
     target_link_libraries(${x} PRIVATE quic CLI11::CLI11 sodium)
 endforeach()
