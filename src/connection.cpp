@@ -413,8 +413,10 @@ namespace oxen::quic
                 if (n_packets == batch_size)
                 {
                     log::info(log_cat, "Sending stream data packet batch");
-                    if (auto rv = send(ts); rv != 0)
+                    if (auto rv = send(ts); rv.failure()) {
+                        log::error(log_cat, "Failed to send stream packets: got error code {}", rv.str());
                         return;
+                    }
 
                     ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
                     if (stream.unsent() == 0)
@@ -491,16 +493,18 @@ namespace oxen::quic
             if (n_packets == batch_size)
             {
                 log::info(log_cat, "Sending packet batch with non-stream data frames");
-                if (auto rv = send(ts); rv != 0)
+                if (auto rv = send(ts); rv.failure())
                     return;
 
                 ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
             }
         }
 
-        log::info(log_cat, "Sending packet batch with remaining data frames");
-        if (auto rv = send(ts); rv != 0)
-            return;
+        if (n_packets > 0) {
+            log::info(log_cat, "Sending packet batch with remaining data frames");
+            if (auto rv = send(ts); rv.failure())
+                return;
+        }
         ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
         log::info(log_cat, "Exiting flush_streams()");
     }
