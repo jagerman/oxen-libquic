@@ -257,53 +257,159 @@ namespace oxen::quic
         return {rv};
     }
 
+    // We support different compilation modes for trying different methods of UDP sending by setting
+    // these defines:
+    //
+    // OXEN_LIBQUIC_LIBUV_UDP_QUEUING -- does everything through udp_send, which involves setting up
+    // packet queuing.  This is not the default because, in practice, it's slower than just sending
+    // directly.
+    //
+    // OXEN_LIBQUIC_UDP_NO_SENDMMSG -- when defined (and not using queuing, above) we always use libuv's
+    // try_send, even when on a platform (Linux, FreeBSD) that supports sendmmsg multi-packet sending.
+    // By default we use sendmmsg when available.
+
+#ifdef OXEN_LIBQUIC_LIBUV_UDP_QUEUING
+    namespace
+    {
+        struct packet_storage
+        {
+            int refs = 0;
+            std::vector<char> data;
+            std::array<uv_udp_send_t, batch_size> send_req;
+        };
+        void release(packet_storage* storage)
+        {
+            if (--storage->refs == 0)
+                delete storage;
+        }
+        extern "C" void packet_storage_release(uv_udp_send_t* send, int code)
+        {
+            release(static_cast<packet_storage*>(send->data));
+        }
+    }  // namespace
+#endif
+
     io_result Endpoint::send_packets(Path& p, send_buffer_t& buf, size_t n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        auto handle = get_handle(p);
 
+        auto handle = get_handle(p);
         assert(handle != nullptr);
 
-        auto raw_handle = handle->raw();
+        log::trace(log_cat, "Sending {} UDP packets to {}:{}...", n_pkts, p.remote.ip, p.remote.port);
 
-        // We need to allocate the data until libuv is ready to send it; we do *one* allocation into
-        // a big vector with the packet data appended end-to-end, i.e. [PKT1][PKT2]...
-        auto packet_data = std::make_unique<std::vector<char>>();
+#ifdef OXEN_LIBQUIC_LIBUV_UDP_QUEUING
+        // Avoid allocations by each packet by doing just one allocation for the whole batch with a
+        // crude reference counter so that we destruct it once when the full batch of packets is
+        // sent.  This also requires us to go through raw libuv because uvw insists on owning a
+        // complete buffer for each packet.
+        auto packet_data = new packet_storage{};
         size_t agg_size = 0;
         for (int i = 0; i < n_pkts; i++)
             agg_size += buf[i].second;
-        packet_data->resize(agg_size);
+        packet_data->data.resize(agg_size);
+        packet_data->refs = n_pkts;
 
-        std::array<uv_buf_t, batch_size> raw_bufs;
+        char* packet_data_pos = packet_data->data.data();
+#ifndef NDEBUG
+        const char* const packet_data_expected_end = packet_data_pos + agg_size;
+#endif
+        packet_data->refs++;  // Hold an extra reference to prevent destruction before we return
 
-        log::info(log_cat, "Sending udp batch to {}:{}...", p.remote.ip.c_str(), p.remote.port);
-
-        char* packet_data_pos = packet_data->data();
+        // send_req.data = packet_data.release();
         for (int i = 0; i < n_pkts; ++i)
         {
             assert(buf[i].second > 0);
 
             std::memcpy(packet_data_pos, buf[i].first.data(), buf[i].second);
-            raw_bufs[i].base = packet_data_pos;
-            raw_bufs[i].len = buf[i].second;
+            uv_buf_t uv_buf;
+            uv_buf.base = packet_data_pos;
+            uv_buf.len = buf[i].second;
             packet_data_pos += buf[i].second;
+            packet_data->refs++;
 
 #ifndef NDEBUG
             buf[i].second = 0;
 #endif
+
+            auto* send_req = &packet_data->send_req[i];
+            send_req->data = packet_data;
+
+            auto rv = uv_udp_send(send_req, raw_handle, &uv_buf, 1, p.remote, packet_storage_release);
+            if (rv != 0)  // This is a libuv error, *not* a udp send error, so we have to clean up
+            {
+                release(packet_data);  // Delete our outer extra reference
+                release(packet_data);  // Delete the reference for this packet
+                return io_result{rv};
+            }
         }
-        assert(packet_data_pos - packet_data->data() == agg_size);
+        assert(packet_data_pos == packet_data_expected_end);
 
-        auto* send_req = new uv_udp_send_t{};
-        send_req->data = packet_data.release();
-        auto deleter = [](uv_udp_send_t* send_req, int) {
-            delete static_cast<std::vector<char>*>(send_req->data);
-            // delete send_req;
-        };
+        // Delete our overarching outer extra reference
+        release(packet_data);
 
-        auto rv = uv_udp_send(send_req, raw_handle, raw_bufs.data(), n_pkts, p.remote, deleter);
+        return io_result{0};
 
-        return io_result{rv};
+#elif !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
+        auto fd = handle->fd();
+
+        std::array<iovec, batch_size> iov;
+        std::array<mmsghdr, batch_size> msgs{};
+        for (int i = 0; i < n_pkts; i++)
+        {
+            assert(buf[i].second > 0);
+
+            iov[i].iov_base = buf[i].first.data();
+            iov[i].iov_len = buf[i].second;
+
+#ifndef NDEBUG
+            buf[i].second = 0;
+#endif
+
+            auto& hdr = msgs[i].msg_hdr;
+            hdr.msg_iov = &iov[i];
+            hdr.msg_iovlen = 1;
+            hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
+            hdr.msg_namelen = p.remote.sockaddr_size();
+        }
+
+        int rv;
+        do
+        {
+            rv = sendmmsg(fd, msgs.data(), n_pkts, 0);
+        } while (rv == -1 && errno == EINTR);
+
+        io_result ret{rv == -1 ? errno : 0};
+
+        if (ret.failure())
+            log::error(log_cat, "Error sending packet to {}: {}", p.remote.to_string(), ret.str());
+
+        return ret;
+
+#else  // No sendmmsg; just do a series of try_send calls
+
+        for (int i = 0; i < n_pkts; ++i)
+        {
+            assert(buf[i].second > 0);
+
+            auto rv = handle->trySend(
+                    p.remote, const_cast<char*>(reinterpret_cast<const char*>(buf[i].first.data())), buf[i].second);
+
+            assert(rv < 0 || rv == buf[i].second);
+
+#ifndef NDEBUG
+            buf[i].second = 0;
+#endif
+
+            if (rv < 0)
+            {
+                log::error(log_cat, "Error {} sending packet to {}", rv, p.remote.to_string());
+                return io_result{rv};
+            }
+        }
+
+        return io_result{0};
+#endif
     }
 
     io_result Endpoint::send_packet(Path& p, bstring_view data)
