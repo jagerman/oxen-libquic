@@ -264,7 +264,7 @@ namespace oxen::quic
             ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
             schedule_retransmit();
         }
-        else if (!sent)
+        else if (sent.failure())
         {
             log::warning(log_cat, "Error: I/O error while trying to send packet");
             ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);

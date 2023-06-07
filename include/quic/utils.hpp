@@ -320,8 +320,6 @@ namespace oxen::quic
         bool success() const { return error_code == 0; }
         // Returns true if this indicates failure, i.e. error code not 0
         bool failure() const { return !success(); }
-        // returns true if this was successful
-        explicit operator bool() const { return success(); }
         // returns true if error value indicates a failure to write without blocking
         bool blocked() const { return error_code == EAGAIN || error_code == EWOULDBLOCK; }
         // returns error code as string
