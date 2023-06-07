@@ -146,6 +146,7 @@ namespace oxen::quic
 
     void logger_config(std::string out = "stderr", log::Type type = log::Type::Print, log::Level reset = log::Level::trace);
 
+    std::chrono::steady_clock::time_point get_time();
     uint64_t get_timestamp();
 
     std::string str_tolower(std::string s);

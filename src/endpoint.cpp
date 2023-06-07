@@ -227,6 +227,7 @@ namespace oxen::quic
         switch (rv)
         {
             case 0:
+                log::warning(log_cat, "io_ready from {}", __PRETTY_FUNCTION__);
                 conn.io_ready();
                 break;
             case NGTCP2_ERR_DRAINING:

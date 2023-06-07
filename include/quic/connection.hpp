@@ -92,7 +92,7 @@ namespace oxen::quic
 
         io_result send(uint64_t ts);
 
-        void flush_streams();
+        void flush_streams(uint64_t ts);
 
         void io_ready();
 
@@ -106,7 +106,7 @@ namespace oxen::quic
         Client* client();
         const Client* client() const;
 
-        void schedule_retransmit();
+        void schedule_retransmit(uint64_t ts = 0);
 
         int init_gnutls(Client& client);
 

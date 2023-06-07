@@ -1,5 +1,7 @@
 #include "utils.hpp"
 
+#include <chrono>
+
 extern "C"
 {
 #include <netinet/in.h>
@@ -17,17 +19,12 @@ namespace oxen::quic
         oxen::log::reset_level(reset);
     }
 
+    std::chrono::steady_clock::time_point get_time() {
+        return std::chrono::steady_clock::now();
+    }
     uint64_t get_timestamp()
     {
-        struct timespec tp;
-
-        if (clock_gettime(CLOCK_MONOTONIC, &tp) != 0)
-        {
-            log::trace(log_cat, "clock_gettime: {}", ngtcp2_strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-
-        return (uint64_t)tp.tv_sec * NGTCP2_SECONDS + (uint64_t)tp.tv_nsec;
+        return std::chrono::nanoseconds{std::chrono::steady_clock::now().time_since_epoch()}.count();
     }
 
     std::string str_tolower(std::string s)

@@ -100,7 +100,7 @@ namespace oxen::quic
     void Stream::acknowledge(size_t bytes)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        log::info(log_cat, "Acking {} bytes of {}/{} unacked/size", bytes, unacked_size, size());
+        log::trace(log_cat, "Acking {} bytes of {}/{} unacked/size", bytes, unacked_size, size());
 
         assert(bytes <= unacked_size);
         unacked_size -= bytes;
@@ -128,7 +128,7 @@ namespace oxen::quic
 
     void Stream::handle_unblocked()
     {
-        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+        log::warning(log_cat, "{} called", __PRETTY_FUNCTION__);
         if (is_closing)
             return;
         while (!unblocked_callbacks.empty() && available())
@@ -142,6 +142,7 @@ namespace oxen::quic
 
     void Stream::io_ready()
     {
+        log::warning(log_cat, "{}", __PRETTY_FUNCTION__);
         conn.io_ready();
     }
 
@@ -155,7 +156,7 @@ namespace oxen::quic
     void Stream::wrote(size_t bytes)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        log::debug(log_cat, "Increasing unacked_size by {}B", bytes);
+        log::trace(log_cat, "Increasing unacked_size by {}B", bytes);
         unacked_size += bytes;
     }
 
