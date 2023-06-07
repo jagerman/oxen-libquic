@@ -219,7 +219,7 @@ int main(int argc, char* argv[])
         }
         else
         {
-            log::info(test_cat, "waiting...");
+            //log::info(test_cat, "waiting...");
         }
     }
 

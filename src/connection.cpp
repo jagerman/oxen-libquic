@@ -347,7 +347,7 @@ namespace oxen::quic
                 {
                     if (nwrite == NGTCP2_ERR_WRITE_MORE)  // -240
                     {
-                        log::debug(
+                        log::trace(
                                 log_cat, "Consumed {} bytes from stream {} and have space left", ndatalen, stream.stream_id);
                         assert(ndatalen >= 0);
                         stream.wrote(ndatalen);
@@ -356,20 +356,20 @@ namespace oxen::quic
                     }
                     if (nwrite == NGTCP2_ERR_CLOSING)  // -230
                     {
-                        log::info(log_cat, "Cannot write to {}: stream is closing", stream.stream_id);
+                        log::debug(log_cat, "Cannot write to {}: stream is closing", stream.stream_id);
                         it = strs.erase(it);
                         continue;
                     }
                     if (nwrite == NGTCP2_ERR_STREAM_SHUT_WR)  // -230
                     {
-                        log::info(log_cat, "Cannot add to stream {}: stream is shut, proceeding", stream.stream_id);
+                        log::debug(log_cat, "Cannot add to stream {}: stream is shut, proceeding", stream.stream_id);
                         assert(ndatalen == -1);
                         it = strs.erase(it);
                         continue;
                     }
                     if (nwrite == NGTCP2_ERR_STREAM_DATA_BLOCKED)  // -210
                     {
-                        log::info(log_cat, "Cannot add to stream {}: stream is blocked", stream.stream_id);
+                        log::trace(log_cat, "Cannot add to stream {}: stream is blocked", stream.stream_id);
                         it = strs.erase(it);
                         continue;
                     }
@@ -380,13 +380,13 @@ namespace oxen::quic
 
                 if (ndatalen >= 0)
                 {
-                    log::debug(log_cat, "consumed {} bytes from stream {}", ndatalen, stream.stream_id);
+                    log::trace(log_cat, "consumed {} bytes from stream {}", ndatalen, stream.stream_id);
                     stream.wrote(ndatalen);
                 }
 
                 if (nwrite == 0)  // we are congested
                 {
-                    log::info(log_cat, "Done stream writing to {} (connection is congested)", stream.stream_id);
+                    log::trace(log_cat, "Done stream writing to {} (connection is congested)", stream.stream_id);
 
                     ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
                     // we are congested, so clear pending streams to exit outer loop
@@ -401,7 +401,7 @@ namespace oxen::quic
 
                 if (n_packets == batch_size)
                 {
-                    log::info(log_cat, "Sending stream data packet batch");
+                    log::trace(log_cat, "Sending stream data packet batch");
                     if (auto rv = send(ts); rv.failure()) {
                         log::error(log_cat, "Failed to send stream packets: got error code {}", rv.str());
                         return;
@@ -416,7 +416,7 @@ namespace oxen::quic
 
                 if (stream_packets == max_stream_packets)
                 {
-                    log::info(log_cat, "Max stream packets ({}) reached", max_stream_packets);
+                    log::trace(log_cat, "Max stream packets ({}) reached", max_stream_packets);
                     ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
                     return;
                 }
@@ -427,7 +427,7 @@ namespace oxen::quic
         // handshake packets, and also finishes off any partially-filled packet from above.
         for (;;)
         {
-            log::info(log_cat, "Calling add_stream_data for empty stream");
+            log::trace(log_cat, "Calling add_stream_data for empty stream");
 
             auto& buf = send_buffer[n_packets];
 
@@ -444,12 +444,12 @@ namespace oxen::quic
                     0,
                     ts);
 
-            log::info(log_cat, "add_stream_data for non-stream returned [{},{}]", nwrite, ndatalen);
+            log::trace(log_cat, "add_stream_data for non-stream returned [{},{}]", nwrite, ndatalen);
             assert(ndatalen <= 0);
 
             if (nwrite == 0)
             {
-                log::info(log_cat, "Nothing else to write for non-stream data for now (or we are congested)");
+                log::trace(log_cat, "Nothing else to write for non-stream data for now (or we are congested)");
                 break;
             }
 
@@ -457,7 +457,7 @@ namespace oxen::quic
             {
                 if (nwrite == NGTCP2_ERR_WRITE_MORE)  // -240
                 {
-                    log::info(log_cat, "Writing non-stream data frames, and have space left");
+                    log::trace(log_cat, "Writing non-stream data frames, and have space left");
                     ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
                     continue;
                 }
@@ -481,7 +481,7 @@ namespace oxen::quic
 
             if (n_packets == batch_size)
             {
-                log::info(log_cat, "Sending packet batch with non-stream data frames");
+                log::trace(log_cat, "Sending packet batch with non-stream data frames");
                 if (auto rv = send(ts); rv.failure())
                     return;
 
@@ -490,12 +490,12 @@ namespace oxen::quic
         }
 
         if (n_packets > 0) {
-            log::info(log_cat, "Sending packet batch with remaining data frames");
+            log::trace(log_cat, "Sending packet batch with {} remaining data frames", n_packets);
             if (auto rv = send(ts); rv.failure())
                 return;
         }
         ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
-        log::info(log_cat, "Exiting flush_streams()");
+        log::debug(log_cat, "Exiting flush_streams()");
     }
 
     void Connection::schedule_retransmit()
@@ -678,7 +678,7 @@ namespace oxen::quic
             log::info(log_cat, "Retransmit timer fired!");
             if (auto rv = ngtcp2_conn_handle_expiry(conn.get(), get_timestamp()); rv != 0)
             {
-                log::warning(log_cat, "Error: expiry handler invocation returned error code: %s", ngtcp2_strerror(rv));
+                log::warning(log_cat, "Error: expiry handler invocation returned error code: {}", ngtcp2_strerror(rv));
                 endpoint.close_connection(*this, rv);
             }
             else
