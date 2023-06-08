@@ -293,9 +293,11 @@ namespace oxen::quic
     }  // namespace
 #endif
 
-    io_result Endpoint::send_packets(Path& p, send_buffer_t& buf, size_t n_pkts)
+    io_result Endpoint::send_packets(Path& p, send_buffer_t& buf, std::array<size_t, DATAGRAM_BATCH_SIZE>& buflen, size_t n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+
+        assert(n_pkts <= buflen.size());
 
         auto handle = get_handle(p);
         assert(handle != nullptr);
@@ -357,17 +359,19 @@ namespace oxen::quic
 #elif !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
         auto fd = handle->fd();
 
-        std::array<iovec, batch_size> iov;
-        std::array<mmsghdr, batch_size> msgs{};
+        std::array<iovec, DATAGRAM_BATCH_SIZE> iov;
+        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
+        auto* buf_pos = buf.data();
         for (int i = 0; i < n_pkts; i++)
         {
-            assert(buf[i].second > 0);
+            assert(buflen[i] > 0);
 
-            iov[i].iov_base = buf[i].first.data();
-            iov[i].iov_len = buf[i].second;
+            iov[i].iov_base = buf_pos;
+            iov[i].iov_len = buflen[i];
+            buf_pos += buflen[i];
 
 #ifndef NDEBUG
-            buf[i].second = 0;
+            buflen[i] = 0;
 #endif
 
             auto& hdr = msgs[i].msg_hdr;

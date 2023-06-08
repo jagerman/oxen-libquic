@@ -94,7 +94,7 @@ namespace oxen::quic
 
         io_result read_packet(Connection& conn, Packet& pkt);
 
-        io_result send_packets(Path& p, send_buffer_t& buf, size_t n_pkts);
+        io_result send_packets(Path& p, send_buffer_t& buf, std::array<size_t, DATAGRAM_BATCH_SIZE>& buflen, size_t n_pkts);
 
         io_result send_packet(Path& p, bstring_view data);
 
