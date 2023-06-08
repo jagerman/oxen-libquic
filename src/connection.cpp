@@ -16,6 +16,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <random>
 #include <stdexcept>
 
 #include "client.hpp"
@@ -272,6 +273,10 @@ namespace oxen::quic
         return sent;
     }
 
+    // Don't worry about seeding this because it doesn't matter at all if the stream selection below
+    // is predictable, we just want to shuffle it.
+    thread_local std::mt19937 stream_start_rng{};
+
     void Connection::flush_streams(uint64_t ts)
     {
         // Maximum number of stream data packets to send out at once; if we reach this then we'll
@@ -288,9 +293,26 @@ namespace oxen::quic
         pkt_info = {};
 
         std::list<Stream*> strs;
-        for (auto& [stream_id, stream_ptr] : streams)
-            if (stream_ptr and not stream_ptr->sent_fin)
-                strs.push_back(stream_ptr.get());
+        if (!streams.empty())
+        {
+            // Start from a random stream so that we aren't favouring early streams by potentially
+            // giving them more opportunities to send packets.
+            auto mid = std::next(
+                    streams.begin(), std::uniform_int_distribution<size_t>{0, streams.size() - 1}(stream_start_rng));
+
+            for (auto it = mid; it != streams.end(); ++it)
+            {
+                auto& stream_ptr = it->second;
+                if (stream_ptr and not stream_ptr->sent_fin)
+                    strs.push_back(stream_ptr.get());
+            }
+            for (auto it = streams.begin(); it != mid; ++it)
+            {
+                auto& stream_ptr = it->second;
+                if (stream_ptr and not stream_ptr->sent_fin)
+                    strs.push_back(stream_ptr.get());
+            }
+        }
 
         while (!strs.empty() && stream_packets < max_stream_packets)
         {
