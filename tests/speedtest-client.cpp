@@ -2,6 +2,8 @@
     Test client binary
 */
 
+#include <oxenc/endian.h>
+#include <oxenc/hex.h>
 #include <sodium/crypto_generichash_blake2b.h>
 
 #include <CLI/Validators.hpp>
@@ -67,6 +69,9 @@ int main(int argc, char* argv[])
             "Amount of data to transfer (if using --bidir, this amount is in each direction).  When using --parallel the "
             "data is divided equally across streams.");
 
+    bool pregenerate = false;
+    cli.add_flag("-g,--pregenerate", pregenerate, "Pregenerate all stream data to send into RAM before starting");
+
     size_t chunk_size = 64_kiB, chunk_num = 2;
     cli.add_option("--stream-chunk-size", chunk_size, "How much data to queue at once, per chunk");
     cli.add_option("--stream-chunks", chunk_num, "How much chunks to queue at once per stream")->check(CLI::Range(1, 100));
@@ -121,15 +126,20 @@ int main(int argc, char* argv[])
     // wait for event loop to start
     running.get();
 
-    auto started_at = std::chrono::steady_clock::now();
-
+    using RNG = std::mt19937_64;
     struct stream_data
     {
         std::shared_ptr<Stream> stream;
         size_t remaining;
-        std::mt19937 rng;
+        RNG rng;
         std::vector<std::vector<std::byte>> bufs;
+        std::atomic<bool> done_sending = false;
+        std::atomic<bool> got_hash = false;
+        std::atomic<bool> done = false;
+        std::atomic<bool> failed = false;
         size_t next_buf = 0;
+
+        std::basic_string<std::byte> hash;
         crypto_generichash_blake2b_state sent_hasher, recv_hasher;
 
         stream_data() {}
@@ -143,85 +153,187 @@ int main(int argc, char* argv[])
         }
     };
 
-    std::unordered_set<size_t> streams_done;
-    std::mutex streams_done_mutex;
-
-    std::vector<stream_data> streams;
+    std::vector<std::unique_ptr<stream_data>> streams;
     streams.reserve(parallel);
 
-    auto stream_opened = [&](Stream& s) {
-        size_t i = s.stream_id << 2;
-        log::critical(test_cat, "Stream {} (rawid={}) started", i, s.stream_id);
-    };
     auto stream_closed = [&](Stream& s, uint64_t errcode) {
-        size_t i = s.stream_id << 2;
+        size_t i = s.stream_id >> 2;
         log::critical(test_cat, "Stream {} (rawid={}) closed (error={})", i, s.stream_id, errcode);
+    };
+    auto on_stream_data = [&](Stream& s, bstring_view data) {
+        size_t i = s.stream_id >> 2;
+        if (i >= parallel)
+        {
+            log::critical(test_cat, "Something getting wrong: got unexpected stream id {}", s.stream_id);
+            return;
+        }
+
+        auto& sd = *streams[i];
+        if (!sd.done_sending)
+        {
+            log::error(
+                    test_cat,
+                    "Got a stream (stream {}) response ({}B) before we were done sending data!",
+                    s.stream_id,
+                    data.size());
+            sd.failed = true;
+            sd.done = true;
+            return;
+        }
+        if (sd.got_hash)
+        {
+            log::error(test_cat, "Already got a hash from the other side of stream {}, what is this nonsense‽", s.stream_id);
+            sd.failed = true;
+            sd.done = true;
+            return;
+        }
+        if (data.size() != 32)
+        {
+            log::error(test_cat, "Got unexpected data from the other side: {}B != 32B", data.size());
+            sd.failed = true;
+            sd.done = true;
+            return;
+        }
+
+        if (data != sd.hash)
+        {
+            log::critical(
+                    test_cat,
+                    "Hash mismatch: other size said {}, we say {}",
+                    oxenc::to_hex(data.begin(), data.end()),
+                    oxenc::to_hex(sd.hash.begin(), sd.hash.end()));
+            sd.failed = true;
+            sd.done = true;
+        }
+
+        log::critical(test_cat, "Hashes matched, hurray!");
+        sd.failed = false;
+        sd.done = true;
     };
 
     auto per_stream = size / parallel;
 
+    auto gen_data = [](RNG& rng, size_t size, std::vector<std::byte>& data, crypto_generichash_blake2b_state& hasher) {
+        assert(size > 0);
+
+        using RNG_val = RNG::result_type;
+
+        static_assert(
+                RNG::min() == 0 && std::is_unsigned_v<RNG::result_type> &&
+                RNG::max() == std::numeric_limits<RNG::result_type>::max());
+
+        using rng_value = typename RNG::result_type;
+        constexpr size_t rng_size = sizeof(rng_value);
+        const size_t rng_chunks = (size + rng_size - 1) / rng_size;
+        const size_t size_data = rng_chunks * rng_size;
+
+        // Generate some deterministic data from our rng; we're cheating a little here with the RNG
+        // output value (which means this test won't be the same on different endian machines).
+        data.resize(size_data);
+        auto* rng_data = reinterpret_cast<rng_value*>(data.data());
+        for (size_t i = 0; i < rng_chunks; i++)
+            rng_data[i] = static_cast<rng_value>(rng());
+        data.resize(size);
+
+        // Hash it (so that we can verify the hash response at the end)
+        crypto_generichash_blake2b_update(&hasher, reinterpret_cast<unsigned char*>(data.data()), data.size());
+    };
+
+    if (pregenerate) {
+        log::warning(test_cat, "Pregenerating data...");
+    }
+
     for (int i = 0; i < parallel; i++)
     {
-        auto& s = streams.emplace_back(per_stream + (i == 0 ? size % parallel : 0), rng_seed + i, chunk_size, chunk_num);
-        s.stream = client->open_stream(
-                [](Stream& s, bstring_view data) {
-                    log::warning(test_cat, "received stream data on stream {}", s.stream_id);
-                },
-                stream_closed);
-        s.stream->send_chunks(
-                [&, i](const Stream&) -> std::vector<std::byte>* {
-                    auto& sd = streams[i];
-                    auto& data = sd.bufs[sd.next_buf++];
-                    sd.next_buf %= sd.bufs.size();
+        uint64_t my_data = per_stream + (i == 0 ? size % parallel : 0);
+        auto& s = *streams.emplace_back(std::make_unique<stream_data>(
+                my_data, rng_seed + i, pregenerate ? my_data : chunk_size, pregenerate ? 1 : chunk_num));
 
-                    // We generate data 64-bits at a time, so round up our chunk size to the next multiple of 8
-                    const auto size = std::min(sd.remaining, chunk_size);
-                    if (size == 0)
-                        return nullptr;
-                    using rng_value = decltype(sd.rng)::result_type;
-                    constexpr size_t rng_size = sizeof(rng_value);
-                    const size_t rng_chunks = (size + rng_size - 1) / rng_size;
-                    const size_t size_data = rng_chunks * rng_size;
+        if (pregenerate)
+        {
+            gen_data(s.rng, my_data, s.bufs[0], s.sent_hasher);
+            s.hash.resize(32);
+            crypto_generichash_blake2b_final(&s.sent_hasher, reinterpret_cast<unsigned char*>(s.hash.data()), s.hash.size());
+        }
+    }
+    if (pregenerate) {
+        log::warning(test_cat, "Data pregeneration done");
+    }
 
-                    // Generate some deterministic data from our rng; we're cheating a little here
-                    // with the RNG output value (which means this test won't be the same on
-                    // different endian machines).
-                    data.resize(size_data);
-                    auto* rng_data = reinterpret_cast<rng_value*>(data.data());
-                    for (size_t i = 0; i < rng_chunks; i++)
-                        rng_data[i] = static_cast<rng_value>(sd.rng());
-                    data.resize(size);
+    auto started_at = std::chrono::steady_clock::now();
 
-                    // Hash it (so that we can verify the hash response at the end)
-                    crypto_generichash_blake2b_update(
-                            &sd.sent_hasher, reinterpret_cast<unsigned char*>(data.data()), data.size());
+    for (int i = 0; i < parallel; i++)
+    {
+        auto& s = *streams[i];
+        s.stream = client->open_stream(on_stream_data, stream_closed);
+        std::string remaining_str;
+        remaining_str.resize(8);
+        oxenc::write_host_as_little(s.remaining, remaining_str.data());
+        s.stream->send(std::move(remaining_str));
+        if (pregenerate)
+        {
+            s.remaining = 0;
+            s.done_sending = true;
+            s.stream->send(bstring_view{s.bufs[0].data(), s.bufs[0].size()});
+        }
+        else
+        {
+            s.stream->send_chunks(
+                    [&, i](const Stream&) -> std::vector<std::byte>* {
+                        auto& sd = *streams[i];
+                        auto& data = sd.bufs[sd.next_buf++];
+                        sd.next_buf %= sd.bufs.size();
 
-                    sd.remaining -= size;
+                        const auto size = std::min(sd.remaining, chunk_size);
+                        if (size == 0)
+                            return nullptr;
 
-                    return &data;
-                },
-                [&, i](Stream& s) {
-                    std::lock_guard lock{streams_done_mutex};
-                    auto [it, ins] = streams_done.insert(i);
-                    if (!ins)
-                        throw std::runtime_error{"Error: got stream done twice for stream " + fmt::to_string(i)};
-                },
-                chunk_num);
+                        gen_data(sd.rng, size, data, sd.sent_hasher);
+
+                        sd.remaining -= size;
+
+                        if (sd.remaining == 0)
+                        {
+                            sd.hash.resize(32);
+                            crypto_generichash_blake2b_final(
+                                    &sd.sent_hasher, reinterpret_cast<unsigned char*>(sd.hash.data()), sd.hash.size());
+                            sd.done_sending = true;
+                        }
+
+                        return &data;
+                    },
+                    nullptr,
+                    chunk_num);
+        }
     }
 
     while (done.wait_for(20ms) != std::future_status::ready)
     {
-        std::lock_guard lock{streams_done_mutex};
-        if (streams_done.size() >= parallel)
+        bool all_done = true;
+        for (auto& s : streams)
         {
-            log::critical(test_cat, "all done!");
+            if (!s->done)
+            {
+                all_done = false;
+                break;
+            }
+        }
+        if (all_done)
+            break;
+    }
+
+    bool all_good = true;
+    for (auto& s : streams)
+    {
+        if (s->failed)
+        {
+            all_good = false;
             break;
         }
-        else
-        {
-            //log::info(test_cat, "waiting...");
-        }
     }
+
+    if (!all_good)
+        fmt::print("OMG failed!\n");
 
     auto elapsed = std::chrono::duration<double>{std::chrono::steady_clock::now() - started_at}.count();
     fmt::print("Elapsed time: {:.3f}s\n", elapsed);
