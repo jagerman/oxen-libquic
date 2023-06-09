@@ -34,9 +34,6 @@ namespace oxen::quic
 
         int init(ngtcp2_settings& settings, ngtcp2_transport_params& params, ngtcp2_callbacks& callbacks);
 
-        send_buffer_t send_buffer{};
-        std::array<size_t, DATAGRAM_BATCH_SIZE> send_buffer_size{};
-        size_t n_packets = 0;
         ngtcp2_pkt_info pkt_info{};
 
       public:
@@ -90,7 +87,7 @@ namespace oxen::quic
 
         void on_io_ready();
 
-        io_result send(uint64_t ts);
+        io_result send(uint8_t* buf, size_t* bufsize, size_t& n_packets, uint64_t ts);
 
         void flush_streams(uint64_t ts);
 

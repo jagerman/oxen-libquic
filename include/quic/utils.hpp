@@ -77,10 +77,8 @@ namespace oxen::quic
     // returns 0 on success
     using stream_open_callback_t = std::function<uint64_t(Stream&)>;
     using unblocked_callback_t = std::function<bool(Stream&)>;
-    // send buffer types
-    static constexpr size_t DATAGRAM_BATCH_SIZE = 1;
-    static constexpr size_t DATAGRAM_MAX_SIZE = NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE;
-    using send_buffer_t = std::array<uint8_t, DATAGRAM_MAX_SIZE * DATAGRAM_BATCH_SIZE>;
+    // datagram send max simultaneous datagrams
+    static constexpr size_t DATAGRAM_BATCH_SIZE = 8;
 
     static constexpr std::byte CLIENT_TO_SERVER{1};
     static constexpr std::byte SERVER_TO_CLIENT{2};

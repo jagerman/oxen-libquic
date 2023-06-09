@@ -4,6 +4,9 @@ extern "C"
 {
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/version.h>
+#ifdef __linux__
+#include <netinet/udp.h>
+#endif
 }
 
 #include <cstddef>
@@ -271,6 +274,9 @@ namespace oxen::quic
     // OXEN_LIBQUIC_UDP_NO_SENDMMSG -- when defined (and not using queuing, above) we always use libuv's
     // try_send, even when on a platform (Linux, FreeBSD) that supports sendmmsg multi-packet sending.
     // By default we use sendmmsg when available.
+    //
+    // OXEN_LIBQUIC_NO_GSO -- if defined then don't use GSO (in favour of sendmmsg) when possible on
+    // Linux.
 
 #ifdef OXEN_LIBQUIC_LIBUV_UDP_QUEUING
     namespace
@@ -279,7 +285,7 @@ namespace oxen::quic
         {
             int refs = 0;
             std::vector<char> data;
-            std::array<uv_udp_send_t, batch_size> send_req;
+            std::array<uv_udp_send_t, DATAGRAM_BATCH_SIZE> send_req;
         };
         void release(packet_storage* storage)
         {
@@ -293,11 +299,11 @@ namespace oxen::quic
     }  // namespace
 #endif
 
-    io_result Endpoint::send_packets(Path& p, send_buffer_t& buf, std::array<size_t, DATAGRAM_BATCH_SIZE>& buflen, size_t n_pkts)
+    io_result Endpoint::send_packets(Path& p, char* buf, size_t* bufsize, size_t n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
-        assert(n_pkts <= buflen.size());
+        assert(n_pkts <= DATAGRAM_BATCH_SIZE);
 
         auto handle = get_handle(p);
         assert(handle != nullptr);
@@ -312,30 +318,27 @@ namespace oxen::quic
         auto packet_data = new packet_storage{};
         size_t agg_size = 0;
         for (int i = 0; i < n_pkts; i++)
-            agg_size += buf[i].second;
+            agg_size += bufsize[i];
         packet_data->data.resize(agg_size);
         packet_data->refs = n_pkts;
+        std::memcpy(packet_data->data.data(), buf, agg_size);
 
-        char* packet_data_pos = packet_data->data.data();
-#ifndef NDEBUG
-        const char* const packet_data_expected_end = packet_data_pos + agg_size;
-#endif
         packet_data->refs++;  // Hold an extra reference to prevent destruction before we return
 
-        // send_req.data = packet_data.release();
+        auto* raw_handle = handle->raw();
+
         for (int i = 0; i < n_pkts; ++i)
         {
-            assert(buf[i].second > 0);
+            assert(bufsize[i] > 0);
 
-            std::memcpy(packet_data_pos, buf[i].first.data(), buf[i].second);
             uv_buf_t uv_buf;
-            uv_buf.base = packet_data_pos;
-            uv_buf.len = buf[i].second;
-            packet_data_pos += buf[i].second;
+            uv_buf.base = reinterpret_cast<char*>(buf);
+            uv_buf.len = bufsize[i];
+            buf += bufsize[i];
             packet_data->refs++;
 
 #ifndef NDEBUG
-            buf[i].second = 0;
+            bufsize[i] = 0;
 #endif
 
             auto* send_req = &packet_data->send_req[i];
@@ -349,7 +352,6 @@ namespace oxen::quic
                 return io_result{rv};
             }
         }
-        assert(packet_data_pos == packet_data_expected_end);
 
         // Delete our overarching outer extra reference
         release(packet_data);
@@ -359,33 +361,72 @@ namespace oxen::quic
 #elif !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
         auto fd = handle->fd();
 
-        std::array<iovec, DATAGRAM_BATCH_SIZE> iov;
-        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
-        auto* buf_pos = buf.data();
-        for (int i = 0; i < n_pkts; i++)
-        {
-            assert(buflen[i] > 0);
+        int rv;
 
-            iov[i].iov_base = buf_pos;
-            iov[i].iov_len = buflen[i];
-            buf_pos += buflen[i];
+#if defined(__linux__) && !defined(OXEN_LIBQUIC_NO_GSO) && defined(UDP_SEGMENT)
+        uint16_t gso_size = n_pkts > 1 ? bufsize[0] : 0;
+        for (int i = 1; i < n_pkts-1; i++) {
+            if (bufsize[i] != gso_size)
+            {
+                gso_size = 0;
+                break;
+            }
+        }
 
-#ifndef NDEBUG
-            buflen[i] = 0;
-#endif
+        if (gso_size) {
 
-            auto& hdr = msgs[i].msg_hdr;
-            hdr.msg_iov = &iov[i];
+            iovec iov{};
+            mmsghdr msgs{};
+            iov.iov_base = buf;
+            iov.iov_len = (n_pkts-1) * gso_size + bufsize[n_pkts-1];
+            auto& hdr = msgs.msg_hdr;
+            hdr.msg_iov = &iov;
             hdr.msg_iovlen = 1;
             hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
             hdr.msg_namelen = p.remote.sockaddr_size();
+            std::array<char, CMSG_SPACE(sizeof(uint16_t))> control{};
+            hdr.msg_control = control.data();
+            hdr.msg_controllen = control.size();
+            auto* cm = CMSG_FIRSTHDR(&hdr);
+            cm->cmsg_level = SOL_UDP;
+            cm->cmsg_type = UDP_SEGMENT;
+            cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+            *reinterpret_cast<uint16_t*>(CMSG_DATA(cm)) = gso_size;
+
+            do {
+                rv = sendmmsg(fd, &msgs, 1, 0);
+            } while (rv == -1 && errno == EINTR);
+
+        } else
+#endif // linux GSO
+        {
+            std::array<iovec, DATAGRAM_BATCH_SIZE> iov{};
+            std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
+
+            for (int i = 0; i < n_pkts; i++)
+            {
+                assert(bufsize[i] > 0);
+
+                iov[i].iov_base = buf;
+                iov[i].iov_len = bufsize[i];
+                buf += bufsize[i];
+
+                auto& hdr = msgs[i].msg_hdr;
+                hdr.msg_iov = &iov[i];
+                hdr.msg_iovlen = 1;
+                hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
+                hdr.msg_namelen = p.remote.sockaddr_size();
+            }
+
+            do
+            {
+                rv = sendmmsg(fd, msgs.data(), n_pkts, 0);
+            } while (rv == -1 && errno == EINTR);
         }
 
-        int rv;
-        do
-        {
-            rv = sendmmsg(fd, msgs.data(), n_pkts, 0);
-        } while (rv == -1 && errno == EINTR);
+#ifndef NDEBUG
+        std::fill(bufsize, bufsize + n_pkts, 0);
+#endif
 
         io_result ret{rv == -1 ? errno : 0};
 
@@ -398,15 +439,17 @@ namespace oxen::quic
 
         for (int i = 0; i < n_pkts; ++i)
         {
-            assert(buf[i].second > 0);
+            assert(bufsize[i] > 0);
 
             auto rv = handle->trySend(
-                    p.remote, const_cast<char*>(reinterpret_cast<const char*>(buf[i].first.data())), buf[i].second);
+                    p.remote, reinterpret_cast<char*>(buf), bufsize[i]);
 
-            assert(rv < 0 || rv == buf[i].second);
+            assert(rv < 0 || rv == bufsize[i]);
+
+            buf += bufsize[i];
 
 #ifndef NDEBUG
-            buf[i].second = 0;
+            bufsize[i] = 0;
 #endif
 
             if (rv < 0)

@@ -248,12 +248,12 @@ namespace oxen::quic
         schedule_retransmit(ts);
     }
 
-    io_result Connection::send(uint64_t ts)
+    io_result Connection::send(uint8_t* buf, size_t* bufsize, size_t& n_packets, uint64_t ts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         assert(n_packets > 0 && n_packets <= buffer_size);
 
-        auto sent = endpoint.send_packets(path, send_buffer, send_buffer_size, n_packets);
+        auto sent = endpoint.send_packets(path, reinterpret_cast<char*>(buf), bufsize, n_packets);
         if (sent.blocked())
         {
             log::warning(log_cat, "Error: Packet send blocked, scheduling retransmit");
@@ -280,12 +280,9 @@ namespace oxen::quic
     {
         // Maximum number of stream data packets to send out at once; if we reach this then we'll
         // schedule another event loop call of ourselves (so that we don't starve the loop)
-        auto max_udp_payload_size = ngtcp2_conn_get_path_max_tx_udp_payload_size(conn.get());
-        auto max_stream_packets = ngtcp2_conn_get_send_quantum(conn.get()) / max_udp_payload_size;
-        uint16_t stream_packets = 0;
+        const auto max_udp_payload_size = ngtcp2_conn_get_path_max_tx_udp_payload_size(conn.get());
+        const auto max_stream_packets = ngtcp2_conn_get_send_quantum(conn.get()) / max_udp_payload_size;
         // packet counter held as member attribute
-        n_packets = 0;
-        ngtcp2_ssize ndatalen;
         uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
         // uint64_t ts = get_timestamp();
         log::warning(log_cat, "{} called at {}", __PRETTY_FUNCTION__, ts);
@@ -313,9 +310,13 @@ namespace oxen::quic
             }
         }
 
+        std::array<uint8_t, NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE * DATAGRAM_BATCH_SIZE> send_buffer;
+        std::array<size_t, DATAGRAM_BATCH_SIZE> send_buffer_size;
+        size_t n_packets = 0;
+
         auto* buf_pos = send_buffer.data();
 
-        while (!strs.empty() && stream_packets < max_stream_packets)
+        for (size_t stream_packets = 0; stream_packets < max_stream_packets && !strs.empty(); )
         {
             for (auto it = strs.begin(); it != strs.end();)
             {
@@ -346,12 +347,13 @@ namespace oxen::quic
                 if we send_packet there we're also no longer in the middle of a packet
                 */
 
+                ngtcp2_ssize ndatalen;
                 auto nwrite = ngtcp2_conn_writev_stream(
                         conn.get(),
                         &path.path,
                         &pkt_info,
                         buf_pos,
-                        DATAGRAM_MAX_SIZE,
+                        NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE,
                         &ndatalen,
                         flags,
                         stream.stream_id,
@@ -420,7 +422,7 @@ namespace oxen::quic
                 if (n_packets == DATAGRAM_BATCH_SIZE)
                 {
                     log::trace(log_cat, "Sending stream data packet batch");
-                    if (auto rv = send(ts); rv.failure())
+                    if (auto rv = send(send_buffer.data(), send_buffer_size.data(), n_packets, ts); rv.failure())
                     {
                         log::error(log_cat, "Failed to send stream packets: got error code {}", rv.str());
                         return;
@@ -452,12 +454,13 @@ namespace oxen::quic
 
             auto& buf = send_buffer[n_packets];
 
+            ngtcp2_ssize ndatalen;
             auto nwrite = ngtcp2_conn_writev_stream(
                     conn.get(),
                     &path.path,
                     &pkt_info,
                     buf_pos,
-                    DATAGRAM_MAX_SIZE,
+                    NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE,
                     &ndatalen,
                     flags,
                     -1,
@@ -503,7 +506,7 @@ namespace oxen::quic
             if (n_packets == DATAGRAM_BATCH_SIZE)
             {
                 log::trace(log_cat, "Sending packet batch with non-stream data frames");
-                if (auto rv = send(ts); rv.failure())
+                if (auto rv = send(send_buffer.data(), send_buffer_size.data(), n_packets, ts); rv.failure())
                     return;
 
                 buf_pos = send_buffer.data();
@@ -515,7 +518,7 @@ namespace oxen::quic
         if (n_packets > 0)
         {
             log::trace(log_cat, "Sending packet batch with {} remaining data frames", n_packets);
-            if (auto rv = send(ts); rv.failure())
+            if (auto rv = send(send_buffer.data(), send_buffer_size.data(), n_packets, ts); rv.failure())
                 return;
             ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
         }
