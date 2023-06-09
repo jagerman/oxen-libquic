@@ -30,6 +30,10 @@ constexpr size_t operator""_GiB(unsigned long long int x)
     return x * 1024 * 1_MiB;
 }
 
+namespace oxen::quic {
+    extern int GSO_USED, GSO_NOT;
+}
+
 int main(int argc, char* argv[])
 {
     CLI::App cli{"libQUIC test client"};
@@ -336,6 +340,7 @@ int main(int argc, char* argv[])
         fmt::print("OMG failed!\n");
 
     auto elapsed = std::chrono::duration<double>{std::chrono::steady_clock::now() - started_at}.count();
+    fmt::print("GSO: {} used, {} not used\n", GSO_USED, GSO_NOT);
     fmt::print("Elapsed time: {:.3f}s\n", elapsed);
     fmt::print("Speed: {:.3f}MB/s\n", size / 1'000'000.0 / elapsed);
 

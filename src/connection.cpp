@@ -25,6 +25,8 @@
 #include "server.hpp"
 #include "stream.hpp"
 
+extern ngtcp2_tstamp OMG_DEBUG[8];
+
 namespace oxen::quic
 {
     using namespace std::literals;
@@ -76,6 +78,8 @@ namespace oxen::quic
                 stream_id, {reinterpret_cast<const std::byte*>(data), datalen}, flags & NGTCP2_STREAM_DATA_FLAG_FIN);
     }
 
+    int64_t DEBUG_acks = 0;
+    int64_t DEBUG_ack_data = 0;
     int acked_stream_data_offset(
             ngtcp2_conn* conn_,
             int64_t stream_id,
@@ -86,6 +90,8 @@ namespace oxen::quic
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         log::trace(log_cat, "Ack [{},{}]", offset, offset + datalen);
+        DEBUG_acks++;
+        DEBUG_ack_data += datalen;
         return static_cast<Connection*>(user_data)->stream_ack(stream_id, datalen);
     }
 
@@ -242,7 +248,7 @@ namespace oxen::quic
 
     void Connection::on_io_ready()
     {
-        log::warning(log_cat, "{} called", __PRETTY_FUNCTION__);
+        // log::warning(log_cat, "{} called", __PRETTY_FUNCTION__);
         auto ts = get_timestamp();
         flush_streams(ts);
         schedule_retransmit(ts);
@@ -276,8 +282,11 @@ namespace oxen::quic
     // is predictable, we just want to shuffle it.
     thread_local std::mt19937 stream_start_rng{};
 
+    int64_t total_packets_like_ever = 0;
+    int64_t total_stream_data = 0;
     void Connection::flush_streams(uint64_t ts)
     {
+        int debug_stream_packets = 0, debug_stream_mores = 0, debug_streamn1_packets = 0, debug_streamn1_mores = 0;
         // Maximum number of stream data packets to send out at once; if we reach this then we'll
         // schedule another event loop call of ourselves (so that we don't starve the loop)
         const auto max_udp_payload_size = ngtcp2_conn_get_path_max_tx_udp_payload_size(conn.get());
@@ -285,7 +294,7 @@ namespace oxen::quic
         // packet counter held as member attribute
         uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
         // uint64_t ts = get_timestamp();
-        log::warning(log_cat, "{} called at {}", __PRETTY_FUNCTION__, ts);
+        // log::warning(log_cat, "{} called at {}", __PRETTY_FUNCTION__, ts);
         pkt_info = {};
 
         std::list<Stream*> strs;
@@ -367,6 +376,7 @@ namespace oxen::quic
                 {
                     if (nwrite == NGTCP2_ERR_WRITE_MORE)  // -240
                     {
+                        debug_stream_mores++;
                         log::trace(
                                 log_cat, "Consumed {} bytes from stream {} and have space left", ndatalen, stream.stream_id);
                         assert(ndatalen >= 0);
@@ -402,6 +412,7 @@ namespace oxen::quic
                 {
                     log::trace(log_cat, "consumed {} bytes from stream {}", ndatalen, stream.stream_id);
                     stream.wrote(ndatalen);
+                    total_stream_data += ndatalen;
                 }
 
                 if (nwrite == 0)  // we are congested
@@ -415,6 +426,7 @@ namespace oxen::quic
                     break;
                 }
 
+                debug_stream_packets++;
                 buf_pos += nwrite;
                 send_buffer_size[n_packets++] = nwrite;
                 stream_packets += 1;
@@ -481,6 +493,7 @@ namespace oxen::quic
             {
                 if (nwrite == NGTCP2_ERR_WRITE_MORE)  // -240
                 {
+                    debug_streamn1_mores++;
                     log::trace(log_cat, "Writing non-stream data frames, and have space left");
                     ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
                     continue;
@@ -500,6 +513,7 @@ namespace oxen::quic
                 break;
             }
 
+            debug_streamn1_packets++;
             buf_pos += nwrite;
             send_buffer_size[n_packets++] = nwrite;
 
@@ -523,13 +537,23 @@ namespace oxen::quic
             ngtcp2_conn_update_pkt_tx_time(conn.get(), ts);
         }
         log::debug(log_cat, "Exiting flush_streams()");
+        /*
+        log::warning(log_cat, "flush_streams stats: {} stream more, {} stream packets, {} \"-1\" more, {} \"-1\" packets",
+                debug_stream_mores, debug_stream_packets, debug_streamn1_mores, debug_streamn1_packets);
+        total_packets_like_ever += debug_stream_packets;
+        total_packets_like_ever += debug_stream_mores;
+        total_packets_like_ever += debug_streamn1_packets;
+        total_packets_like_ever += debug_streamn1_mores;
+        log::warning(log_cat, "omg: total packets like ever = {} ({}B), total acks ever = {} ({}B)",
+                total_packets_like_ever, total_stream_data, DEBUG_acks, DEBUG_ack_data);
+                */
     }
 
     void Connection::schedule_retransmit(uint64_t ts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         auto exp = ngtcp2_conn_get_expiry(conn.get());
-        log::warning(log_cat, "ngtcp2 next exp raw: {}", exp);
+        // log::warning(log_cat, "ngtcp2 next exp raw: {}", exp);
 
         if (exp == std::numeric_limits<decltype(exp)>::max())
         {
@@ -551,6 +575,14 @@ namespace oxen::quic
             delta = exp - ts;
             log::info(log_cat, "Expiry delta: {}ns", delta);
         }
+
+        /*
+        log::warning(log_cat, "OMG: {}", fmt::format("{:20d}", fmt::join(OMG_DEBUG, ", ")));
+        auto smallest = std::min_element(std::begin(OMG_DEBUG), std::end(OMG_DEBUG));
+        std::array<std::string, 8> foo{};
+        foo[smallest - std::begin(OMG_DEBUG)] = "^^^^^^^^^^^^^^^^^^^^";
+        log::warning(log_cat, "omg: {}", fmt::format("{:20}", fmt::join(foo, "  ")));
+        */
 
         // truncate to ms for libuv
         delta /= 1'000'000;
@@ -710,12 +742,17 @@ namespace oxen::quic
     {
         auto loop = quic_manager->loop();
         io_trigger = loop->resource<uvw::AsyncHandle>();
-        io_trigger->on<uvw::AsyncEvent>([this](auto&, auto&) { on_io_ready(); });
+        io_trigger->on<uvw::AsyncEvent>([this](auto&, auto&) {
+            // log::warning(log_cat, "io trigger fired at {}ns", get_timestamp());
+            on_io_ready();
+        });
 
         retransmit_timer = loop->resource<uvw::TimerHandle>();
         retransmit_timer->on<uvw::TimerEvent>([this](auto&, auto&) {
+            /*
             log::warning(
                     log_cat, "Retransmit timer fired at {}ns", std::chrono::steady_clock::now().time_since_epoch().count());
+            */
             if (auto rv = ngtcp2_conn_handle_expiry(conn.get(), get_timestamp()); rv != 0)
             {
                 log::warning(log_cat, "Error: expiry handler invocation returned error code: {}", ngtcp2_strerror(rv));

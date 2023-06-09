@@ -225,12 +225,13 @@ namespace oxen::quic
 
     io_result Endpoint::read_packet(Connection& conn, Packet& pkt)
     {
-        auto rv = ngtcp2_conn_read_pkt(conn, pkt.path, &pkt.pkt_info, u8data(pkt.data), pkt.data.size(), get_timestamp());
+        auto ts = get_timestamp();
+        auto rv = ngtcp2_conn_read_pkt(conn, pkt.path, &pkt.pkt_info, u8data(pkt.data), pkt.data.size(), ts);
 
         switch (rv)
         {
             case 0:
-                log::warning(log_cat, "io_ready from {}", __PRETTY_FUNCTION__);
+                //log::warning(log_cat, "io_ready from {}", __PRETTY_FUNCTION__);
                 conn.io_ready();
                 break;
             case NGTCP2_ERR_DRAINING:
@@ -298,6 +299,9 @@ namespace oxen::quic
         }
     }  // namespace
 #endif
+
+    int GSO_USED = 0;
+    int GSO_NOT = 0;
 
     io_result Endpoint::send_packets(Path& p, char* buf, size_t* bufsize, size_t n_pkts)
     {
@@ -375,6 +379,8 @@ namespace oxen::quic
 
         if (gso_size) {
 
+            GSO_USED++;
+
             iovec iov{};
             mmsghdr msgs{};
             iov.iov_base = buf;
@@ -402,6 +408,8 @@ namespace oxen::quic
         {
             std::array<iovec, DATAGRAM_BATCH_SIZE> iov{};
             std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
+
+            GSO_NOT++;
 
             for (int i = 0; i < n_pkts; i++)
             {
