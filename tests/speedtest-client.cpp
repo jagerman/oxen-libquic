@@ -17,19 +17,6 @@
 
 using namespace oxen::quic;
 
-constexpr size_t operator""_kiB(unsigned long long int x)
-{
-    return x * 1024;
-}
-constexpr size_t operator""_MiB(unsigned long long int x)
-{
-    return x * 1024 * 1_kiB;
-}
-constexpr size_t operator""_GiB(unsigned long long int x)
-{
-    return x * 1024 * 1_MiB;
-}
-
 namespace oxen::quic {
     extern int GSO_USED, GSO_NOT;
 }
