@@ -796,18 +796,22 @@ namespace oxen::quic
 #endif
         settings.max_tx_udp_payload_size = NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE;
         settings.cc_algo = NGTCP2_CC_ALGO_CUBIC;
+        settings.initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT;
+        settings.max_window = 24_MiB;
+        settings.max_stream_window = 16_MiB;
 
         ngtcp2_transport_params_default(&params);
 
         // Connection flow level control window
-        params.initial_max_data = 1_MiB;
+        params.initial_max_data = 15_MiB;
         // Max concurrent streams supported on one connection
         params.initial_max_streams_uni = 0;
         params.initial_max_streams_bidi = 32;
         // Max send buffer for streams (local = streams we initiate, remote = streams initiated to
         // us)
-        params.initial_max_stream_data_bidi_local = 64_kiB;
-        params.initial_max_stream_data_bidi_remote = 64_kiB;
+        params.initial_max_stream_data_bidi_local = 6_MiB;
+        params.initial_max_stream_data_bidi_remote = 6_MiB;
+        params.initial_max_stream_data_uni = 6_MiB;
         params.max_idle_timeout = std::chrono::nanoseconds(5min).count();
         params.active_connection_id_limit = 8;
 
