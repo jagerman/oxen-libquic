@@ -63,7 +63,7 @@ int main(int argc, char* argv[])
     bool pregenerate = false;
     cli.add_flag("-g,--pregenerate", pregenerate, "Pregenerate all stream data to send into RAM before starting");
 
-    size_t chunk_size = 64_kiB, chunk_num = 2;
+    size_t chunk_size = 64_ki, chunk_num = 2;
     cli.add_option("--stream-chunk-size", chunk_size, "How much data to queue at once, per chunk");
     cli.add_option("--stream-chunks", chunk_num, "How much chunks to queue at once per stream")->check(CLI::Range(1, 100));
 

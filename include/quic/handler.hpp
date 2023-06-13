@@ -39,8 +39,6 @@ namespace oxen::quic
 
         Network& net;
 
-        std::shared_ptr<uvw::UDPHandle> universal_handle;
-        Address default_local{"127.0.0.1", 4433};
         std::shared_ptr<uvw::AsyncHandle> io_trigger;
         std::shared_ptr<uvw::Loop> ev_loop;
 
@@ -51,6 +49,12 @@ namespace oxen::quic
         void client_close();
 
         void close_all();
+
+        // Finds and returns the server with the given local address; returns nullptr if not found.
+        Server* find_server(const Address& local);
+
+        // Finds and returns the client with the given local address; returns nullptr if not found.
+        Client* find_client(const Address& local);
 
       private:
         // Tracks client endpoints that are currently being managed by handler object

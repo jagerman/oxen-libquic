@@ -53,9 +53,9 @@ namespace oxen::quic
 
         void close_conns();
 
-        virtual std::shared_ptr<uvw::UDPHandle> get_handle(Address& addr) = 0;
+        virtual std::shared_ptr<uv_udp_t> get_handle(Address& addr) = 0;
 
-        virtual std::shared_ptr<uvw::UDPHandle> get_handle(Path& p) = 0;
+        virtual std::shared_ptr<uv_udp_t> get_handle(Path& p) = 0;
 
       protected:
         std::shared_ptr<uvw::TimerHandle> expiry_timer;

@@ -17,11 +17,9 @@ namespace oxen::quic
     Stream::Stream(Connection& conn, stream_data_callback_t data_cb, stream_close_callback_t close_cb, int64_t stream_id) :
             conn{conn},
             stream_id{stream_id},
-            data_callback{data_cb},
-            avail_trigger{conn.quic_manager->loop()->resource<uvw::AsyncHandle>()}
+            data_callback{data_cb}
     {
         log::trace(log_cat, "Creating Stream object...");
-        avail_trigger->on<uvw::AsyncEvent>([this](auto&, auto&) { handle_unblocked(); });
 
         // copy-assignment of connection UDP handle carries over packet forwarding -> endpoint
         udp_handle = conn.udp_handle;
@@ -29,16 +27,6 @@ namespace oxen::quic
         close_callback = (close_cb) ? std::move(close_cb) : [](Stream& s, uint64_t error_code) {
             log::warning(log_cat, "Stream close callback called (error code: {})", error_code);
         };
-
-        when_available([](Stream& s) {
-            if (s.size() < 65536)
-            {
-                log::info(log_cat, "Quic stream {} no longer congested, resuming", s.stream_id);
-                s.udp_handle->recv();
-                return true;
-            }
-            return false;
-        });
 
         log::trace(log_cat, "Stream object created");
     }
@@ -48,12 +36,6 @@ namespace oxen::quic
     Stream::~Stream()
     {
         log::debug(log_cat, "Destroying stream {}", stream_id);
-
-        if (avail_trigger)
-        {
-            avail_trigger->close();
-            avail_trigger.reset();
-        }
 
         bool was_closing = is_closing;
         is_closing = is_shutdown = true;
@@ -120,37 +102,10 @@ namespace oxen::quic
         log::trace(log_cat, "{} bytes acked, {} unacked remaining", bytes, size());
     }
 
-    void Stream::when_available(unblocked_callback_t unblocked_cb)
-    {
-        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        unblocked_callbacks.push(std::move(unblocked_cb));
-    }
-
-    void Stream::handle_unblocked()
-    {
-        log::warning(log_cat, "{} called", __PRETTY_FUNCTION__);
-        if (is_closing)
-            return;
-        while (!unblocked_callbacks.empty() && available())
-        {
-            if (unblocked_callbacks.front()(*this))
-                unblocked_callbacks.pop();
-        }
-
-        conn.io_ready();
-    }
-
     void Stream::io_ready()
     {
         log::warning(log_cat, "{}", __PRETTY_FUNCTION__);
         conn.io_ready();
-    }
-
-    void Stream::available_ready()
-    {
-        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        if (avail_trigger)
-            avail_trigger->send();
     }
 
     void Stream::wrote(size_t bytes)

@@ -32,10 +32,6 @@ namespace oxen::quic
     Handler::Handler(std::shared_ptr<uvw::Loop> loop_ptr, Network& net) : net{net}
     {
         ev_loop = loop_ptr;
-        universal_handle = ev_loop->resource<uvw::UDPHandle>();
-
-        universal_handle->bind(default_local);
-        net.mapped_client_addrs.emplace(Address{default_local}, universal_handle);
 
         log::info(log_cat, "{}", (ev_loop) ? "Event loop successfully created" : "Error: event loop creation failed");
     }
@@ -89,6 +85,20 @@ namespace oxen::quic
             for (const auto& ctx : clients)
                 ctx->client->close_conns();
         }
+    }
+
+    Server* Handler::find_server(const Address& local)
+    {
+        if (auto it = servers.find(local); it != servers.end())
+            return it->second->server.get();
+        return nullptr;
+    }
+    Client* Handler::find_client(const Address& local)
+    {
+        for (auto& ctx : clients)
+            if (ctx->local == local)
+                return ctx->client.get();
+        return nullptr;
     }
 
 }  // namespace oxen::quic

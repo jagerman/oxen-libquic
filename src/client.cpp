@@ -20,18 +20,12 @@ namespace oxen::quic
             std::shared_ptr<Handler> quic_manager,
             std::shared_ptr<ClientContext> ctx,
             ConnectionID& id,
-            std::shared_ptr<uvw::UDPHandle> handle) :
+            std::shared_ptr<uv_udp_t> handle) :
             Endpoint{quic_manager}, context{ctx}
     {
         Path path{ctx->local, ctx->remote};
 
-        log::trace(
-                log_cat,
-                "Client path: local={}:{}, remote={}:{}",
-                path.local.ip.data(),
-                path.local.port,
-                path.remote.ip.data(),
-                path.remote.port);
+        log::trace(log_cat, "Client path: {}", path);
 
         auto conn = std::make_unique<Connection>(*this, handler, id, std::move(path), handle);
 
@@ -66,12 +60,12 @@ namespace oxen::quic
         return conn->get_new_stream(std::move(data_cb), std::move(close_cb));
     }
 
-    std::shared_ptr<uvw::UDPHandle> Client::get_handle(Address& addr)
+    std::shared_ptr<uv_udp_t> Client::get_handle(Address& addr)
     {
         return reinterpret_cast<ClientContext*>(context.get())->udp_handle;
     }
 
-    std::shared_ptr<uvw::UDPHandle> Client::get_handle(Path& p)
+    std::shared_ptr<uv_udp_t> Client::get_handle(Path& p)
     {
         return reinterpret_cast<ClientContext*>(context.get())->udp_handle;
     }

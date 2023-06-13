@@ -257,7 +257,7 @@ namespace oxen::quic
     io_result Connection::send(uint8_t* buf, size_t* bufsize, size_t& n_packets, uint64_t ts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        assert(n_packets > 0 && n_packets <= buffer_size);
+        assert(n_packets > 0 && n_packets <= DATAGRAM_BATCH_SIZE);
 
         auto sent = endpoint.send_packets(path, reinterpret_cast<char*>(buf), bufsize, n_packets);
         if (sent.blocked())
@@ -359,7 +359,7 @@ namespace oxen::quic
                 ngtcp2_ssize ndatalen;
                 auto nwrite = ngtcp2_conn_writev_stream(
                         conn.get(),
-                        &path.path,
+                        path,
                         &pkt_info,
                         buf_pos,
                         NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE,
@@ -469,7 +469,7 @@ namespace oxen::quic
             ngtcp2_ssize ndatalen;
             auto nwrite = ngtcp2_conn_writev_stream(
                     conn.get(),
-                    &path.path,
+                    path,
                     &pkt_info,
                     buf_pos,
                     NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE,
@@ -797,21 +797,21 @@ namespace oxen::quic
         settings.max_tx_udp_payload_size = NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE;
         settings.cc_algo = NGTCP2_CC_ALGO_CUBIC;
         settings.initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT;
-        settings.max_window = 24_MiB;
-        settings.max_stream_window = 16_MiB;
+        settings.max_window = 24_Mi;
+        settings.max_stream_window = 16_Mi;
 
         ngtcp2_transport_params_default(&params);
 
         // Connection flow level control window
-        params.initial_max_data = 15_MiB;
+        params.initial_max_data = 15_Mi;
         // Max concurrent streams supported on one connection
         params.initial_max_streams_uni = 0;
         params.initial_max_streams_bidi = 32;
         // Max send buffer for streams (local = streams we initiate, remote = streams initiated to
         // us)
-        params.initial_max_stream_data_bidi_local = 6_MiB;
-        params.initial_max_stream_data_bidi_remote = 6_MiB;
-        params.initial_max_stream_data_uni = 6_MiB;
+        params.initial_max_stream_data_bidi_local = 6_Mi;
+        params.initial_max_stream_data_bidi_remote = 6_Mi;
+        params.initial_max_stream_data_uni = 6_Mi;
         params.max_idle_timeout = std::chrono::nanoseconds(5min).count();
         params.active_connection_id_limit = 8;
 
@@ -824,7 +824,7 @@ namespace oxen::quic
             std::shared_ptr<Handler> ep,
             const ConnectionID& scid,
             const Path& path,
-            std::shared_ptr<uvw::UDPHandle> handle) :
+            std::shared_ptr<uv_udp_t> handle) :
             endpoint{client},
             quic_manager{ep},
             source_cid{scid},

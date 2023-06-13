@@ -126,7 +126,7 @@ namespace oxen::quic
         ngtcp2_connection_close_error_set_transport_error_liberr(
                 &err, code, reinterpret_cast<uint8_t*>(const_cast<char*>(msg.data())), msg.size());
 
-        conn.conn_buffer.resize(max_pkt_size_v4);
+        conn.conn_buffer.resize(max_pkt_size);
         Path path;
         ngtcp2_pkt_info pkt_info;
 
@@ -220,7 +220,7 @@ namespace oxen::quic
         if (read_packet(conn, pkt).success())
             log::trace(log_cat, "done with incoming packet");
         else
-            log::trace(log_cat, "read packet failed"); // error will be already logged
+            log::trace(log_cat, "read packet failed");  // error will be already logged
     }
 
     io_result Endpoint::read_packet(Connection& conn, Packet& pkt)
@@ -268,7 +268,7 @@ namespace oxen::quic
     // We support different compilation modes for trying different methods of UDP sending by setting
     // these defines:
     //
-    // OXEN_LIBQUIC_LIBUV_UDP_QUEUING -- does everything through udp_send, which involves setting up
+    // OXEN_LIBQUIC_UDP_LIBUV_QUEUING -- does everything through udp_send, which involves setting up
     // packet queuing.  This is not the default because, in practice, it's slower than just sending
     // directly.
     //
@@ -276,10 +276,12 @@ namespace oxen::quic
     // try_send, even when on a platform (Linux, FreeBSD) that supports sendmmsg multi-packet sending.
     // By default we use sendmmsg when available.
     //
-    // OXEN_LIBQUIC_NO_GSO -- if defined then don't use GSO (in favour of sendmmsg) when possible on
+    // OXEN_LIBQUIC_UDP_NO_GSO -- if defined then don't use GSO (in favour of sendmmsg) when possible on
     // Linux.
+    //
+    // (There are associated cmake options for properly setting these definitions).
 
-#ifdef OXEN_LIBQUIC_LIBUV_UDP_QUEUING
+#ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
     namespace
     {
         struct packet_storage
@@ -303,18 +305,18 @@ namespace oxen::quic
     int GSO_USED = 0;
     int GSO_NOT = 0;
 
-    io_result Endpoint::send_packets(Path& p, char* buf, size_t* bufsize, size_t n_pkts)
+    io_result Endpoint::send_packets(Path& p, char* buf, size_t* bufsize, const size_t n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
         assert(n_pkts <= DATAGRAM_BATCH_SIZE);
 
         auto handle = get_handle(p);
-        assert(handle != nullptr);
+        assert(handle);
 
-        log::trace(log_cat, "Sending {} UDP packets to {}:{}...", n_pkts, p.remote.ip, p.remote.port);
+        log::trace(log_cat, "Sending {} UDP packets to {}...", n_pkts, p.remote);
 
-#ifdef OXEN_LIBQUIC_LIBUV_UDP_QUEUING
+#ifdef OXEN_LIBQUIC_UDP_LIBUV_QUEUING
         // Avoid allocations by each packet by doing just one allocation for the whole batch with a
         // crude reference counter so that we destruct it once when the full batch of packets is
         // sent.  This also requires us to go through raw libuv because uvw insists on owning a
@@ -328,8 +330,6 @@ namespace oxen::quic
         std::memcpy(packet_data->data.data(), buf, agg_size);
 
         packet_data->refs++;  // Hold an extra reference to prevent destruction before we return
-
-        auto* raw_handle = handle->raw();
 
         for (int i = 0; i < n_pkts; ++i)
         {
@@ -348,7 +348,7 @@ namespace oxen::quic
             auto* send_req = &packet_data->send_req[i];
             send_req->data = packet_data;
 
-            auto rv = uv_udp_send(send_req, raw_handle, &uv_buf, 1, p.remote, packet_storage_release);
+            auto rv = uv_udp_send(send_req, handle.get(), &uv_buf, 1, p.remote, packet_storage_release);
             if (rv != 0)  // This is a libuv error, *not* a udp send error, so we have to clean up
             {
                 release(packet_data);  // Delete our outer extra reference
@@ -363,33 +363,36 @@ namespace oxen::quic
         return io_result{0};
 
 #elif !defined(OXEN_LIBQUIC_UDP_NO_SENDMMSG) && (defined(__linux__) || defined(__FreeBSD__))
-        auto fd = handle->fd();
+        uv_os_fd_t fd;
+        int rv = uv_fileno(reinterpret_cast<uv_handle_t*>(handle.get()), &fd);
+        if (rv != 0)
+            return io_result{EBADF};
 
-        int rv;
-
-#if defined(__linux__) && !defined(OXEN_LIBQUIC_NO_GSO) && defined(UDP_SEGMENT)
-        uint16_t gso_size = n_pkts > 1 ? bufsize[0] : 0;
-        for (int i = 1; i < n_pkts-1; i++) {
-            if (bufsize[i] != gso_size)
+#if defined(__linux__) && !defined(OXEN_LIBQUIC_UDP_NO_GSO) && defined(UDP_SEGMENT)
+        uint16_t gso_size = (n_pkts > 1 && bufsize[0] >= bufsize[n_pkts - 1]) ? bufsize[0] : 0;
+        for (int i = 1; gso_size != 0 && i < n_pkts - 1; i++)
+        {
+            if (bufsize[i] != gso_size || bufsize[i] < bufsize[n_pkts - 1])
             {
                 gso_size = 0;
                 break;
             }
         }
 
-        if (gso_size) {
+        if (gso_size)
+        {
 
             GSO_USED++;
 
             iovec iov{};
             mmsghdr msgs{};
             iov.iov_base = buf;
-            iov.iov_len = (n_pkts-1) * gso_size + bufsize[n_pkts-1];
+            iov.iov_len = (n_pkts - 1) * gso_size + bufsize[n_pkts - 1];
             auto& hdr = msgs.msg_hdr;
             hdr.msg_iov = &iov;
             hdr.msg_iovlen = 1;
             hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
-            hdr.msg_namelen = p.remote.sockaddr_size();
+            hdr.msg_namelen = p.remote.socklen();
             std::array<char, CMSG_SPACE(sizeof(uint16_t))> control{};
             hdr.msg_control = control.data();
             hdr.msg_controllen = control.size();
@@ -399,12 +402,13 @@ namespace oxen::quic
             cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
             *reinterpret_cast<uint16_t*>(CMSG_DATA(cm)) = gso_size;
 
-            do {
+            do
+            {
                 rv = sendmmsg(fd, &msgs, 1, 0);
             } while (rv == -1 && errno == EINTR);
-
-        } else
-#endif // linux GSO
+        }
+        else
+#endif  // linux GSO
         {
             std::array<iovec, DATAGRAM_BATCH_SIZE> iov{};
             std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs{};
@@ -423,7 +427,7 @@ namespace oxen::quic
                 hdr.msg_iov = &iov[i];
                 hdr.msg_iovlen = 1;
                 hdr.msg_name = const_cast<sockaddr*>(static_cast<const sockaddr*>(p.remote));
-                hdr.msg_namelen = p.remote.sockaddr_size();
+                hdr.msg_namelen = p.remote.socklen();
             }
 
             do
@@ -445,16 +449,19 @@ namespace oxen::quic
 
 #else  // No sendmmsg; just do a series of try_send calls
 
+        uv_buf_t uv_buf;
+        uv_buf.base = buf;
         for (int i = 0; i < n_pkts; ++i)
         {
             assert(bufsize[i] > 0);
 
-            auto rv = handle->trySend(
-                    p.remote, reinterpret_cast<char*>(buf), bufsize[i]);
+            uv_buf.len = bufsize[i];
 
-            assert(rv < 0 || rv == bufsize[i]);
+            auto rv = uv_udp_try_send(handle.get(), &uv_buf, 1, p.remote);
 
-            buf += bufsize[i];
+            assert(rv == bufsize[i] || rv < 0);
+
+            uv_buf.base += uv_buf.len;
 
 #ifndef NDEBUG
             bufsize[i] = 0;
@@ -462,7 +469,10 @@ namespace oxen::quic
 
             if (rv < 0)
             {
-                log::error(log_cat, "Error {} sending packet to {}", rv, p.remote.to_string());
+                // Only debug because this is expected to fail sometime, i.e. if we're cramming
+                // packets faster than the kernel is willing to accept them (and the failure is
+                // okay: we'll return the error and retry sending later).
+                log::debug(log_cat, "Error {} sending packet to {}", rv, p.remote);
                 return io_result{rv};
             }
         }
@@ -471,15 +481,32 @@ namespace oxen::quic
 #endif
     }
 
+    namespace
+    {
+        struct send_helper
+        {
+            uv_udp_send_t req;
+            std::array<char, max_pkt_size> data;
+        };
+    }  // namespace
+
     io_result Endpoint::send_packet(Path& p, bstring_view data)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         auto handle = get_handle(p);
 
-        assert(handle != nullptr);
+        assert(handle);
 
-        log::info(log_cat, "Sending udp to {}:{}...", p.remote.ip.c_str(), p.remote.port);
-        handle->send(p.remote, const_cast<char*>(reinterpret_cast<const char*>(data.data())), data.length());
+        auto helper = new send_helper{};
+        helper->req.data = helper;
+        std::memcpy(helper->data.data(), data.data(), data.size());
+        const uv_buf_t uv_buf{helper->data.data(), data.size()};
+
+        log::debug(log_cat, "Sending UDP packet to {}...", p.remote);
+        uv_udp_send(&helper->req, handle.get(), &uv_buf, 1, p.remote, [](uv_udp_send_t* req, int status) {
+            delete static_cast<send_helper*>(req->data);
+            log::trace(log_cat, "Packet sent with status {}", status);
+        });
 
         return io_result{0};
     }
@@ -487,7 +514,7 @@ namespace oxen::quic
     void Endpoint::send_version_negotiation(const ngtcp2_version_cid& vid, Path& p)
     {
         auto randgen = make_mt19937();
-        std::array<std::byte, max_pkt_size_v4> _buf;
+        std::array<std::byte, max_pkt_size> _buf;
         std::array<uint32_t, NGTCP2_PROTO_VER_MAX - NGTCP2_PROTO_VER_MIN + 2> versions;
         std::iota(versions.begin() + 1, versions.end(), NGTCP2_PROTO_VER_MIN);
         // we're supposed to send some 0x?a?a?a?a version to trigger version negotiation

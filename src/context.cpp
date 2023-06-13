@@ -6,13 +6,6 @@
 
 namespace oxen::quic
 {
-    ClientContext::~ClientContext()
-    {
-        udp_handle->close();
-        udp_handle->data(nullptr);
-        udp_handle.reset();
-    }
-
     std::shared_ptr<Endpoint> ClientContext::endpoint()
     {
         return client;
@@ -26,13 +19,13 @@ namespace oxen::quic
     void ClientContext::handle_clientctx_opt(opt::local_addr addr)
     {
         local = std::move(addr);
-        log::trace(log_cat, "Client stored local address: {}:{}", local.ip.data(), local.port);
+        log::trace(log_cat, "Client stored local address: {}", local);
     }
 
     void ClientContext::handle_clientctx_opt(opt::remote_addr addr)
     {
         remote = std::move(addr);
-        log::trace(log_cat, "Client stored remote address: {}:{}", remote.ip.data(), remote.port);
+        log::trace(log_cat, "Client stored remote address: {}", remote);
     }
 
     void ClientContext::handle_clientctx_opt(opt::client_tls tls)
@@ -54,13 +47,13 @@ namespace oxen::quic
     void ServerContext::handle_serverctx_opt(opt::local_addr addr)
     {
         local = std::move(addr);
-        log::trace(log_cat, "Server stored bind address: {}:{}", local.ip.data(), local.port);
+        log::trace(log_cat, "Server stored bind address: {}", local);
     }
 
     void ServerContext::handle_serverctx_opt(Address addr)
     {
         local = std::move(addr);
-        log::trace(log_cat, "Server stored bind address: {}:{}", local.ip.data(), local.port);
+        log::trace(log_cat, "Server stored bind address: {}", local);
     }
 
     void ServerContext::handle_serverctx_opt(server_tls_callback_t func)
@@ -81,8 +74,7 @@ namespace oxen::quic
 
     void ServerContext::handle_serverctx_opt(server_data_callback_t func)
     {
-        log::trace(log_cat, "Server given data callback");
-        server_data_cb = std::move(func);
+        log::critical(log_cat, "FIXME: this callback is being removed (and is currently broken)");
     }
 
     void ServerContext::handle_serverctx_opt(stream_data_callback_t func)
@@ -95,19 +87,6 @@ namespace oxen::quic
     {
         log::trace(log_cat, "Server given data callback");
         stream_open_cb = std::move(func);
-    }
-
-    ServerContext::~ServerContext()
-    {
-        for (auto& h : udp_handles)
-        {
-            h.second.first->close();
-            h.second.first->data(nullptr);
-            h.second.first.reset();
-            h.second.second.reset();
-        }
-
-        udp_handles.clear();
     }
 
 }  // namespace oxen::quic

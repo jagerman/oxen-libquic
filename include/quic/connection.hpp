@@ -41,7 +41,7 @@ namespace oxen::quic
         std::unique_ptr<ngtcp2_conn, connection_deleter> conn;
         // ngtcp2_crypto_conn_ref conn_ref;
         std::shared_ptr<TLSContext> tls_context;
-        std::shared_ptr<uvw::UDPHandle> udp_handle;
+        std::shared_ptr<uv_udp_t> udp_handle;
 
         Address local;
         Address remote;
@@ -58,7 +58,7 @@ namespace oxen::quic
                 std::shared_ptr<Handler> ep,
                 const ConnectionID& scid,
                 const Path& path,
-                std::shared_ptr<uvw::UDPHandle> handle);
+                std::shared_ptr<uv_udp_t> handle);
 
         // Construct and initialize a new incoming connection from remote client to local server
         //      ep: tunnel objec tmanaging this connection
