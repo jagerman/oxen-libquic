@@ -111,11 +111,6 @@ namespace oxen::quic
             const gnutls_datum_t* msg)>;
     // Callbacks for embedding in client/server UVW events (ex: listen events, data events, etc)
 
-    // FIXME: drop this
-    using server_data_callback_t
-            [[deprecated("don't use this callback, it is too raw; try stream_data_callback_t instead")]] =
-                    std::function<void(const uvw::UDPDataEvent& event, uvw::UDPHandle& udp)>;
-
     // Stream callbacks
     using stream_data_callback_t = std::function<void(Stream&, bstring_view)>;
     using stream_close_callback_t = std::function<void(Stream&, uint64_t error_code)>;

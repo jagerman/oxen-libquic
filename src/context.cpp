@@ -72,11 +72,6 @@ namespace oxen::quic
         temp_ctx = std::move(tls).into_context();
     }
 
-    void ServerContext::handle_serverctx_opt(server_data_callback_t func)
-    {
-        log::critical(log_cat, "FIXME: this callback is being removed (and is currently broken)");
-    }
-
     void ServerContext::handle_serverctx_opt(stream_data_callback_t func)
     {
         log::trace(log_cat, "Server given data callback");
