@@ -78,13 +78,13 @@ namespace oxen::quic
 
     std::string Address::to_string() const
     {
-        char buf[INET6_ADDRSTRLEN];
-        uv_ip_name(*this, buf, sizeof(buf));
-        if (is_ipv6())
+        char buf[INET6_ADDRSTRLEN] = {};
+        if (is_ipv6()) {
+            uv_ip6_name(*this, buf, sizeof(buf));
             return "[{}]:{}"_format(buf, port());
-        else
-            return "{}:{}"_format(buf, port());
-        return buf;
+        }
+        uv_ip4_name(*this, buf, sizeof(buf));
+        return "{}:{}"_format(buf, port());
     }
 
     std::string Path::to_string() const
