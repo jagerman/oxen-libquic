@@ -103,7 +103,7 @@ namespace oxen::quic
         Client* client();
         const Client* client() const;
 
-        /// Returns a pointer to the owning endpoint; identity can be 
+        /// Returns a pointer to the owning endpoint; identity can be
 
         void schedule_retransmit(uint64_t ts = 0);
 

@@ -17,7 +17,8 @@
 
 using namespace oxen::quic;
 
-namespace oxen::quic {
+namespace oxen::quic
+{
     extern int GSO_USED, GSO_NOT;
 }
 
@@ -230,7 +231,8 @@ int main(int argc, char* argv[])
         crypto_generichash_blake2b_update(&hasher, reinterpret_cast<unsigned char*>(data.data()), data.size());
     };
 
-    if (pregenerate) {
+    if (pregenerate)
+    {
         log::warning(test_cat, "Pregenerating data...");
     }
 
@@ -247,7 +249,8 @@ int main(int argc, char* argv[])
             crypto_generichash_blake2b_final(&s.sent_hasher, reinterpret_cast<unsigned char*>(s.hash.data()), s.hash.size());
         }
     }
-    if (pregenerate) {
+    if (pregenerate)
+    {
         log::warning(test_cat, "Data pregeneration done");
     }
 

@@ -2,13 +2,14 @@
     Test server binary
 */
 
+#include <oxenc/endian.h>
+#include <oxenc/hex.h>
 #include <sodium/crypto_generichash_blake2b.h>
+
 #include <CLI/Validators.hpp>
 #include <future>
 #include <quic.hpp>
 #include <thread>
-#include <oxenc/endian.h>
-#include <oxenc/hex.h>
 
 #include "utils.hpp"
 
@@ -66,8 +67,10 @@ int main(int argc, char* argv[])
         return 0;
     };
 
-    struct stream_info {
-        explicit stream_info(uint64_t expected) : expected{expected} {
+    struct stream_info
+    {
+        explicit stream_info(uint64_t expected) : expected{expected}
+        {
             crypto_generichash_blake2b_init(&hasher, nullptr, 0, 32);
         }
 
@@ -80,8 +83,10 @@ int main(int argc, char* argv[])
     stream_data_callback_t stream_data = [&](Stream& s, bstring_view data) {
         auto& sd = csd[s.conn.source_cid];
         auto it = sd.find(s.stream_id);
-        if (it == sd.end()) {
-            if (data.size() < sizeof(uint64_t)) {
+        if (it == sd.end())
+        {
+            if (data.size() < sizeof(uint64_t))
+            {
                 log::critical(test_cat, "Well this was unexpected: I got {} < 8 bytes", data.size());
                 return;
             }
@@ -95,22 +100,27 @@ int main(int argc, char* argv[])
 
         bool need_more = info.received < info.expected;
         info.received += data.size();
-        if (info.received > info.expected) {
+        if (info.received > info.expected)
+        {
             log::critical(test_cat, "Received too much data ({}B > {}B)!");
             if (!need_more)
                 return;
             data.remove_suffix(info.received - info.expected);
         }
-        crypto_generichash_blake2b_update(
-            &info.hasher, reinterpret_cast<const unsigned char*>(data.data()), data.size());
+        crypto_generichash_blake2b_update(&info.hasher, reinterpret_cast<const unsigned char*>(data.data()), data.size());
 
-        if (info.received >= info.expected) {
+        if (info.received >= info.expected)
+        {
             std::basic_string<unsigned char> final_hash;
             final_hash.resize(32);
             crypto_generichash_blake2b_final(&info.hasher, final_hash.data(), 32);
 
-            log::warning(test_cat, "Data from stream {} complete ({} B).  Final hash: {}",
-                    s.stream_id, info.received, oxenc::to_hex(final_hash.begin(), final_hash.end()));
+            log::warning(
+                    test_cat,
+                    "Data from stream {} complete ({} B).  Final hash: {}",
+                    s.stream_id,
+                    info.received,
+                    oxenc::to_hex(final_hash.begin(), final_hash.end()));
 
             s.send(std::move(final_hash));
         }

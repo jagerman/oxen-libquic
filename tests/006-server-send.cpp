@@ -6,7 +6,7 @@ namespace oxen::quic::test
 {
     using namespace std::literals;
 
-    TEST_CASE("006: Server sending stream data", "[006][server][send]")
+    TEST_CASE("006: Server successfully sending stream data", "[006][server][send]")
     {
         logger_config();
 

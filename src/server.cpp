@@ -28,7 +28,7 @@ namespace oxen::quic
     }
 
     std::shared_ptr<Stream> Server::open_stream(
-            Address remote_addr, stream_data_callback_t data_cb, stream_close_callback_t close_cb)
+            const Address& remote_addr, stream_data_callback_t data_cb, stream_close_callback_t close_cb)
     {
         return open_stream(get_conn(remote_addr), std::move(data_cb), std::move(close_cb));
     }
@@ -37,11 +37,9 @@ namespace oxen::quic
             Connection* conn, stream_data_callback_t data_cb, stream_close_callback_t close_cb)
     {
         log::trace(log_cat, "Opening server stream...");
-        auto ctx = reinterpret_cast<ServerContext*>(context.get());
 
         return conn->get_new_stream(
-            (context->stream_data_cb) ? context->stream_data_cb : std::move(data_cb), 
-            std::move(close_cb));
+                (context->stream_data_cb) ? context->stream_data_cb : std::move(data_cb), std::move(close_cb));
     }
 
     std::shared_ptr<uv_udp_t> Server::get_handle(Address& addr)

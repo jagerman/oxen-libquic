@@ -15,9 +15,7 @@ extern "C"
 namespace oxen::quic
 {
     Stream::Stream(Connection& conn, stream_data_callback_t data_cb, stream_close_callback_t close_cb, int64_t stream_id) :
-            conn{conn},
-            stream_id{stream_id},
-            data_callback{data_cb}
+            conn{conn}, stream_id{stream_id}, data_callback{data_cb}
     {
         log::trace(log_cat, "Creating Stream object...");
 

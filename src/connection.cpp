@@ -325,7 +325,7 @@ namespace oxen::quic
 
         auto* buf_pos = send_buffer.data();
 
-        for (size_t stream_packets = 0; stream_packets < max_stream_packets && !strs.empty(); )
+        for (size_t stream_packets = 0; stream_packets < max_stream_packets && !strs.empty();)
         {
             for (auto it = strs.begin(); it != strs.end();)
             {
@@ -620,7 +620,12 @@ namespace oxen::quic
         else
         {
             auto client = stream->conn.client();
-            assert(client);
+
+            if (!client)
+            {
+                log::warning(log_cat, "Error: Local endpoint resolved as neither server nor client; failed to open stream");
+                return -1;
+            }
 
             log::debug(log_cat, "Client creating stream to match remote");
             stream->data_callback = client->context->stream_data_cb;

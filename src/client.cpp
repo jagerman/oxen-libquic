@@ -53,13 +53,11 @@ namespace oxen::quic
     std::shared_ptr<Stream> Client::open_stream(stream_data_callback_t data_cb, stream_close_callback_t close_cb)
     {
         log::trace(log_cat, "Opening client stream...");
-        auto ctx = reinterpret_cast<ClientContext*>(context.get());
 
-        auto conn = get_conn(ctx->conn_id);
+        auto conn = get_conn(context->conn_id);
 
         return conn->get_new_stream(
-            (context->stream_data_cb) ? context->stream_data_cb : std::move(data_cb), 
-            std::move(close_cb));
+                (context->stream_data_cb) ? context->stream_data_cb : std::move(data_cb), std::move(close_cb));
     }
 
     std::shared_ptr<uv_udp_t> Client::get_handle(Address& addr)

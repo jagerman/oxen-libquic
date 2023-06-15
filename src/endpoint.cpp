@@ -46,13 +46,13 @@ namespace oxen::quic
             c.second->io_trigger->on<uvw::AsyncEvent>(async_cb);
     }
 
-    void Endpoint::get_active()
+    void Endpoint::print_active_conns()
     {
         for (const auto& c : conns)
             log::info(log_cat, "Conn ID: {}, Remote Address: {}", c.first, c.second->remote);
     }
 
-    std::list<std::pair<ConnectionID, Address>> Endpoint::get_conns()
+    std::list<std::pair<ConnectionID, Address>> Endpoint::get_conn_addrs()
     {
         std::list<std::pair<ConnectionID, Address>> ret{};
 
@@ -244,7 +244,7 @@ namespace oxen::quic
         switch (rv)
         {
             case 0:
-                //log::warning(log_cat, "io_ready from {}", __PRETTY_FUNCTION__);
+                // log::warning(log_cat, "io_ready from {}", __PRETTY_FUNCTION__);
                 conn.io_ready();
                 break;
             case NGTCP2_ERR_DRAINING:
@@ -577,7 +577,7 @@ namespace oxen::quic
         return it->second.get();
     }
 
-    Connection* Endpoint::get_conn(Address addr)
+    Connection* Endpoint::get_conn(const Address& addr)
     {
         for (const auto& c : conns)
         {
