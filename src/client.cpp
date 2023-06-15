@@ -57,7 +57,9 @@ namespace oxen::quic
 
         auto conn = get_conn(ctx->conn_id);
 
-        return conn->get_new_stream(std::move(data_cb), std::move(close_cb));
+        return conn->get_new_stream(
+            (context->stream_data_cb) ? context->stream_data_cb : std::move(data_cb), 
+            std::move(close_cb));
     }
 
     std::shared_ptr<uv_udp_t> Client::get_handle(Address& addr)

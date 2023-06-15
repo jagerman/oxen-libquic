@@ -565,7 +565,7 @@ namespace oxen::quic
         if (ts == 0)
             ts = get_timestamp();
 
-        auto delta = 0;
+        uint64_t delta = 0;
         if (exp < ts)
         {
             log::info(log_cat, "Expiry delta: {}ns ago", ts - exp);
@@ -602,6 +602,7 @@ namespace oxen::quic
         log::info(log_cat, "New stream ID:{}", id);
 
         auto stream = std::make_shared<Stream>(*this, id);
+        stream->set_ready();
 
         stream->stream_id = id;
         uint64_t rv{0};
@@ -610,10 +611,22 @@ namespace oxen::quic
 
         if (srv)
         {
+            log::debug(log_cat, "Server creating stream to match remote");
             stream->data_callback = srv->context->stream_data_cb;
 
             if (srv->context->stream_open_cb)
                 rv = srv->context->stream_open_cb(*stream);
+        }
+        else
+        {
+            auto client = stream->conn.client();
+            assert(client);
+
+            log::debug(log_cat, "Client creating stream to match remote");
+            stream->data_callback = client->context->stream_data_cb;
+
+            if (client->context->stream_open_cb)
+                rv = client->context->stream_open_cb(*stream);
         }
 
         if (rv != 0)
@@ -782,11 +795,7 @@ namespace oxen::quic
         callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
         callbacks.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
         callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
-        // callbacks.recv_rx_key = recv_rx_key;
-        // callbacks.recv_tx_key = recv_tx_key;
-        // callbacks.dcid_status = NULL;
-        // callbacks.handshake_completed = NULL;
-        // callbacks.handshake_confirmed = NULL;
+        callbacks.stream_open = on_stream_open;
 
         ngtcp2_settings_default(&settings);
 
@@ -895,7 +904,6 @@ namespace oxen::quic
             log::warning(log_cat, "Error: Server-based connection not created");
 
         callbacks.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
-        callbacks.stream_open = on_stream_open;
 
         params.original_dcid = hdr.dcid;
         params.original_dcid_present = 1;

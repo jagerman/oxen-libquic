@@ -103,11 +103,9 @@ namespace oxen::quic
         Client* client();
         const Client* client() const;
 
+        /// Returns a pointer to the owning endpoint; identity can be 
+
         void schedule_retransmit(uint64_t ts = 0);
-
-        int init_gnutls(Client& client);
-
-        int init_gnutls(Server& server);
 
         const std::shared_ptr<Stream>& get_stream(int64_t ID) const;
 
@@ -120,8 +118,6 @@ namespace oxen::quic
         void stream_closed(int64_t id, uint64_t app_code);
 
         int get_streams_available();
-
-        int recv_initial_crypto(std::basic_string_view<uint8_t> data);
 
         // Buffer used to store non-stream connection data
         //  ex: initial transport params

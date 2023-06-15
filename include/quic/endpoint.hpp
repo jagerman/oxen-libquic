@@ -48,8 +48,13 @@ namespace oxen::quic
         void delete_connection(const ConnectionID& cid);
 
         Connection* get_conn(ConnectionID ID);
+        Connection* get_conn(Address addr);
 
         void call_async_all(async_callback_t async_cb);
+
+        void get_active();
+
+        std::list<std::pair<ConnectionID, Address>> get_conns();
 
         void close_conns();
 
