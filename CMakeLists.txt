@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.13...3.25)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
@@ -17,22 +17,18 @@ if(CCACHE_PROGRAM)
   endforeach()
 endif()
 
-project(libquicinet 
+project(oxen-libquic
     VERSION 0.0.5
     DESCRIPTION "Modular QUIC library for stream and connection management"
     LANGUAGES ${LANGS})
 
-set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE)
-	set(CMAKE_BUILD_TYPE Release)
-endif()
+message(STATUS "${PROJECT_NAME} v${PROJECT_VERSION}")
 
-set(CMAKE_C_FLAGS_DEBUG "-g")
-set(CMAKE_C_FLAGS_RELEASE "-O3")
-
-option(WITH_LTO "enable lto on compile time" OFF)
+option(WITH_LTO "Compile with Link-time Optimization" ON)
 if(WITH_LTO)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT IPO_ENABLED OUTPUT ipo_error)
@@ -52,7 +48,6 @@ if(IPO_ENABLED AND NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION)
 endif()
 
 include(GNUInstallDirs)
-include(combine_archives)
 
 # Interface target for any general includes, flags, etc. that is meant to be inherited publicly.
 add_library(common INTERFACE)
@@ -67,7 +62,58 @@ if(WARNINGS_AS_ERRORS)
     target_compile_options(internal INTERFACE -Werror)
 endif()
 
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+    set(libquic_IS_TOPLEVEL_PROJECT TRUE)
+else()
+    set(libquic_IS_TOPLEVEL_PROJECT FALSE)
+endif()
+
+option(LIBQUIC_BUILD_TESTS "Build libquic test suite and programs" ${libquic_IS_TOPLEVEL_PROJECT})
+option(LIBQUIC_INSTALL "Install libquic headers and libraries" ${libquic_IS_TOPLEVEL_PROJECT})
+
+configure_file(include/quic/version.hpp.in include/quic/version.hpp @ONLY)
+
 add_subdirectory(external)
 add_subdirectory(src)
-add_subdirectory(tests)
 
+if(LIBQUIC_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
+
+add_library(libquic::libquic ALIAS quic)
+export(
+    TARGETS quic
+    NAMESPACE libquic::
+    FILE oxen-libquicTargets.cmake
+)
+
+if(LIBQUIC_INSTALL)
+    install(
+        FILES
+        include/quic/connection.hpp
+        include/quic/context.hpp
+        include/quic/crypto.hpp
+        include/quic/endpoint.hpp
+        include/quic/export.h
+        include/quic/gnutls_crypto.hpp
+        include/quic/network.hpp
+        include/quic/opt.hpp
+        include/quic/stream.hpp
+        include/quic/udp.hpp
+        include/quic/utils.hpp
+        ${CMAKE_CURRENT_BINARY_DIR}/include/quic/version.hpp
+
+        DESTINATION
+        ${CMAKE_INSTALL_INCLUDEDIR}/quic
+    )
+
+    install(
+        FILES include/quic.hpp
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/quic
+    )
+
+    install(
+        FILES ${CMAKE_CURRENT_BINARY_DIR}/oxen-libquic.pc
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/pkgconfig
+    )
+endif()

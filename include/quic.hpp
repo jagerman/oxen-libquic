@@ -7,4 +7,6 @@
 #include <quic/network.hpp>
 #include <quic/opt.hpp>
 #include <quic/stream.hpp>
+#include <quic/udp.hpp>
 #include <quic/utils.hpp>
+#include <quic/version.hpp>

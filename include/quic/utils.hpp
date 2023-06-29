@@ -26,8 +26,6 @@ extern "C"
 #include <future>
 #include <iostream>
 #include <map>
-#include <oxen/log.hpp>
-#include <oxen/log/format.hpp>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -47,15 +45,11 @@ extern "C"
 
 namespace oxen::quic
 {
-    inline auto log_cat = oxen::log::Cat("quic");
-
     class Stream;
 
     using namespace std::literals;
-    using namespace oxen::log::literals;
     using bstring = std::basic_string<std::byte>;
     using bstring_view = std::basic_string_view<std::byte>;
-    namespace log = oxen::log;
 
     // SI (1000) and non-SI (1024-based) modifier prefix operators.  E.g.
     // 50_M is 50'000'000 and 50_Mi is 52'428'800.
@@ -185,27 +179,12 @@ namespace oxen::quic
             "+GROUP-SECP384R1:"
             "+GROUP-SECP521R1:%DISABLE_TLS13_COMPAT_MODE";
 
-    void logger_config(std::string out = "stderr", log::Type type = log::Type::Print, log::Level reset = log::Level::trace);
-
     std::chrono::steady_clock::time_point get_time();
     std::chrono::nanoseconds get_timestamp();
 
     std::string str_tolower(std::string s);
 
     std::mt19937 make_mt19937();
-
-    inline int numeric_host_family(const char* hostname, int family)
-    {
-        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        uint8_t dst[sizeof(struct in6_addr)];
-        return inet_pton(family, hostname, dst) == 1;
-    }
-
-    inline int numeric_host(const char* hostname)
-    {
-        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        return numeric_host_family(hostname, AF_INET) || numeric_host_family(hostname, AF_INET6);
-    }
 
     enum class Direction { OUTBOUND = 0, INBOUND = 1 };
 
