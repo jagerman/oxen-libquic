@@ -58,14 +58,12 @@ int main(int argc, char* argv[])
         uint64_t n_received = 0;
     };
 
-    recv_info dgram_data;
-
-    std::promise<void> t_prom;
-    std::future<void> t_fut = t_prom.get_future();
+    std::unordered_map<oxen::quic::ConnectionID, recv_info> conn_dgram_data;
 
     std::shared_ptr<Endpoint> server;
 
     dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, bstring_view data) {
+        auto& dgram_data = conn_dgram_data[di.reference_id];
         if (dgram_data.n_expected == 0)
         {
             // The very first packet should be 8 bytes containing the uint64_t count of total
@@ -107,8 +105,7 @@ int main(int argc, char* argv[])
                     info.n_received,
                     info.n_expected);
 
-            di.reply("DONE!"sv);
-            t_prom.set_value();
+            di.reply("DONE-{}"_format(info.n_received));
         }
     };
 
@@ -139,7 +136,6 @@ int main(int argc, char* argv[])
                 oxenc::to_base64(pubkey));
     }
 
-    t_fut.get();
-
-    log::warning(test_cat, "Shutting down test server");
+    for (;;)
+        std::this_thread::sleep_for(10min);
 }
