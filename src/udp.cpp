@@ -147,13 +147,14 @@ namespace oxen::quic
     }
 #endif
 
-    UDPSocket::UDPSocket(event_base* ev_loop, const Address& addr, receive_callback_t on_receive) :
-            ev_{ev_loop}, receive_callback_{std::move(on_receive)}
+    UDPSocket::UDPSocket(
+            event_base* ev_loop, const Address& addr, receive_callback_t on_receive, void* receive_callback_ctx) :
+            ev_{ev_loop}, receive_callback_{on_receive}, receive_callback_ctx_{receive_callback_ctx}
     {
         assert(ev_);
 
         if (!receive_callback_)
-            throw std::logic_error{"UDPSocket construction requires a non-empty receive callback"};
+            throw std::logic_error{"UDPSocket construction requires a non-nullptr receive callback"};
 
         const int sockopt_proto = addr.is_ipv6() ? IPPROTO_IPV6 : IPPROTO_IP;
         const unsigned int sockopt_on = 1;
@@ -180,6 +181,9 @@ namespace oxen::quic
             check_rv(setsockopt(sock_, IPPROTO_IPV6, IPV6_V6ONLY, v6only, sockopt_onoff_size), "setting v6only flag");
         }
 
+        // FIXME: ifdef
+        check_rv(setsockopt(sock_, IPPROTO_UDP, UDP_GRO, sockopt_on_ptr, sockopt_onoff_size), "enable GRO");
+
         // Enable ECN notification on packets we receive:
 #ifndef _WIN32
         check_rv(
@@ -188,7 +192,7 @@ namespace oxen::quic
                         sockopt_proto,
                         addr.is_ipv6() ? IPV6_RECVTCLASS : IP_RECVTOS,
                         &sockopt_on,
-                        sizeof(sockopt_on)),
+                        sockopt_onoff_size),
                 "enable ecn");
 #else
         // Not supported before Windows 11 (and not in mingw)
@@ -315,7 +319,7 @@ namespace oxen::quic
             return;
         }
 
-        receive_callback_(Packet{bound_, payload, hdr});
+        receive_callback_(Packet{bound_, payload, hdr}, receive_callback_ctx_);
     }
 
     union alignas(cmsghdr) recv_cmsg_data
@@ -327,7 +331,63 @@ namespace oxen::quic
 
     io_result UDPSocket::receive()
     {
-#ifdef OXEN_LIBQUIC_RECVMMSG
+#define FIXMEFOO
+#ifdef FIXMEFOO // FIXME
+
+        std::array<sockaddr_in6, DATAGRAM_BATCH_SIZE> peers;
+        std::array<iovec, DATAGRAM_BATCH_SIZE> iovs;
+        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs = {};
+        std::array<recv_cmsg_data, DATAGRAM_BATCH_SIZE> cmsgs = {};
+
+        // FIXME 20 magic constant
+        std::array<std::array<std::byte, MAX_PMTUD_UDP_PAYLOAD * 20>, DATAGRAM_BATCH_SIZE> data;
+
+        for (size_t i = 0; i < DATAGRAM_BATCH_SIZE; i++)
+        {
+            iovs[i].iov_base = data[i].data();
+            iovs[i].iov_len = data[i].size();
+            auto& h = msgs[i].msg_hdr;
+            h.msg_iov = &iovs[i];
+            h.msg_iovlen = 1;
+            h.msg_name = &peers[i];
+            h.msg_namelen = sizeof(peers[i]);
+            h.msg_control = &cmsgs[i];
+            h.msg_controllen = sizeof(cmsgs[i]);
+        }
+
+        size_t count = 0;
+        do
+        {
+            int nread;
+            do
+            {
+                nread = recvmmsg(sock_, msgs.data(), msgs.size(), 0, nullptr);
+            } while (nread == -1 && errno == EINTR);
+
+            if (nread == 0)  // No packets available to read
+                return io_result{};
+
+            if (nread < 0)
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    return io_result{};
+                return io_result{errno};
+            }
+
+            for (int i = 0; i < nread; i++)
+                process_packet(bstring_view{data[i].data(), msgs[i].msg_len}, msgs[i].msg_hdr);
+
+            count += nread;
+
+            if (nread < static_cast<int>(DATAGRAM_BATCH_SIZE))
+                // We didn't fill the recvmmsg array so must be done
+                return io_result{};
+
+        } while (count < MAX_RECEIVE_PER_LOOP);
+
+        return io_result{};
+
+#elif defined(OXEN_LIBQUIC_RECVMMSG)
         std::array<sockaddr_in6, DATAGRAM_BATCH_SIZE> peers;
         std::array<iovec, DATAGRAM_BATCH_SIZE> iovs;
         std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs = {};

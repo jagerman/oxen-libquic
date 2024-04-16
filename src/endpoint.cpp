@@ -111,7 +111,10 @@ namespace oxen::quic
         {
             log::debug(log_cat, "Starting new UDP socket on {}", _local);
             socket = std::make_unique<UDPSocket>(
-                    get_loop().get(), _local, [this](auto&& packet) { handle_packet(std::move(packet)); });
+                    get_loop().get(),
+                    _local,
+                    [](Packet&& packet, void* self) { static_cast<Endpoint*>(self)->handle_packet(std::move(packet)); },
+                    this);
 
             _local = socket->address();
         }

@@ -127,6 +127,17 @@ namespace oxen::quic
     // Maximum number of packets we can send in one batch when using sendmmsg/GSO, and maximum we
     // receive in one batch when using recvmmsg.
     inline constexpr size_t DATAGRAM_BATCH_SIZE = 24;
+    // When using GRO we divide DATAGRAM_BATCH_SIZE, above, into stripes of this size.  Each
+    // "stripe" can be packed with multiple sequential datagrams if those datagrams arrived from the
+    // same source contain sequential this many stripes: each stripe
+    // contains sequential received packets ; we can receive
+    // up to BATCH_SIZE / BATCH_WIDTH packets per recvmmsg call from each of up to BATCH_WIDTH
+    // sources.
+    inline constexpr size_t DATAGRAM_GRO_BATCH_WIDTH = 4;
+
+    static_assert(
+            DATAGRAM_GRO_BATCH_WIDTH < DATAGRAM_BATCH_SIZE && DATAGRAM_BATCH_SIZE % DATAGRAM_GRO_BATCH_WIDTH == 0,
+            "GRO batch width must be a divisor of overall batch size");
 
     // Maximum number of packets we will receive at once before returning control to the event loop
     // to re-call the packet receiver if there are additional packets.  (This limit is to prevent

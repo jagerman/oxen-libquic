@@ -71,7 +71,7 @@ namespace oxen::quic
 #endif
                 ;
 
-        using receive_callback_t = std::function<void(Packet&& pkt)>;
+        using receive_callback_t = void (*)(Packet&& pkt, void* ctx);
 
         UDPSocket() = delete;
 
@@ -82,7 +82,7 @@ namespace oxen::quic
         /// When packets are received they will be fed into the given callback.
         ///
         /// ev_loop must outlive this object.
-        UDPSocket(event_base* ev_loop, const Address& addr, receive_callback_t cb);
+        UDPSocket(event_base* ev_loop, const Address& addr, receive_callback_t cb, void* receive_callback_ctx);
 
         /// Non-copyable and non-moveable
         UDPSocket(const UDPSocket& s) = delete;
@@ -137,6 +137,7 @@ namespace oxen::quic
 
         event_ptr rev_ = nullptr;
         receive_callback_t receive_callback_;
+        void* receive_callback_ctx_;
         event_ptr wev_ = nullptr;
         std::vector<std::function<void()>> writeable_callbacks_;
     };
