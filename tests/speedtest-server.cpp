@@ -39,6 +39,8 @@ int main(int argc, char* argv[])
             no_checksum,
             "Disable even the simple xor byte checksum (typically used together with -H).  Should be specified on the "
             "client as well.");
+    std::string seed;
+    add_seed_opt(cli, seed);
 
     try
     {
@@ -51,7 +53,8 @@ int main(int argc, char* argv[])
 
     setup_logging(log_file, log_level);
 
-    auto [seed, pubkey] = generate_ed25519();
+    auto pubkey = make_keypair(seed);
+
     auto server_tls = GNUTLSCreds::make_from_ed_keys(seed, pubkey);
 
     Network server_net{};
