@@ -90,7 +90,7 @@ namespace oxen::quic
             if (_high_water)
                 _high_water.clear();
             _is_watermarked = false;
-            log::info(log_cat, "Stream cleared currently set watermarks!");
+            log::info(log_cat, "Stream (ID:{}) cleared currently set watermarks!", _stream_id);
         });
     }
 
@@ -117,6 +117,7 @@ namespace oxen::quic
                 if (_paused_offset)
                 {
                     ngtcp2_conn_extend_max_stream_offset(*_conn, _stream_id, _paused_offset);
+                    ngtcp2_conn_extend_max_offset(*_conn, _paused_offset);
                     _paused_offset = 0;
                 }
 
@@ -156,48 +157,71 @@ namespace oxen::quic
 
     bool Stream::has_remote_reset_hooks() const
     {
-        return endpoint.call_get([this]() { return _remote_reset.has_read_hook() and _remote_reset.has_write_hook(); });
+        return endpoint.call_get(
+                [this]() { return _remote_reset.has_stop_sending_hook() or _remote_reset.has_stream_reset_hook(); });
     }
 
-    void Stream::stop_reading()
+    void Stream::stop_sending(uint64_t code)
     {
-        endpoint.call([this]() {
+        endpoint.call([this, code]() {
             if (not _is_reading)
             {
-                log::warning(log_cat, "Stream has already halted read operations!");
+                log::warning(log_cat, "Stream (ID:{}) has already halted read operations!", _stream_id);
                 return;
             }
 
             _is_reading = false;
 
-            log::warning(log_cat, "Halting all read operations on stream ID:{}!", _stream_id);
-            ngtcp2_conn_shutdown_stream_read(*_conn, 0, _stream_id, STREAM_REMOTE_READ_SHUTDOWN);
+            log::critical(log_cat, "Halting all read operations on stream ID:{}!", _stream_id);
+            ngtcp2_conn_shutdown_stream_read(*_conn, 0, _stream_id, code);
         });
+    }
+
+    void Stream::reset_stream(uint64_t code)
+    {
+        endpoint.call([this, code]() {
+            if (not _is_writing)
+            {
+                log::warning(log_cat, "Stream (ID:{}) has already halted write operations!", _stream_id);
+                return;
+            }
+
+            auto sz = size();
+
+            if (sz == 0)
+            {
+                log::critical(
+                        log_cat,
+                        "All transmitted data dispatched (unacked:{}) and acked; halting all write operations on stream "
+                        "ID:{} (ec:{})",
+                        _unacked_size,
+                        _stream_id,
+                        code);
+                ngtcp2_conn_shutdown_stream_write(*_conn, 0, _stream_id, code);
+                return;
+            }
+
+            log::critical(
+                    log_cat,
+                    "Stream deferring writing shutdown (ec:{}) until output buffers cleared (size:{})...",
+                    code,
+                    sz);
+            // if buffers are empty and we call shutdown_stream_write now, we do not need to flip this boolean; it is used to
+            // signal for the same call in ::acknowledge()
+            _is_writing = false;
+            // set the code we wanted to pass to to ngtcp2_conn_shutdown_stream_write for later use
+            _deferred_ec = code;
+        });
+    }
+
+    void Stream::stop_reading()
+    {
+        endpoint.call([this]() { stop_sending(STREAM_REMOTE_READ_SHUTDOWN); });
     }
 
     void Stream::stop_writing()
     {
-        endpoint.call([this]() {
-            if (not _is_writing)
-            {
-                log::warning(log_cat, "Stream has already halted write operations!");
-                return;
-            }
-
-            if (user_buffers.empty())
-            {
-                log::warning(
-                        log_cat,
-                        "All transmitted data dispatched and acked; halting all write operations on stream ID:{}",
-                        _stream_id);
-                ngtcp2_conn_shutdown_stream_write(*_conn, 0, _stream_id, STREAM_REMOTE_WRITE_SHUTDOWN);
-                return clear_watermarks();
-            }
-
-            // if buffers are empty and we call shutdown_stream_write now, we do not need to flip this boolean; it is used to
-            // signal for the same call in ::acknowledge()
-            _is_writing = false;
-        });
+        endpoint.call([this]() { reset_stream(STREAM_REMOTE_WRITE_SHUTDOWN); });
     }
 
     bool Stream::is_paused() const
@@ -214,7 +238,7 @@ namespace oxen::quic
     {
         return endpoint.call_get([this]() { return _is_writing; });
     }
-    
+
     std::shared_ptr<connection_interface> Stream::get_conn_interface()
     {
         return std::static_pointer_cast<connection_interface>(_conn->shared_from_this());
@@ -257,6 +281,10 @@ namespace oxen::quic
             else
             {
                 _is_closing = _is_shutdown = true;
+
+                // TOFIX: DISCUSS: testing this
+                _is_reading = _is_writing = false;
+
                 if (_conn)
                 {
                     log::info(log_cat, "Closing stream (ID: {}) with: {}", _stream_id, quic_strerror(app_err_code));
@@ -316,14 +344,18 @@ namespace oxen::quic
         {
             // We are above the high watermark. We prime the low water hook to be fired the next time we drop below the low
             // watermark. If the high water hook exists and is primed, execute it
-            if (auto unsent = size() - _unacked_size; unsent >= _high_mark)
+            // if (auto unsent = size() - _unacked_size; unsent >= _high_mark)
+            if (size() >= _high_mark)
             {
-                _low_primed = true;
-                log::info(log_cat, "Low water hook primed!");
+                if (not _low_primed)
+                {
+                    _low_primed = true;
+                    log::debug(log_cat, "Low water hook primed!");
+                }
 
                 if (_high_water and _high_primed)
                 {
-                    log::info(log_cat, "Executing high watermark hook!");
+                    log::debug(log_cat, "Executing high watermark hook!");
                     _high_primed = false;
                     _high_water(*this);
                 }
@@ -359,10 +391,13 @@ namespace oxen::quic
         {
             log::warning(
                     log_cat,
-                    "All transmitted data dispatched and acked; halting all write operations on stream ID:{}",
-                    _stream_id);
-            ngtcp2_conn_shutdown_stream_write(*_conn, 0, _stream_id, STREAM_REMOTE_WRITE_SHUTDOWN);
-            return clear_watermarks();
+                    "All transmitted data dispatched (unacked:{}) and acked; halting all write operations on stream ID:{} "
+                    "(ec:{})",
+                    _unacked_size,
+                    _stream_id,
+                    _deferred_ec);
+            ngtcp2_conn_shutdown_stream_write(*_conn, 0, _stream_id, _deferred_ec);
+            return;
         }
 
         auto sz = size();
@@ -372,14 +407,17 @@ namespace oxen::quic
         {
             // We are below the low watermark. We prime the high water hook to be fired the next time we rise above the high
             // watermark. If the low water hook exists and is primed, execute it
-            if (auto unsent = sz - _unacked_size; unsent <= _low_mark)
+            if (sz <= _low_mark)
             {
-                _high_primed = true;
-                log::info(log_cat, "High water hook primed!");
+                if (not _high_primed)
+                {
+                    _high_primed = true;
+                    log::debug(log_cat, "High water hook primed!");
+                }
 
                 if (_low_water and _low_primed)
                 {
-                    log::info(log_cat, "Executing low watermark hook!");
+                    log::debug(log_cat, "Executing low watermark hook!");
                     _low_primed = false;
                     _low_water(*this);
                 }

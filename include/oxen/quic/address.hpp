@@ -1,9 +1,9 @@
 #pragma once
 
+#include <oxenc/bt.h>
 #include <oxenc/endian.h>
 
 #include <compare>
-#include <oxenc/bt.h>
 
 #include "formattable.hpp"
 #include "ip.hpp"

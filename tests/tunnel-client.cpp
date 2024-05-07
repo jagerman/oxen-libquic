@@ -9,9 +9,13 @@ using namespace oxen::quic;
 int main(int argc, char* argv[])
 {
     CLI::App cli{"libQUIC tunneled test client"};
-
     std::string log_file = "stderr", log_level = "info";
+
     add_log_opts(cli, log_file, log_level);
+
+    int num_conns{2};
+    cli.add_option("-N,--num-conns", num_conns, "Number of remote server TCP backends for which to set up listeners (1/2/3)")
+            ->check(CLI::Range(1, 3));
 
     try
     {
@@ -35,9 +39,6 @@ int main(int argc, char* argv[])
     // Remote manual server addresses
     std::vector<Address> remote_addrs{{LOCALHOST, 4444}, {LOCALHOST, 4455}, {LOCALHOST, 4466}};
 
-    // TODO: make this a CLI arg and generate all the addresses?
-    const int num_conns{3};
-
     std::atomic<int> current_conn{0};
 
     std::vector<std::promise<void>> conn_proms{};
@@ -55,23 +56,19 @@ int main(int argc, char* argv[])
     for (auto& r : remote_addrs)
         connect_addrs.push_back(RemoteAddress{TUNNEL_PUBKEY, r});
 
-    // Paths from manual client to remote manual server
-    std::vector<Path> paths{};
+    // Paths from manual client to remote manual server keyed to remote port
+    std::unordered_map<uint16_t, Path> paths;
 
-    // for (auto& r : remote_addrs)
-    //     paths.push_back(Path{manual_client_local, r});
+    for (auto& r : remote_addrs)
+        paths.emplace(r.port(), Path{localhost_blank, r});
 
     /** key: remote address to which we are connecting
         value: tunneled quic connection
     */
     std::unordered_map<Address, tunneled_connection> _tunnels;
 
-    // callback_waiter initial_tunnel_established{
-    //         [](connection_interface&) { log::info(test_cat, "Initial tunnel established"); }};
-
     auto manual_client_established = [&](connection_interface& ci) {
         auto path = ci.path();
-        paths.push_back(ci.path());  // make a copy for the list
         auto& remote = path.remote;
 
         auto _handle = TCPHandle::make_server(
@@ -94,9 +91,13 @@ int main(int argc, char* argv[])
                             log::info(test_cat, "Opening TCPConnection...");
 
                             auto tcp_conn = std::make_shared<TCPConnection>(_bev, _fd, std::move(s));
-                            auto [it, _] = tcp_quic._tcp_conns.insert_or_assign(src, std::move(tcp_conn));
 
-                            return it->second.get();
+                            if (tcp_conn->is_tunnel_initiator != true)
+                                throw std::runtime_error{"Tunnel client should have tunnel_initiator set to TRUE"};
+
+                            auto [it, _] = tcp_quic._tcp_conns[src].insert(std::move(tcp_conn));
+
+                            return it->get();
                         }
                         throw std::runtime_error{"Could not find paired TCP-QUIC for remote port:{}"_format(remote.port())};
                     }
@@ -137,13 +138,17 @@ int main(int argc, char* argv[])
     {
         std::shared_ptr<connection_interface> tunnel_ci;
 
-        auto manual_client =
-                client_net.endpoint(manual_client_local, opt::manual_routing{[&](const Path& p, bstring_view data) {
-                                        tunnel_ci->send_datagram(Packet(p, bstring{data}).bt_encode());
-                                    }});
+        auto manual_client = client_net.endpoint(localhost_blank, opt::manual_routing{[&](const Path& p, bstring_view data) {
+                                                     tunnel_ci->send_datagram(serialize_payload(data, p.remote.port()));
+                                                 }});
 
-        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
-            manual_client->manually_receive_packet(*Packet::bt_decode(std::move(data)));
+        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring buf) {
+            auto [p, data] = deserialize_payload(std::move(buf));
+
+            if (auto it = paths.find(p); it != paths.end())
+                manual_client->manually_receive_packet(Packet{it->second, data});
+            else
+                throw std::runtime_error{"Could not find path for route to remote port:{}"_format(p)};
         };
 
         auto tunnel_client_established = callback_waiter{
@@ -159,9 +164,6 @@ int main(int argc, char* argv[])
         tunnel_ci = tunnel_client->connect(tunnel_server_addr, client_tls, opt::keep_alive{10s}, tunnel_client_established);
         tunnel_client_established.wait();
 
-        // manual_client->connect(RemoteAddress{TUNNEL_PUBKEY, localhost_blank}, client_tls, initial_tunnel_established);
-        // initial_tunnel_established.wait();
-
         for (int i = 0; i < num_conns; ++i)
         {
             manual_client->connect(connect_addrs[i], client_tls, manual_client_established, opt::keep_alive{10s});
@@ -169,10 +171,10 @@ int main(int argc, char* argv[])
             conn_futures[i].wait();
         }
 
-        auto msg = "Client established {} tunneled connections:\n"_format(current_conn.load());
+        auto msg = "Client established {} tunneled connections:\n\n"_format(current_conn.load());
 
         for (auto& [addr, tun] : _tunnels)
-            msg += "TCP Listener: {} --> Remote: {}\n"_format(*tun.h->bind(), addr);
+            msg += "\tTCP Listener: {} --> Remote: {}\n"_format(*tun.h->bind(), addr);
 
         log::critical(test_cat, "{}", msg);
     }

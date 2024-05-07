@@ -210,32 +210,32 @@ namespace oxen::quic
             using on_reset_hook_t = std::function<void(Stream&, uint64_t)>;
 
           private:
-            on_reset_hook_t _on_read_reset = nullptr;
-            on_reset_hook_t _on_write_reset = nullptr;
+            on_reset_hook_t _on_stop_sending = nullptr;
+            on_reset_hook_t _on_stream_reset = nullptr;
 
           public:
             remote_stream_reset() = default;
 
-            explicit remote_stream_reset(on_reset_hook_t _on_read, on_reset_hook_t _on_write = nullptr) :
-                    _on_read_reset{std::move(_on_read)}, _on_write_reset{std::move(_on_write)}
+            explicit remote_stream_reset(on_reset_hook_t _stop_sending, on_reset_hook_t _stream_reset = nullptr) :
+                    _on_stop_sending{std::move(_stop_sending)}, _on_stream_reset{std::move(_stream_reset)}
             {
-                if (not _on_read_reset and not _on_write_reset)
-                    throw std::invalid_argument{"Must set at least one of `on_read_reset` and `on_write_reset`!"};
+                if (not _on_stop_sending and not _on_stream_reset)
+                    throw std::invalid_argument{"Must set at least one of `on_stop_sending` and `on_stream_reset`!"};
             }
 
-            explicit operator bool() const { return has_read_hook() and has_write_hook(); }
+            explicit operator bool() const { return has_stop_sending_hook() and has_stream_reset_hook(); }
 
             void clear()
             {
-                _on_read_reset = nullptr;
-                _on_write_reset = nullptr;
+                _on_stop_sending = nullptr;
+                _on_stream_reset = nullptr;
             }
 
-            bool has_read_hook() const { return _on_read_reset != nullptr; }
-            bool has_write_hook() const { return _on_write_reset != nullptr; }
+            bool has_stop_sending_hook() const { return _on_stop_sending != nullptr; }
+            bool has_stream_reset_hook() const { return _on_stream_reset != nullptr; }
 
-            void read_reset(Stream& s, uint64_t ec) { return _on_read_reset(s, ec); }
-            void write_reset(Stream& s, uint64_t ec) { return _on_write_reset(s, ec); }
+            void on_remote_stop_sending(Stream& s, uint64_t ec) { return _on_stop_sending(s, ec); }
+            void on_remote_stream_reset(Stream& s, uint64_t ec) { return _on_stream_reset(s, ec); }
         };
 
     }  //  namespace opt

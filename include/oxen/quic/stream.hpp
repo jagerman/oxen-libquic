@@ -107,6 +107,10 @@ namespace oxen::quic
 
         void stop_writing();
 
+        void stop_sending(uint64_t code = STREAM_REMOTE_READ_SHUTDOWN);
+
+        void reset_stream(uint64_t code = STREAM_REMOTE_WRITE_SHUTDOWN);
+
         bool is_reading() const;
 
         bool is_writing() const;
@@ -169,7 +173,7 @@ namespace oxen::quic
         bool _paused{false};
         int64_t _stream_id;
 
-        size_t _paused_offset{0};
+        std::atomic<size_t> _paused_offset{0};
 
         bool _is_watermarked{false};
 
@@ -188,6 +192,7 @@ namespace oxen::quic
 
         bool _is_reading{true};
         bool _is_writing{true};
+        uint64_t _deferred_ec{0};
 
         void wrote(size_t bytes) override;
 

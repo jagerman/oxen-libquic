@@ -180,26 +180,25 @@ namespace oxen::quic::test
 
         auto client_stream = conn_interface->open_stream<Stream>([&](Stream&, bstring_view) { p.set_value(true); });
 
-        client_stream->set_remote_reset_hooks(opt::remote_stream_reset{
-                [](Stream& s, uint64_t ec) {
-                    REQUIRE(ec == STREAM_REMOTE_READ_SHUTDOWN);
-
-                    // Cannot set or clear callbacks while executing the callbacks!
-                    REQUIRE_THROWS(s.set_remote_reset_hooks(opt::remote_stream_reset{}));
-                    REQUIRE_THROWS(s.clear_remote_reset_hooks());
-
-                    s.stop_writing();
-                },
-                [](Stream& s, uint64_t ec) {
-                    REQUIRE(ec == STREAM_REMOTE_WRITE_SHUTDOWN);
-                    s.stop_reading();
-                }});
-
-        REQUIRE(client_stream->is_reading());
-        REQUIRE(client_stream->is_writing());
-
         SECTION("Stop Writing")
         {
+            client_stream->set_remote_reset_hooks(opt::remote_stream_reset{
+                    [](Stream& s, uint64_t ec) {
+                        REQUIRE(ec == STREAM_REMOTE_READ_SHUTDOWN);
+
+                        // Cannot set or clear callbacks while executing the callbacks!
+                        REQUIRE_THROWS(s.set_remote_reset_hooks(opt::remote_stream_reset{}));
+                        REQUIRE_THROWS(s.clear_remote_reset_hooks());
+                        s.stop_reading();
+                    },
+                    [](Stream& s, uint64_t ec) {
+                        REQUIRE(ec == STREAM_REMOTE_WRITE_SHUTDOWN);
+                        s.stop_writing();
+                    }});
+
+            REQUIRE(client_stream->is_reading());
+            REQUIRE(client_stream->is_writing());
+
             server_stream->stop_writing();
             REQUIRE_FALSE(server_stream->is_writing());
 
@@ -216,6 +215,23 @@ namespace oxen::quic::test
 
         SECTION("Stop Reading")
         {
+            server_stream->set_remote_reset_hooks(opt::remote_stream_reset{
+                    [](Stream& s, uint64_t ec) {
+                        REQUIRE(ec == STREAM_REMOTE_READ_SHUTDOWN);
+
+                        // Cannot set or clear callbacks while executing the callbacks!
+                        REQUIRE_THROWS(s.set_remote_reset_hooks(opt::remote_stream_reset{}));
+                        REQUIRE_THROWS(s.clear_remote_reset_hooks());
+                        s.stop_reading();
+                    },
+                    [](Stream& s, uint64_t ec) {
+                        REQUIRE(ec == STREAM_REMOTE_WRITE_SHUTDOWN);
+                        s.stop_writing();
+                    }});
+
+            REQUIRE(server_stream->is_reading());
+            REQUIRE(server_stream->is_writing());
+
             client_stream->stop_reading();
             REQUIRE_FALSE(client_stream->is_reading());
 
