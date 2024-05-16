@@ -21,15 +21,12 @@ extern "C"
 #include <event2/listener.h>
 }
 
-#include <future>
-#include <thread>
-
 #include "utils.hpp"
 
 namespace oxen::quic
 {
     struct TCPConnection;
-    class TCPHandle;
+    class TCPListener;
 
     inline const auto LOCALHOST = "127.0.0.1"s;
     inline constexpr auto TUNNEL_SEED = "0000000000000000000000000000000000000000000000000000000000000000"_hex;
@@ -41,40 +38,46 @@ namespace oxen::quic
     inline constexpr size_t TCP_HIGHWATER{2_Mi};
     inline constexpr size_t TCP_LOWWATER{TCP_HIGHWATER / 2};
 
-    namespace CODE
-    {
-        inline constexpr uint64_t STOP_READING{STREAM_REMOTE_READ_SHUTDOWN};
-        inline constexpr uint64_t STOP_WRITING{STREAM_REMOTE_WRITE_SHUTDOWN};
-        inline constexpr uint64_t STOP_NOW{STOP_WRITING + 1};
-    }  // namespace CODE
-
     inline std::vector<std::byte> serialize_payload(bstring_view data, uint16_t port = 0)
     {
         std::vector<std::byte> ret(data.size() + sizeof(port));
-        oxenc::write_host_as_big(port, ret.data());
-        std::memcpy(&ret[2], data.data(), data.size());
+        std::memcpy(ret.data(), data.data(), data.size());
+        oxenc::write_host_as_big(port, ret.data() + data.size());
         return ret;
     }
 
-    inline std::tuple<uint16_t, bstring> deserialize_payload(bstring data)
+    inline uint16_t deserialize_payload(bstring& data)
     {
-        uint16_t p = oxenc::load_big_to_host<uint16_t>(data.data());
+        if (data.size() < 2)
+            throw std::invalid_argument{"Not a valid payload"};
+        uint16_t p = oxenc::load_big_to_host<uint16_t>(data.data() + data.size() - 2);
+        data.resize(data.size() - 2);
+        return p;
+    }
 
-        return {p, data.substr(2)};
+    // Properly updates an Address from a fd by calling `get_name(fd, ...)` on it; typically
+    // get_name is either getsockname or getpeername.
+    inline void update_addr(Address& a, evutil_socket_t fd, decltype(&getsockname) get_name)
+    {
+        socklen_t len = sizeof(sockaddr);
+        if (get_name(fd, a, &len) < 0)
+            throw std::runtime_error{"Failed to retrieve socket address: {}"_format(strerror(errno))};
+        a.update_socklen(len);
     }
 
     struct TCPQUIC
     {
-        std::shared_ptr<connection_interface> _ci;
+        std::shared_ptr<connection_interface> ci;
 
         // keyed against backend tcp address
-        std::unordered_map<Address, std::unordered_set<std::shared_ptr<TCPConnection>>> _tcp_conns;
+        std::unordered_map<Address, std::unordered_set<std::shared_ptr<TCPConnection>>> tcp_conns;
     };
 
     // held in a map keyed against the remote address
     struct tunneled_connection
     {
-        std::shared_ptr<TCPHandle> h;
+        // Listener (optional)
+        std::shared_ptr<TCPListener> listener;
 
         // keyed against the remote port (for tunnel_client) or local port (for tunnel_server)
         std::unordered_map<uint16_t, TCPQUIC> conns;
@@ -86,92 +89,201 @@ namespace oxen::quic
             evconnlistener_free(e);
     };
 
-    void initiator_stream_reset_cb(struct bufferevent* bev, Stream& s, uint64_t ec, void* user_arg);
-    void receiver_stream_reset_cb(struct bufferevent* bev, Stream& s, uint64_t ec, void* user_arg);
-
-    void _stop_now_cb(struct bufferevent* bev, Stream& s, void* user_arg, bool is_initiator);
-
-    bool _flush_now_cb(struct bufferevent* bev, Stream& s, void* user_arg, bool is_initiator);
-
-    void tcp_drained_write_free_cb(struct bufferevent* bev, void* user_arg);
-
-    void client_drained_write_close_cb(struct bufferevent* bev, void* user_arg);
-    void server_drained_write_close_cb(struct bufferevent* bev, void* user_arg);
-
-    void client_drained_write_cb(struct bufferevent* bev, void* user_arg);
-    void server_drained_write_cb(struct bufferevent* bev, void* user_arg);
-
-    void tcp_read_cb(struct bufferevent* bev, void* user_arg);
-
-    void _read_cb(struct bufferevent* bev, void* user_arg, bool loud = 0);
-
-    // TCP event logic for initating side of the tunnel (the "client")
-    void client_event_cb(struct bufferevent* bev, short what, void* user_arg);
-
-    // TCP event logic for receiving side of the tunnel (the "server")
-    void server_event_cb(struct bufferevent* bev, short what, void* user_arg);
-
-    void tcp_listen_cb(
-            struct evconnlistener* listener, evutil_socket_t fd, struct sockaddr* src, int socklen, void* user_arg);
-
-    void tcp_err_cb(struct evconnlistener* listener, void* user_arg);
+    // Helper class that helps us manage lifetime of an evbuffer that may have multiple chunks in
+    // it; we directly reference the data contained within, and then drain the evbuffer on
+    // destruction (so that we can use this as the keep-alive for a stream send).  Additionally,
+    // when we drain the final chunk, we free the evbuffer itself.
+    //
+    // The intention here is to allow you to get an evbuffer and supply its sub-buffers as stream
+    // data, using this deleter to clean up the underlying evbuffer data apprpriately as the data
+    // gets acked on the stream.
+    //
+    // Note that this requires that the buffer data is processed and destructed in order (which will
+    // be the case for data sent into a single stream).
+    struct partial_ev_buffer
+    {
+        evbuffer* buf;
+        const size_t len;
+        partial_ev_buffer(evbuffer* buf, size_t len) : buf{buf}, len{len} {}
+        ~partial_ev_buffer()
+        {
+            evbuffer_drain(buf, len);
+            if (evbuffer_get_contiguous_space(buf) == 0)
+                evbuffer_free(buf);
+        }
+    };
 
     struct TCPConnection
     {
-        TCPConnection(struct bufferevent* _bev, evutil_socket_t _fd, std::shared_ptr<Stream> _s, bool is_initiator = true) :
-                bev{_bev}, fd{_fd}, stream{std::move(_s)}, is_tunnel_initiator{is_initiator}
+      public:
+        // Constructor for creating a new, outgoing TCP connection
+        TCPConnection(std::shared_ptr<Loop> _ev, std::shared_ptr<Stream> _s, Address _addr) :
+                stream{std::move(_s)}, ev{std::move(_ev)}, raddr{std::move(_addr)}
         {
-            stream->set_stream_data_cb([this](oxen::quic::Stream& s, bstring_view data) {
-                auto sz = data.size();
+            bev = bufferevent_socket_new(ev->loop().get(), -1, BEV_OPT_CLOSE_ON_FREE);
+            if (bufferevent_socket_connect(bev, raddr, raddr.socklen()))
+                throw std::runtime_error{"Failed to initialize TCP connection"};
 
-                if (bev)
-                {
-                    auto rv = bufferevent_write(bev, data.data(), data.size());
-                    log::trace(
-                            test_cat,
-                            "Stream (id: {}) {} {}B to TCP output buffer!",
-                            rv < 0 ? "failed to write" : "successfully wrote",
-                            s.stream_id(),
-                            sz);
+            init();
 
-                    // we get the output buffer (it sounds backwards but it isn't)
-                    if (evbuffer_get_length(bufferevent_get_output(bev)) >= TCP_HIGHWATER and not s.is_paused())
-                    {
-                        log::info(
-                                test_cat,
-                                "TCP output buffer over high-water threshold ({}); pausing stream...",
-                                TCP_HIGHWATER);
-                        s.pause();
+            log::info(
+                    test_cat,
+                    "TCP tunneled connection initialized to {} (local addr {}) for stream {}",
+                    raddr,
+                    laddr,
+                    stream->stream_id());
+        }
 
-                        if (is_tunnel_initiator)
-                            bufferevent_setcb(bev, tcp_read_cb, client_drained_write_cb, client_event_cb, this);
-                        else
-                            bufferevent_setcb(bev, tcp_read_cb, server_drained_write_cb, server_event_cb, this);
+        // Constructor for taking over an existing open TCP connection, typically just after
+        // accepting the connection.
+        TCPConnection(std::shared_ptr<Loop> _ev, std::shared_ptr<Stream> _s, evutil_socket_t fd) :
+                stream{std::move(_s)}, ev{std::move(_ev)}
+        {
+            bev = bufferevent_socket_new(ev->loop().get(), fd, BEV_OPT_CLOSE_ON_FREE);
 
-                        bufferevent_setwatermark(bev, EV_WRITE, TCP_LOWWATER, TCP_HIGHWATER);
-                    }
-                }
-                else
-                    throw std::runtime_error{"Stream (id: {}) has no socket to write {}B to!"_format(s.stream_id(), sz)};
-            });
+            update_addr(raddr, fd, getpeername);
+
+            init();
+
+            log::info(
+                    test_cat,
+                    "TCP tunneled connection accepted from {} (local addr {}) for stream {}",
+                    raddr,
+                    laddr,
+                    stream->stream_id());
+        }
+
+        TCPConnection() = delete;
+
+        /// Non-copyable and non-moveable
+        TCPConnection(const TCPConnection& s) = delete;
+        TCPConnection& operator=(const TCPConnection& s) = delete;
+        TCPConnection(TCPConnection&& s) = delete;
+        TCPConnection& operator=(TCPConnection&& s) = delete;
+
+        ~TCPConnection()
+        {
+            if (bev)
+            {
+                log::debug(test_cat, "TCPConnection destructor fired with a still-open TCP socket; closing it");
+                ev->call([this] {
+                    bufferevent_free(bev);
+                    bev = nullptr;
+                });
+            }
+        }
+
+        const std::shared_ptr<Stream> stream;
+        const Address& remote_addr() const { return raddr; }
+        const Address& local_addr() const { return laddr; }
+        bool expect_initial_magic = true;
+
+      private:
+        std::shared_ptr<Loop> ev;
+        struct bufferevent* bev;
+        Address laddr, raddr;
+
+        void init()
+        {
+            try
+            {
+                auto fd = bufferevent_getfd(bev);
+                update_addr(laddr, fd, getsockname);
+                set_tcp_callbacks();
+                initialize_stream_callbacks();
+                bufferevent_enable(bev, EV_READ | EV_WRITE);
+            }
+            catch (...)
+            {
+                // If something throws, intercept it and free the bufferevent (because we're still
+                // in the constructor, and so the destructor won't fire to free bev when we throw
+                // from here).
+                bufferevent_free(bev);
+                bev = nullptr;
+                throw;
+            }
+        }
+
+        void handle_stream_data(oxen::quic::Stream& s, bstring_view data)
+        {
+            if (expect_initial_magic)
+            {
+                expect_initial_magic = false;
+                assert(!data.empty());
+                if (data[0] != std::byte{0x42})
+                    s.close(42);
+                data.remove_prefix(1);
+                if (data.empty())
+                    return;
+            }
+
+            auto sz = data.size();
+
+            if (!bev)
+                throw std::runtime_error{"Stream (id: {}) has no socket to write {}B to!"_format(s.stream_id(), sz)};
+
+            auto rv = bufferevent_write(bev, data.data(), data.size());
+            log::trace(
+                    test_cat,
+                    "Stream (id: {}) {} {}B to TCP output buffer!",
+                    rv < 0 ? "failed to write" : "successfully wrote",
+                    s.stream_id(),
+                    sz);
+
+            // If we've received data on the stream faster than the tcp socket can accept
+            // the data (and thus have a large output buffer on the socket) then we need to
+            // pause the stream so that the far side will stop sending.  (This isn't
+            // immediate: there is still several MB more that may be coming our way in the
+            // current allowed-data window before the far side can't send any more).
+            if (evbuffer_get_length(bufferevent_get_output(bev)) >= TCP_HIGHWATER and not s.is_paused())
+            {
+                log::info(test_cat, "TCP output buffer over high-water threshold ({}); pausing stream...", TCP_HIGHWATER);
+
+                // Pause the stream and set the drained callback and low watermark so that
+                // as soon as we drop below TCP_LOWWATER, the drained callback fires to
+                // resume the stream.
+                s.pause();
+                set_tcp_callbacks(tcp_drained_cb);
+                bufferevent_setwatermark(bev, EV_WRITE, TCP_LOWWATER, 0);
+            }
+        }
+
+        void initialize_stream_callbacks()
+        {
+            stream->set_stream_data_cb([this](oxen::quic::Stream& s, bstring_view data) { handle_stream_data(s, data); });
 
             stream->set_stream_close_cb([this](Stream&, uint64_t) {
                 log::critical(
                         test_cat,
                         "Stream closed cb fired, {}...",
                         bev ? "freeing bufferevent" : "bufferevent already freed");
-                if (bev)
-                    bufferevent_free(bev);
+                assert(bev);
+                bufferevent_free(bev);
+                bev = nullptr;
             });
 
-            stream->set_remote_reset_hooks(
-                    opt::remote_stream_reset{nullptr, [this](Stream& s, uint64_t ec) {
-                                                 if (is_tunnel_initiator)
-                                                     return initiator_stream_reset_cb(bev, s, ec, this);
-                                                 else
-                                                     return receiver_stream_reset_cb(bev, s, ec, this);
-                                             }});
+            auto on_stream_reset = [this](Stream&, uint64_t) {
+                if (!bev)
+                    return;
 
+                // The other side has indicate that it is no longer sending us data, so we
+                // need to let the tcp buffer finish writing anything currently in its
+                // buffer, and then shut it down when the buffer is emptied.  (Or if there's
+                // nothing in the buffer, shut it down immediately).
+                if (evbuffer_get_length(bufferevent_get_output(bev)) > 0)
+                {
+                    set_tcp_callbacks(tcp_write_done_cb);
+                    bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
+                }
+                else
+                    tcp_write_done_cb();
+            };
+
+            stream->set_remote_reset_hooks(opt::remote_stream_reset{nullptr, std::move(on_stream_reset)});
+
+            // If we get too much (HIGH_WATERMARK) unacked (or unsent) data sitting on the stream
+            // then we pause reading from the tcp socket until it has been acked down to
+            // LOW_WATERMARK so that we limit the max size of data sitting in our stream buffer.
             stream->set_watermark(
                     LOW_WATERMARK,
                     HIGH_WATERMARK,
@@ -185,674 +297,222 @@ namespace oxen::quic
                     }});
         }
 
-        TCPConnection() = delete;
+        // Sets the read and event callbacks to their normal values, and sets the write callback
+        // (which is the only one we ever change) to the given callback.
+        void set_tcp_callbacks(void (*write_cb)(bufferevent*, void*) = nullptr)
+        {
+            bufferevent_setcb(bev, tcp_read_cb, write_cb, tcp_event_cb, this);
+        }
 
-        /// Non-copyable and non-moveable
-        TCPConnection(const TCPConnection& s) = delete;
-        TCPConnection& operator=(const TCPConnection& s) = delete;
-        TCPConnection(TCPConnection&& s) = delete;
-        TCPConnection& operator=(TCPConnection&& s) = delete;
+        static void tcp_read_cb(bufferevent*, void* self) { static_cast<TCPConnection*>(self)->tcp_read_cb(); }
+        static void tcp_event_cb(bufferevent*, short what, void* self)
+        {
+            static_cast<TCPConnection*>(self)->tcp_event_cb(what);
+        }
+        static void tcp_drained_cb(bufferevent*, void* self) { static_cast<TCPConnection*>(self)->tcp_drained_cb(); }
+        static void tcp_write_done_cb(bufferevent*, void* self) { static_cast<TCPConnection*>(self)->tcp_write_done_cb(); }
 
-        ~TCPConnection() = default;
+        void tcp_read_cb()
+        {
+            auto* buf = evbuffer_new();
+            if (bufferevent_read_buffer(bev, buf) == 0)
+            {
+                assert(evbuffer_get_length(buf) > 0);
+                log::trace(
+                        test_cat, "TCP socket received {}B for stream ID {}", evbuffer_get_length(buf), stream->stream_id());
 
-        struct bufferevent* bev;
-        evutil_socket_t fd;
+                std::vector<evbuffer_iovec> iovs;
+                iovs.resize(evbuffer_peek(buf, -1, nullptr, nullptr, 0));
+                evbuffer_peek(buf, -1, nullptr, iovs.data(), iovs.size());
+                for (const auto& iov : iovs)
+                {
+                    stream->send(
+                            bstring_view{static_cast<std::byte*>(iov.iov_base), iov.iov_len},
+                            std::make_shared<partial_ev_buffer>(buf, iov.iov_len));
+                }
+            }
+            else
+            {
+                log::error(test_cat, "TCP socket has no pending data in input buffer; why did we get a read callback?");
+            }
+        }
 
-        std::shared_ptr<Stream> stream;
+        void tcp_event_cb(short what)
+        {
+            if (what & BEV_EVENT_CONNECTED)
+            {
+                log::info(test_cat, "TCP connection established for stream {}", stream->stream_id());
+                return;
+            }
 
-        bool is_tunnel_initiator{true};
+            if (what & BEV_EVENT_ERROR)
+            {
+                int errcode = EVUTIL_SOCKET_ERROR();
+                log::error(
+                        test_cat,
+                        "TCP connection encountered uncoverable error ({}); closing stream {}",
+                        evutil_socket_error_to_string(errcode),
+                        stream->stream_id());
+                stream->close(errcode);
+
+                bufferevent_free(bev);
+                bev = nullptr;
+
+                return;
+            }
+
+            if (what & BEV_EVENT_EOF)
+            {
+                bool write_eof = what & BEV_EVENT_WRITING;
+                bool read_eof = what & BEV_EVENT_READING;
+                if (write_eof && read_eof)
+                {
+                    log::info(test_cat, "Backend TCP stopped reading and writing; closing stream", stream->stream_id());
+                    stream->stop_sending();
+                }
+                else if (write_eof)
+                {
+                    log::info(
+                            test_cat,
+                            "Backend TCP stopped reading! Telling stream {} remote to stop sending",
+                            stream->stream_id());
+                    stream->stop_sending();
+                }
+                else
+                {
+                    assert(what & BEV_EVENT_READING);
+                    log::info(
+                            test_cat,
+                            "Backend TCP stopped reading! Telling stream {} remote to stop sending",
+                            stream->stream_id());
+                    stream->reset_stream();
+                }
+            }
+        }
+
+        // This callback is set up when we have an overfilled tcp write buffer and have paused
+        // the stream to stop the flow of incoming data; the callback itself is invoked once we
+        // should reenable the stream because we have cleared enough of the output buffer.
+        void tcp_drained_cb()
+        {
+            log::info(
+                    test_cat,
+                    "TCP output buffer is below low-water threshold ({}); resuming stream {}",
+                    TCP_LOWWATER,
+                    stream->stream_id());
+
+            set_tcp_callbacks();
+            bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
+
+            stream->resume();
+        }
+
+        // Called when the other side has indicated it is no longer writing *and* we have no
+        // more output buffer left, so we should shutdown writing on the tcp socket.
+        void tcp_write_done_cb()
+        {
+            assert(evbuffer_get_length(bufferevent_get_output(bev)) == 0);
+
+            log::info(
+                    test_cat,
+                    "TCP output buffer drained for read-stopped stream {}; shutting down tcp socket write",
+                    stream->stream_id());
+
+            shutdown(bufferevent_getfd(bev), SHUT_WR);
+
+            set_tcp_callbacks();
+        }
     };
 
-    using tcpconn_hook = std::function<TCPConnection*(struct bufferevent*, evutil_socket_t, oxen::quic::Address src)>;
+    // Callback that conn_accepted gets called with: we *pass* this callback to conn_accepted, which
+    // calls it with a connection on which we can open a new stream to associate with the TCP
+    // connection, then put wire everything up into a TCPConnection and return that.  (Or, if it
+    // doesn't get called, we abort the connection after the callback returns).
+    using make_tcp_stream = std::function<std::shared_ptr<TCPConnection>(connection_interface&)>;
+    using conn_accepted_callback = std::function<void(make_tcp_stream)>;
 
-    class TCPHandle
+    class TCPListener
     {
-        using socket_t =
-#ifndef _WIN32
-                int
-#else
-                SOCKET
-#endif
-                ;
-
         std::shared_ptr<Loop> _ev;
         std::shared_ptr<::evconnlistener> _tcp_listener;
 
-        // The OutboundSession will set up an evconnlistener and set the listening socket address inside ::_bound
-        std::optional<Address> _bound = std::nullopt;
+        Address _addr;
 
-        // The InboundSession will set this address to the lokinet-primary-ip to connect to
-        std::optional<Address> _connect = std::nullopt;
-
-        socket_t _sock;
-
-        explicit TCPHandle(const std::shared_ptr<Loop>& ev, tcpconn_hook cb, uint16_t p) :
-                _ev{ev}, _conn_maker{std::move(cb)}, tunnel_initiator{true}
-        {
-            assert(_ev);
-            assert(tunnel_initiator);
-
-            if (!_conn_maker)
-                throw std::logic_error{"TCPSocket construction requires a non-empty receive callback"};
-
-            _init_server(p);
-        }
-
-        explicit TCPHandle(const std::shared_ptr<Loop>& ev) : _ev{ev}, tunnel_initiator{false} { assert(_ev); }
+        conn_accepted_callback _conn_accepted;
 
       public:
-        TCPHandle() = delete;
-
-        tcpconn_hook _conn_maker;
-
-        bool tunnel_initiator{true};
-
-        // The OutboundSession object will hold a server listening on some localhost:port, returning that port to the
-        // application for it to make a TCP connection
-        static std::shared_ptr<TCPHandle> make_server(const std::shared_ptr<Loop>& ev, tcpconn_hook cb, uint16_t port = 0)
+        TCPListener(const std::shared_ptr<Loop>& ev, conn_accepted_callback accept_cb, uint16_t p = 0) :
+                _ev{ev}, _addr{LOCALHOST, p}, _conn_accepted{std::move(accept_cb)}
         {
-            std::shared_ptr<TCPHandle> h{new TCPHandle(ev, std::move(cb), port)};
-            return h;
+            if (!_ev || !_conn_accepted)
+                throw std::invalid_argument{"TCPSocket construction requires non-empty ev/stream_cb/accept_cb"};
+
+            init();
         }
 
-        // The InboundSession object will hold a client that connects to some application configured
-        // lokinet-primary-ip:port every time the OutboundSession opens a new stream over the tunneled connection
-        static std::shared_ptr<TCPHandle> make_client(const std::shared_ptr<Loop>& ev)
-        {
-            std::shared_ptr<TCPHandle> h{new TCPHandle{ev}};
-            return h;
-        }
-
-        ~TCPHandle()
-        {
-            _tcp_listener.reset();
-            log::info(test_cat, "TCPHandle shut down!");
-        }
-
-        uint16_t port() const { return _bound.has_value() ? _bound->port() : 0; }
-
-        // checks _bound has been set by ::make_server(...)
-        bool is_bound() const { return _bound.has_value(); }
-
-        // checks _connect has been set by ::connect_to_backend(...)
-        bool is_connected() const { return _connect.has_value(); }
-
-        // returns the bind address of the TCP listener
-        std::optional<Address> bind() const { return _bound; }
-
-        // returns the socket address of the TCP connection
-        std::optional<Address> connect() const { return _connect; }
-
-        std::shared_ptr<TCPConnection> connect_to_backend(std::shared_ptr<Stream> stream, Address addr)
-        {
-            if (addr.port() == 0)
-                throw std::runtime_error{"TCP backend must have valid port on localhost!"};
-
-            log::info(test_cat, "Attempting TCP connection to backend at: {}", addr);
-            sockaddr_in _addr = addr.in4();
-
-            struct bufferevent* _bev = bufferevent_socket_new(
-                    _ev->loop().get(),
-                    -1,
-                    BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS | BEV_OPT_THREADSAFE /* | BEV_OPT_UNLOCK_CALLBACKS */);
-
-            if (tunnel_initiator != false)
-                throw std::runtime_error{"Tunnel server should have tunnel_initiator set to FALSE"};
-
-            auto tcp_conn = std::make_shared<TCPConnection>(_bev, -1, std::move(stream), tunnel_initiator);
-
-            if (bufferevent_socket_connect(_bev, (struct sockaddr*)&_addr, sizeof(_addr)) < 0)
-            {
-                log::warning(test_cat, "Failed to make bufferevent-based TCP connection!");
-                return nullptr;
-            }
-
-            bufferevent_setcb(_bev, tcp_read_cb, nullptr, server_event_cb, tcp_conn.get());
-            bufferevent_enable(_bev, EV_READ | EV_WRITE);
-
-            // fd is only set after a call to bufferevent_socket_connect
-            tcp_conn->fd = bufferevent_getfd(_bev);
-            _sock = tcp_conn->fd;
-
-            log::debug(test_cat, "TCP bufferevent has fd: {}", tcp_conn->fd);
-
-            Address temp{};
-            if (getsockname(tcp_conn->fd, temp, temp.socklen_ptr()) < 0)
-                throw std::runtime_error{
-                        "Failed to bind bufferevent: {}"_format(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()))};
-
-            _connect = temp;
-
-            log::info(test_cat, "TCP bufferevent sock on addr: {}", *_connect);
-
-            return tcp_conn;
-        }
+        // returns the bound address of the TCP listener
+        const Address& local_addr() const { return _addr; }
 
       private:
-        void _init_client() {}
-
-        void _init_server(uint16_t port)
+        void init()
         {
-            sockaddr_in _tcp{};
-            _tcp.sin_family = AF_INET;
-            _tcp.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-            _tcp.sin_port = htons(port);
-
             _tcp_listener = _ev->shared_ptr<struct evconnlistener>(
                     evconnlistener_new_bind(
-                            _ev->loop().get(),
-                            tcp_listen_cb,
-                            this,
-                            LEV_OPT_CLOSE_ON_FREE | LEV_OPT_THREADSAFE | LEV_OPT_REUSEABLE,
-                            -1,
-                            reinterpret_cast<sockaddr*>(&_tcp),
-                            sizeof(sockaddr)),
+                            _ev->loop().get(), tcp_accept_cb, this, LEV_OPT_CLOSE_ON_FREE, -1, _addr, _addr.socklen()),
                     evconnlistener_deleter);
 
             if (not _tcp_listener)
                 throw std::runtime_error{
                         "TCP listener construction failed: {}"_format(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()))};
 
-            _sock = evconnlistener_get_fd(_tcp_listener.get());
-
-            log::info(test_cat, "TCP server has fd: {}", _sock);
-
-            Address temp{};
-            if (getsockname(_sock, temp, temp.socklen_ptr()) < 0)
-                throw std::runtime_error{
-                        "Failed to bind listener: {}"_format(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()))};
-
-            _bound = temp;
+            update_addr(_addr, evconnlistener_get_fd(_tcp_listener.get()), getsockname);
 
             evconnlistener_set_error_cb(_tcp_listener.get(), tcp_err_cb);
+        }
 
-            log::info(test_cat, "TCPHandle set up listener on: {}", *_bound);
+        static void tcp_accept_cb(evconnlistener*, evutil_socket_t fd, sockaddr*, int, void* self)
+        {
+            static_cast<TCPListener*>(self)->tcp_accept_cb(fd);
+        }
+        void tcp_accept_cb(evutil_socket_t fd)
+        {
+            bool called = false;
+            auto tcp_construct = [this, &fd, &called](connection_interface& conn) {
+                auto s = conn.open_stream();
+                // We were connected to, so need to make sure the remote establishes a connection,
+                // which it does on stream creation.  However, QUIC streams are lazy, so there won't
+                // be a stream opened event until some actual data comes down the stream.  Thus we
+                // always prime it here by sending a single 0x42 byte down it to make sure it opens
+                // even if there isn't any immediate data to send.
+                auto c = std::make_shared<TCPConnection>(_ev, std::move(s), fd);
+                c->expect_initial_magic = false;
+                c->stream->send("\x42"sv);
+
+                called = true;
+                return c;
+            };
+            try
+            {
+                _conn_accepted(tcp_construct);
+            }
+            catch (const std::exception& e)
+            {
+                log::warning(test_cat, "TCP accept callback raised an exception: {}", e.what());
+            }
+            if (!called)
+            {
+                log::error(test_cat, "TCP accept callback did not invoke the construction callback; aborting connection");
+                evutil_closesocket(fd);
+            }
+        }
+
+        static void tcp_err_cb(struct evconnlistener*, void*)
+        {
+            int ec = EVUTIL_SOCKET_ERROR();
+            log::critical(test_cat, "TCP LISTENER RECEIVED ERROR CODE {}: {}", ec, evutil_socket_error_to_string(ec));
+
+            // DISCUSS: close everything here?
         }
     };
 
-    inline void initiator_stream_reset_cb(struct bufferevent* bev, Stream& s, uint64_t ec, void* user_arg)
-    {
-        auto id = s.stream_id();
-        auto msg = "[TUNNEL INITIATOR] Stream (ID:{}) received STREAM_RESET (ec:{}) from remote;"_format(id, ec);
-
-        if (ec == CODE::STOP_NOW)
-        {
-            return _stop_now_cb(bev, s, user_arg, true);
-        }
-
-        // we need to wait to stop reading until the output buffer has drained
-        if (bev)
-        {
-            if (_flush_now_cb(bev, s, user_arg, false))
-                return;
-        }
-
-        log::critical(test_cat, "{} socket buffers empty; shutting down local stream write", msg);
-        s.stop_writing();
-    }
-
-    inline void receiver_stream_reset_cb(struct bufferevent* bev, Stream& s, uint64_t ec, void* user_arg)
-    {
-        auto id = s.stream_id();
-        auto msg = "[TUNNEL RECEIVER] Stream (ID:{}) received STREAM_RESET (ec:{}) from remote;"_format(id, ec);
-
-        if (ec == CODE::STOP_NOW)
-        {
-            return _stop_now_cb(bev, s, user_arg, false);
-        }
-
-        if (bev)
-        {
-            if (_flush_now_cb(bev, s, user_arg, false))
-                return;
-        }
-
-        msg += "socket buffers empty; ";
-
-        switch (ec)
-        {
-            case CODE::STOP_READING:
-                if (s.is_reading())
-                {
-                    log::info(test_cat, "{} shutting down stream read!", msg);
-                    s.stop_reading();
-                }
-                else
-                {
-                    log::info(test_cat, "{} stream read shut down; closing stream!", msg);
-                    s.close();
-                    bufferevent_free(bev);
-                }
-            case CODE::STOP_WRITING:
-                log::critical(test_cat, "{} shutting down socket write and clearing any pending input buffer data...", msg);
-
-                auto fd = bufferevent_getfd(bev);
-                shutdown(fd, SHUT_WR);
-
-                _read_cb(bev, user_arg, true);
-        }
-    }
-
-    inline bool _flush_now_cb(struct bufferevent* bev, Stream& s, void* user_arg, bool is_initiator)
-    {
-        auto id = s.stream_id();
-        auto whoami = is_initiator ? "[TUNNEL INITIATOR]" : "[TUNNEL RECEIVER]";
-
-        // we need to wait to stop reading until the output buffer has drained
-        if (auto outlen = evbuffer_get_length(bufferevent_get_output(bev)); outlen > 0)
-        {
-            // if we are not the tunnel initiator
-            log::critical(
-                    test_cat,
-                    "{} deferring stream (id: {}) write shutdown until socket output buffer (size: {}B) drains!",
-                    whoami,
-                    id,
-                    outlen);
-
-            // set the close-on-drain cb on the bufferevent and let the stream close usual
-            if (is_initiator)
-                bufferevent_setcb(bev, tcp_read_cb, tcp_drained_write_free_cb, client_event_cb, user_arg);
-            else
-                bufferevent_setcb(bev, nullptr, server_drained_write_close_cb, server_event_cb, user_arg);
-
-            bufferevent_setwatermark(bev, EV_WRITE, 0, TCP_HIGHWATER);
-            return true;
-        }
-
-        // we need to send out all of this data
-        if (auto inlen = evbuffer_get_length(bufferevent_get_input(bev)); inlen > 0)
-        {
-            std::array<uint8_t, 4096> buf{};
-
-            // Load data from input buffer to local buffer
-            [[maybe_unused]] auto nwrite = bufferevent_read(bev, buf.data(), buf.size());
-
-            assert(nwrite == inlen);
-
-            log::critical(
-                    test_cat,
-                    "{} deferring stream (id: {}) close until remaining data (size: {}B) in socket input buffer is flushed!",
-                    id,
-                    whoami,
-                    inlen);
-            s.send(ustring{buf.data(), nwrite});
-            return true;
-        }
-
-        return false;
-    }
-
-    inline void _stop_now_cb(struct bufferevent* bev, Stream& s, void* user_arg, bool is_initiator)
-    {
-        auto id = s.stream_id();
-        auto whoami = is_initiator ? "[TUNNEL INITIATOR]" : "[TUNNEL RECEIVER]";
-
-        log::critical(test_cat, "{} REMOTE TCP CONNECTION DIED -- TERMINATING STREAM (ID: {}) IMMEDIATELY", whoami, id);
-
-        if (bev)
-        {
-            if (auto outlen = evbuffer_get_length(bufferevent_get_output(bev)); outlen > 0)
-            {
-                log::critical(test_cat, "{} clearing remaining output buffer (size: {}B)...", whoami, outlen);
-                bufferevent_disable(bev, EV_READ);
-                if (is_initiator)
-                    bufferevent_setcb(bev, nullptr, tcp_drained_write_free_cb, client_event_cb, user_arg);
-                else
-                    bufferevent_setcb(bev, nullptr, server_drained_write_close_cb, server_event_cb, user_arg);
-                bufferevent_setwatermark(bev, EV_WRITE, 0, TCP_HIGHWATER);
-                // set bev in TCPConnection to nullptr so the stream close cb doesn't free it
-                bev = nullptr;
-                return;
-            }
-        }
-
-        if (s.available())
-        {
-            log::info(test_cat, "{} Closing stream (id: {}) and freeing TCP socket...", whoami, id);
-            s.close(CODE::STOP_NOW);
-        }
-        else
-        {
-            log::info(test_cat, "{} Stream (id: {}) is already shutting down! Freeing TCP socket...", whoami, id);
-        }
-
-        bufferevent_free(bev);
-    }
-
-    inline void tcp_drained_write_free_cb(struct bufferevent* bev, void* /* user_arg */)
-    {
-        if (auto outlen = evbuffer_get_length(bufferevent_get_output(bev)); outlen > 0)
-        {
-            log::info(test_cat, "TCP outbut buffer has {}B remaining to flush...", outlen);
-            return;
-        }
-
-        log::info(test_cat, "TCP output buffer drained; freeing bufferevent!");
-        bufferevent_free(bev);
-    }
-
-    inline void client_drained_write_close_cb(struct bufferevent* bev, void* user_arg)
-    {
-        if (auto outlen = evbuffer_get_length(bufferevent_get_output(bev)); outlen > 0)
-        {
-            log::info(test_cat, "[TUNNEL INITIATOR] TCP outbut buffer has {}B remaining to flush...", outlen);
-            return;
-        }
-
-        bufferevent_setcb(bev, tcp_read_cb, nullptr, client_event_cb, user_arg);
-        bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
-        bufferevent_enable(bev, EV_READ);
-
-        log::info(
-                test_cat,
-                "[TUNNEL INITIATOR] TCP output buffer drained; shutting down socket write and clearing pending input buffer "
-                "(if any)...");
-
-        auto fd = bufferevent_getfd(bev);
-        shutdown(fd, SHUT_WR);
-
-        _read_cb(bev, user_arg, true);
-
-        auto* conn = reinterpret_cast<TCPConnection*>(user_arg);
-        assert(conn);
-
-        log::info(test_cat, "[TUNNEL INITIATOR] Shutting down stream read!");
-        conn->stream->stop_reading();
-    }
-
-    inline void server_drained_write_close_cb(struct bufferevent* bev, void* user_arg)
-    {
-        if (auto outlen = evbuffer_get_length(bufferevent_get_output(bev)); outlen > 0)
-        {
-            log::info(test_cat, "[TUNNEL RECEIVER] TCP outbut buffer has {}B remaining to flush...", outlen);
-            return;
-        }
-
-        bufferevent_setcb(bev, tcp_read_cb, nullptr, server_event_cb, user_arg);
-        bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
-        bufferevent_enable(bev, EV_READ);
-
-        log::info(
-                test_cat,
-                "[TUNNEL RECEIVER] TCP output buffer drained; shutting down socket write and clearing pending input buffer "
-                "(if any)...");
-
-        auto fd = bufferevent_getfd(bev);
-        shutdown(fd, SHUT_WR);
-
-        _read_cb(bev, user_arg, true);
-
-        auto* conn = reinterpret_cast<TCPConnection*>(user_arg);
-        assert(conn);
-
-        log::info(test_cat, "[TUNNEL RECEIVER] Shutting down stream read!");
-        conn->stream->stop_reading();
-    }
-
-    inline void client_drained_write_cb(struct bufferevent* bev, void* user_arg)
-    {
-        bufferevent_setcb(bev, tcp_read_cb, nullptr, client_event_cb, user_arg);
-        bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
-
-        auto* conn = reinterpret_cast<TCPConnection*>(user_arg);
-        assert(conn);
-
-        log::info(
-                test_cat,
-                "[TUNNEL INITIATOR] TCP output buffer below low-water threshold ({}); resuming stream!",
-                TCP_LOWWATER);
-        conn->stream->resume();
-    }
-
-    inline void server_drained_write_cb(struct bufferevent* bev, void* user_arg)
-    {
-        bufferevent_setcb(bev, tcp_read_cb, nullptr, server_event_cb, user_arg);
-        bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
-
-        auto* conn = reinterpret_cast<TCPConnection*>(user_arg);
-        assert(conn);
-
-        log::info(
-                test_cat,
-                "[TUNNEL RECEIVER] TCP output buffer below low-water threshold ({}); resuming stream!",
-                TCP_LOWWATER);
-        conn->stream->resume();
-    }
-
-    inline void tcp_read_cb(struct bufferevent* bev, void* user_arg)
-    {
-        _read_cb(bev, user_arg, false);
-    }
-
-    inline void _read_cb(struct bufferevent* bev, void* user_arg, bool loud)
-    {
-        std::array<uint8_t, 4096> buf{};
-
-        // Load data from input buffer to local buffer
-        auto nwrite = bufferevent_read(bev, buf.data(), buf.size());
-
-        if (nwrite > 0)
-        {
-            auto* conn = reinterpret_cast<TCPConnection*>(user_arg);
-            assert(conn);
-            auto& stream = conn->stream;
-            assert(stream);
-
-            if (loud)
-                log::critical(test_cat, "TCP socket received {}B on stream ID:{}", nwrite, stream->stream_id());
-            else
-                log::trace(test_cat, "TCP socket received {}B on stream ID:{}", nwrite, stream->stream_id());
-
-            stream->send(ustring{buf.data(), nwrite});
-        }
-        else
-        {
-            if (loud)
-                log::critical(test_cat, "TCP socket has no pending data in input buffer!");
-            else
-                log::trace(test_cat, "TCP socket has no pending data in input buffer!");
-        }
-    }
-
-    inline void server_event_cb(struct bufferevent* bev, short what, void* user_arg)
-    {
-        if (what & BEV_EVENT_CONNECTED)
-        {
-            log::info(test_cat, "[TUNNEL RECEIVER] TCP connect operation succeeded!");
-            return;
-        }
-
-        bool close{false};
-        auto* conn = reinterpret_cast<TCPConnection*>(user_arg);
-        assert(conn);
-        auto& stream = conn->stream;
-        auto stream_id = stream->stream_id();
-
-        if (what & BEV_EVENT_ERROR)
-        {
-            log::critical(
-                    test_cat,
-                    "[TUNNEL RECEIVER] TCP Connection encountered bufferevent error (msg: {})!",
-                    evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
-
-            log::critical(test_cat, "[TUNNEL RECEIVER] Closing stream (ID:{})...", stream_id);
-            // stream->reset_stream(CODE::STOP_NOW);
-            stream->close(CODE::STOP_NOW);
-            return;
-        }
-
-        auto outlen = evbuffer_get_length(bufferevent_get_output(bev));
-        auto inlen = evbuffer_get_length(bufferevent_get_input(bev));
-
-        log::critical(test_cat, "[TUNNEL RECEIVER] EVENT: input buffer = {}B, output buffer = {}B", inlen, outlen);
-
-        if (what & BEV_EVENT_EOF)
-        {
-            if (what & BEV_EVENT_WRITING)
-            {
-                // backend shut down reading
-                log::info(
-                        test_cat,
-                        "[TUNNEL RECEIVER] Backend TCP stopped reading! Halting stream (ID:{}) write...",
-                        stream_id);
-                stream->reset_stream(CODE::STOP_WRITING);
-            }
-            else if (what & BEV_EVENT_READING)
-            {
-                // backend shut down writing
-                // TODO: close here?
-                // log::info(test_cat, "[TUNNEL RECEIVER] Backend TCP stopped writing! Halting stream (ID:{}) read...",
-                // stream_id);
-
-                log::info(
-                        test_cat,
-                        "[TUNNEL RECEIVER] Backend TCP stopped writing! Clearing any pending outgoing data (stream id: {}) "
-                        "and halting stream read...",
-                        stream_id);
-
-                // log::info(
-                //         test_cat,
-                //         "[TUNNEL RECEIVER] Backend TCP stopped writing! Clearing (stream id: {}) any pending outgoing data
-                //         and freeing socket on write termination!", stream_id);
-                // auto fd = bufferevent_getfd(bev);
-                // shutdown(fd, SHUT_WR);
-
-                // // flush any pending data
-                _read_cb(bev, user_arg, true);
-
-                stream->stop_sending(CODE::STOP_WRITING);
-
-                // stream->reset_stream(CODE::STOP_WRITING);
-                // bufferevent_disable(bev, EV_READ);
-                // bufferevent_setcb(bev, nullptr, tcp_drained_write_free_cb, server_event_cb, user_arg);
-                // bufferevent_setwatermark(bev, EV_WRITE, 0, TCP_HIGHWATER);
-
-                // close = true;
-                // stream->stop_reading();
-
-                // log::info(test_cat, "[TUNNEL RECEIVER] shutting down stream write...");
-            }
-            else
-            {
-                // remote closed connection
-                log::info(test_cat, "[TUNNEL RECEIVER] TCP Connection EOF!");
-                close = true;
-            }
-        }
-        if (close)
-        {
-            // log::critical(test_cat, "[TUNNEL RECEIVER] Closing stream (ID:{})...", stream_id);
-            // stream->close(CODE::STOP_NOW);
-            log::critical(test_cat, "[TUNNEL RECEIVER] Closing stream (ID:{}) via read shutdown...", stream_id);
-            stream->stop_reading();
-        }
-    }
-
-    inline void client_event_cb(struct bufferevent* bev, short what, void* user_arg)
-    {
-        if (what & BEV_EVENT_CONNECTED)
-        {
-            log::info(test_cat, "[TUNNEL INITIATOR] TCP connect operation succeeded!");
-            return;
-        }
-
-        bool close{false};
-        auto* conn = reinterpret_cast<TCPConnection*>(user_arg);
-        assert(conn);
-        auto& stream = conn->stream;
-        auto stream_id = stream->stream_id();
-
-        if (what & BEV_EVENT_ERROR)
-        {
-            log::critical(
-                    test_cat,
-                    "[TUNNEL INITIATOR] TCP Connection encountered bufferevent error (msg: {})!",
-                    evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
-            close = true;
-        }
-
-        auto outlen = evbuffer_get_length(bufferevent_get_output(bev));
-        auto inlen = evbuffer_get_length(bufferevent_get_input(bev));
-
-        log::critical(test_cat, "[TUNNEL INITIATOR] EVENT: input buffer = {}B, output buffer = {}B", inlen, outlen);
-
-        if (what & BEV_EVENT_EOF)
-        {
-            if (what & BEV_EVENT_WRITING)
-            {
-                // backend shut down reading
-                log::info(
-                        test_cat,
-                        "[TUNNEL INITIATOR] Backend TCP stopped reading! Halting stream (ID:{}) write...",
-                        stream_id);
-                stream->reset_stream(CODE::STOP_WRITING);
-                // log::info(test_cat, "Backend TCP stopped reading! Halting stream (ID:{}) read...", stream_id);
-                // stream->stop_reading();
-            }
-            else if (what & BEV_EVENT_READING)
-            {
-                // backend shut down writing
-                log::info(
-                        test_cat,
-                        "[TUNNEL INITIATOR] Backend TCP stopped writing! Clearing any pending outgoing data and halting "
-                        "stream (ID:{}) write...",
-                        stream_id);
-
-                // flush any pending data
-                _read_cb(bev, user_arg, true);
-
-                stream->reset_stream(CODE::STOP_WRITING);
-
-                // log::info(test_cat, "[TUNNEL INITIATOR] Backend TCP stopped writing! Halting stream (ID:{}) read...",
-                // stream_id); stream->stop_reading();
-            }
-            else
-            {
-                // remote closed connection
-                log::info(test_cat, "[TUNNEL INITIATOR] TCP Connection EOF!");
-                close = true;
-            }
-        }
-        if (close)
-        {
-            // log::critical(test_cat, "[TUNNEL INITIATOR] Closing stream (ID:{})...", stream_id);
-            // stream->close();
-            log::critical(test_cat, "[TUNNEL INITIATOR] Closing stream (ID:{}) via read shutdown...", stream_id);
-            stream->stop_reading();
-        }
-    }
-
-    inline void tcp_listen_cb(
-            struct evconnlistener* listener, evutil_socket_t fd, struct sockaddr* src, int socklen, void* user_arg)
-    {
-        oxen::quic::Address source{src, static_cast<socklen_t>(socklen)};
-        log::info(test_cat, "TCP CONNECTION ESTABLISHED -- SRC: {}", source);
-
-        auto* b = evconnlistener_get_base(listener);
-        auto* _bev = bufferevent_socket_new(
-                b,
-                fd,
-                BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS | BEV_OPT_THREADSAFE /* | BEV_OPT_UNLOCK_CALLBACKS */);
-
-        auto* handle = reinterpret_cast<TCPHandle*>(user_arg);
-        assert(handle);
-
-        // make TCPConnection here!
-        auto* conn = handle->_conn_maker(_bev, fd, std::move(source));
-        auto stream = conn->stream;
-
-        bufferevent_setcb(_bev, tcp_read_cb, nullptr, client_event_cb, conn);
-        bufferevent_enable(_bev, EV_READ | EV_WRITE);
-    }
-
-    inline void tcp_err_cb(struct evconnlistener* /* e */, void* user_arg)
-    {
-        int ec = EVUTIL_SOCKET_ERROR();
-        log::critical(test_cat, "TCP LISTENER RECEIVED ERROR CODE {}: {}", ec, evutil_socket_error_to_string(ec));
-
-        [[maybe_unused]] auto* handle = reinterpret_cast<TCPHandle*>(user_arg);
-        assert(handle);
-
-        // DISCUSS: close everything here?
-    }
 }  //  namespace oxen::quic

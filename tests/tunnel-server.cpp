@@ -63,16 +63,15 @@ int main(int argc, char* argv[])
 
         if (auto it_a = _tunnels.find(local); it_a != _tunnels.end())
         {
-            auto& _handle = it_a->second.h;
             auto& conns = it_a->second.conns;
 
             // stream data callback is set in ::connect_to_backend(...)
-            auto tcp_conn = _handle->connect_to_backend(s.shared_from_this(), backend_addr);
+            auto tcp_conn = std::make_shared<TCPConnection>(server_net.loop(), s.shared_from_this(), backend_addr);
 
             // search for local manual_server port extracted from the path
             if (auto it_b = conns.find(localport); it_b != conns.end())
             {
-                it_b->second._tcp_conns[backend_addr].insert(std::move(tcp_conn));
+                it_b->second.tcp_conns[backend_addr].insert(std::move(tcp_conn));
             }
             else
                 throw std::runtime_error{"Could not find paired TCP-QUIC for local port:{}"_format(localport)};
@@ -97,16 +96,10 @@ int main(int argc, char* argv[])
 
         log::critical(test_cat, "Manual server established connection (local:{} -> remote:{})...", local, remote);
 
-        auto _handle = TCPHandle::make_client(server_net.loop());
-
-        if (not _handle)
-            throw std::runtime_error{"Failed to start TCP Client!"};
-
         tunneled_connection tunneled_conn{};
-        tunneled_conn.h = std::move(_handle);
 
         TCPQUIC tcp_quic{};
-        tcp_quic._ci = ci.shared_from_this();
+        tcp_quic.ci = ci.shared_from_this();
 
         // map against local manual server port
         if (auto [_, b] = tunneled_conn.conns.emplace(localport, std::move(tcp_quic)); not b)
@@ -127,7 +120,7 @@ int main(int argc, char* argv[])
                                                  }});
 
         dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring buf) {
-            auto [p, data] = deserialize_payload(buf);
+            auto p = deserialize_payload(buf);
             Path path;
 
             if (auto it = localport_to_route.find(p); it != localport_to_route.end())
@@ -144,7 +137,7 @@ int main(int argc, char* argv[])
                     throw std::runtime_error{"Could not find backend pair for port:{}"_format(p)};
             }
 
-            manual_server->manually_receive_packet(Packet{path, std::move(data)});
+            manual_server->manually_receive_packet(Packet{path, std::move(buf)});
         };
 
         std::promise<void> tunnel_prom;

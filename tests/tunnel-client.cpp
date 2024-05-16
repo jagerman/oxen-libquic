@@ -16,6 +16,12 @@ int main(int argc, char* argv[])
     int num_conns{2};
     cli.add_option("-N,--num-conns", num_conns, "Number of remote server TCP backends for which to set up listeners (1/2/3)")
             ->check(CLI::Range(1, 3));
+    uint16_t port_start = 0;
+    cli.add_option(
+            "-P,--port-start",
+            port_start,
+            "Port of the first tunnel (subsequent tunnels, with -N, will use incremental ports).  If omitted or 0 then all "
+            "ports are randomized.");
 
     try
     {
@@ -67,59 +73,61 @@ int main(int argc, char* argv[])
     */
     std::unordered_map<Address, tunneled_connection> _tunnels;
 
+    std::atomic<uint16_t> next_port = port_start;
     auto manual_client_established = [&](connection_interface& ci) {
         auto path = ci.path();
         auto& remote = path.remote;
 
-        auto _handle = TCPHandle::make_server(
-                client_net.loop(), [&, p = path](struct bufferevent* _bev, evutil_socket_t _fd, Address src) {
-                    auto& remote = p.remote;
+        tunneled_connection tunneled_conn{};
+        auto port = port_start == 0 ? 0 : next_port++;
+        tunneled_conn.listener = std::make_shared<TCPListener>(
+                client_net.loop(),
+                [&_tunnels, path](const make_tcp_stream& make_tcp) {
+                    auto& remote = path.remote;
 
-                    if (auto it_a = _tunnels.find(remote); it_a != _tunnels.end())
-                    {
-                        auto& conns = it_a->second.conns;
+                    log::critical(test_cat, "");
+                    auto it_a = _tunnels.find(remote);
+                    if (it_a == _tunnels.end())
+                        throw std::runtime_error{"Could not find tunnel to remote:{}!"_format(remote)};
 
-                        if (auto it_b = conns.find(remote.port()); it_b != conns.end())
-                        {
-                            auto& tcp_quic = it_b->second;
-                            auto& ci = tcp_quic._ci;
-
-                            log::info(test_cat, "Opening stream...");
-                            // data and close cb set after lambda execution
-                            auto s = ci->open_stream();
-
-                            log::info(test_cat, "Opening TCPConnection...");
-
-                            auto tcp_conn = std::make_shared<TCPConnection>(_bev, _fd, std::move(s));
-
-                            if (tcp_conn->is_tunnel_initiator != true)
-                                throw std::runtime_error{"Tunnel client should have tunnel_initiator set to TRUE"};
-
-                            auto [it, _] = tcp_quic._tcp_conns[src].insert(std::move(tcp_conn));
-
-                            return it->get();
-                        }
+                    log::critical(test_cat, "");
+                    auto& conns = it_a->second.conns;
+                    auto it_b = conns.find(remote.port());
+                    if (it_b == conns.end())
                         throw std::runtime_error{"Could not find paired TCP-QUIC for remote port:{}"_format(remote.port())};
-                    }
-                    throw std::runtime_error{"Could not find tunnel to remote:{}!"_format(remote)};
-                });
 
-        if (not _handle->is_bound())
-            throw std::runtime_error{"Failed to bind TCP Handle listener!"};
+                    log::critical(test_cat, "");
+                    auto& tcp_quic = it_b->second;
+                    log::critical(test_cat, "");
+                    auto& ci = tcp_quic.ci;
 
-        auto bind = *_handle->bind();
+                    log::critical(test_cat, "");
+                    assert(ci);
+
+                    log::critical(test_cat, "");
+                    log::info(test_cat, "Opening stream...");
+                    log::critical(test_cat, "{}?", (bool)make_tcp);
+                    log::critical(test_cat, "{}?", (bool)ci);
+                    auto tcp_conn = make_tcp(*ci);
+                    log::critical(test_cat, "");
+                    Address src = tcp_conn->remote_addr();
+
+                    log::critical(test_cat, "");
+                    auto [it, _] = tcp_quic.tcp_conns[src].insert(std::move(tcp_conn));
+
+                    log::critical(test_cat, "");
+                    return *it;
+                },
+                port);
 
         log::info(
                 test_cat,
-                "Manual client established connection (path: {}); assigned TCPHandle listening on: {}",
+                "Manual client established connection (path: {}); assigned TCPListener listening on {}",
                 path,
-                bind);
-
-        tunneled_connection tunneled_conn{};
-        tunneled_conn.h = std::move(_handle);
+                tunneled_conn.listener->local_addr());
 
         TCPQUIC tcp_quic{};
-        tcp_quic._ci = ci.shared_from_this();
+        tcp_quic.ci = ci.shared_from_this();
 
         if (auto [_, b] = tunneled_conn.conns.emplace(remote.port(), std::move(tcp_quic)); not b)
             throw std::runtime_error{"Failed to emplace tunneled_connection!"};
@@ -143,10 +151,10 @@ int main(int argc, char* argv[])
                                                  }});
 
         dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring buf) {
-            auto [p, data] = deserialize_payload(std::move(buf));
+            auto p = deserialize_payload(buf);
 
             if (auto it = paths.find(p); it != paths.end())
-                manual_client->manually_receive_packet(Packet{it->second, data});
+                manual_client->manually_receive_packet(Packet{it->second, std::move(buf)});
             else
                 throw std::runtime_error{"Could not find path for route to remote port:{}"_format(p)};
         };
@@ -165,16 +173,19 @@ int main(int argc, char* argv[])
         tunnel_client_established.wait();
 
         for (int i = 0; i < num_conns; ++i)
-        {
             manual_client->connect(connect_addrs[i], client_tls, manual_client_established, opt::keep_alive{10s});
-
+        for (int i = 0; i < num_conns; ++i)
             conn_futures[i].wait();
-        }
 
         auto msg = "Client established {} tunneled connections:\n\n"_format(current_conn.load());
 
         for (auto& [addr, tun] : _tunnels)
-            msg += "\tTCP Listener: {} --> Remote: {}\n"_format(*tun.h->bind(), addr);
+        {
+            auto backend_addr = addr;
+            backend_addr.set_port(backend_addr.port() + 1111);
+            msg += "\tTCP connections to {} will be tunneled to remote TCP connections to {}\n"_format(
+                    tun.listener->local_addr(), backend_addr);
+        }
 
         log::critical(test_cat, "{}", msg);
     }

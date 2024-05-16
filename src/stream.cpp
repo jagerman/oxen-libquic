@@ -214,16 +214,6 @@ namespace oxen::quic
         });
     }
 
-    void Stream::stop_reading()
-    {
-        endpoint.call([this]() { stop_sending(STREAM_REMOTE_READ_SHUTDOWN); });
-    }
-
-    void Stream::stop_writing()
-    {
-        endpoint.call([this]() { reset_stream(STREAM_REMOTE_WRITE_SHUTDOWN); });
-    }
-
     bool Stream::is_paused() const
     {
         return endpoint.call_get([this]() { return _paused; });

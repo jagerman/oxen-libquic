@@ -103,13 +103,13 @@ namespace oxen::quic
 
         bool has_remote_reset_hooks() const;
 
-        void stop_reading();
+        // Sends a STOP SENDING frame to the other end of the connection that requests it to stop
+        // sending data by sending us back a STREAM RESET.
+        void stop_sending(uint64_t code = 0);
 
-        void stop_writing();
-
-        void stop_sending(uint64_t code = STREAM_REMOTE_READ_SHUTDOWN);
-
-        void reset_stream(uint64_t code = STREAM_REMOTE_WRITE_SHUTDOWN);
+        // Sends a STREAM RESET to the other side, indicating that we will send no more data.  Any
+        // unacked data may be lost.
+        void reset_stream(uint64_t code = 0);
 
         bool is_reading() const;
 

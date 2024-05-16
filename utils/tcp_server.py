@@ -3,6 +3,7 @@
 import argparse
 import socket
 import sys
+import time
 
 READSIZE = 4096
 
@@ -17,6 +18,12 @@ parser.add_argument(
     "--localport",
     required=True,
     help="The local port on which to bind the TCP client socket",
+    type=int,
+)
+parser.add_argument(
+    "--pause-every",
+    default=0,
+    help="Pause reading (for 5s) each time after reading [this many] bytes",
     type=int,
 )
 
@@ -41,15 +48,22 @@ if __name__ == "__main__":
 
             print("\nAccepted connection from {}".format(remote))
 
-            buf = b""
+            pause_at = argvars["pause_every"]
+            if pause_at <= 0:
+                pause_at = float('inf')
 
+            size = 0
             while True:
                 b = conn.recv(READSIZE)
-                buf += b
+                size += len(b)
                 if not b:
                     break
+                if size > pause_at:
+                    print(f"Read {size}B; pausing for 5s... ", end="", flush=True)
+                    time.sleep(5)
+                    pause_at += argvars["pause_every"]
+                    print("resuming")
 
-            size = len(buf)
             print("Received {}B from {}".format(size, remote))
 
             conn.sendall(bytes("{}".format(size), encoding="utf8"))

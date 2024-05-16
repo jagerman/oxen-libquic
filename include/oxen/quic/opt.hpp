@@ -223,7 +223,7 @@ namespace oxen::quic
                     throw std::invalid_argument{"Must set at least one of `on_stop_sending` and `on_stream_reset`!"};
             }
 
-            explicit operator bool() const { return has_stop_sending_hook() and has_stream_reset_hook(); }
+            explicit operator bool() const { return _on_stop_sending || _on_stream_reset; }
 
             void clear()
             {
