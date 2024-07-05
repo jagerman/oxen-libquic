@@ -4,7 +4,7 @@
 
 namespace oxen::quic
 {
-    const std::string translate_key_format(gnutls_x509_crt_fmt_t crt)
+    std::string translate_key_format(gnutls_x509_crt_fmt_t crt)
     {
         if (crt == GNUTLS_X509_FMT_DER)
             return "<< DER >>";
@@ -14,7 +14,7 @@ namespace oxen::quic
         return "<< UNKNOWN >>";
     }
 
-    const std::string translate_cert_type(gnutls_certificate_type_t type)
+    std::string translate_cert_type(gnutls_certificate_type_t type)
     {
         auto t = static_cast<int>(type);
 
@@ -32,7 +32,7 @@ namespace oxen::quic
         }
     }
 
-    const std::string get_cert_type(gnutls_session_t session, gnutls_ctype_target_t type)
+    std::string get_cert_type(gnutls_session_t session, gnutls_ctype_target_t type)
     {
         return translate_cert_type(gnutls_certificate_type_get2(session, type));
     }

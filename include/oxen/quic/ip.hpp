@@ -19,7 +19,8 @@ namespace oxen::quic
                 ipv4{uint32_t{a} << 24 | uint32_t{b} << 16 | uint32_t{c} << 8 | uint32_t{d}}
         {}
 
-        const std::string to_string() const;
+        std::string to_string() const;
+        constexpr static bool to_string_formattable = true;
 
         explicit operator in_addr() const
         {
@@ -44,7 +45,8 @@ namespace oxen::quic
         ipv4 base;
         uint8_t mask;
 
-        const std::string to_string() const { return base.to_base(mask).to_string(); }
+        std::string to_string() const { return base.to_base(mask).to_string(); }
+        constexpr static bool to_string_formattable = true;
 
         constexpr bool operator==(const ipv4_net& a) const { return base == a.base && mask == a.mask; }
 
@@ -94,7 +96,8 @@ namespace oxen::quic
 
         in6_addr to_in6() const;
 
-        const std::string to_string() const;
+        std::string to_string() const;
+        constexpr static bool to_string_formattable = true;
 
         constexpr bool operator==(const ipv6& a) const { return hi == a.hi && lo == a.lo; }
 
@@ -124,7 +127,8 @@ namespace oxen::quic
         ipv6 base;
         uint8_t mask;
 
-        const std::string to_string() const { return base.to_base(mask).to_string(); }
+        std::string to_string() const { return base.to_base(mask).to_string(); }
+        constexpr static bool to_string_formattable = true;
 
         constexpr bool operator==(const ipv6_net& a) { return base == a.base && mask == a.mask; }
 
