@@ -18,7 +18,7 @@ namespace oxen::quic
             throw std::invalid_argument{"IPv4 constructor failed to parse input: {}"_format(ip)};
     }
 
-    const std::string ipv4::to_string() const
+    std::string ipv4::to_string() const
     {
         char buf[INET_ADDRSTRLEN] = {};
         inet_ntop(AF_INET, &addr, buf, sizeof(buf));
@@ -54,7 +54,7 @@ namespace oxen::quic
         return ret;
     }
 
-    const std::string ipv6::to_string() const
+    std::string ipv6::to_string() const
     {
         char buf[INET6_ADDRSTRLEN] = {};
 
