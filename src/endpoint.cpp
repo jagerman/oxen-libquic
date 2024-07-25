@@ -216,7 +216,7 @@ namespace oxen::quic
 
                 if (!cptr)
                 {
-                    log::warning(log_cat, "Error: connection could not be created");
+                    log::info(log_cat, "Incoming connection was not accepted (likely an expired connection ID)");
                     return;
                 }
 
@@ -519,7 +519,7 @@ namespace oxen::quic
                     now);
             rv != 0)
         {
-            log::warning(log_cat, "Server could not verify regular token!");
+            log::info(log_cat, "Server could not verify regular token!");
             return false;
         }
 
@@ -545,7 +545,7 @@ namespace oxen::quic
                     now);
             rv != 0)
         {
-            log::warning(log_cat, "Server could not verify retry token!");
+            log::info(log_cat, "Server could not verify retry token!");
             return false;
         }
 
