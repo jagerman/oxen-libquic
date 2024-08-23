@@ -249,7 +249,12 @@ namespace oxen::quic
         /// exception if the endpoint in this message should be considered not found.
         void register_generic_handler(std::function<void(message)> request_handler);
 
+        /// Returns the number of requests/commands that are pending outbound transmission. These have
+        /// NOT been sent yet, rather they have been queued by the application
         size_t num_pending() const;
+
+        /// Returns the number of sent requests awaiting response
+        size_t num_awaiting_response() const;
 
       protected:
         void check_timeouts() override;
@@ -280,5 +285,7 @@ namespace oxen::quic
         size_t parse_length(std::string_view req);
 
         size_t num_pending_impl() const { return user_buffers.size(); }
+
+        size_t num_awaiting_response_impl() const { return sent_reqs.size(); }
     };
 }  // namespace oxen::quic

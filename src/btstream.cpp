@@ -362,4 +362,9 @@ namespace oxen::quic
         return call_get_accessor(&BTRequestStream::num_pending_impl);
     }
 
+    size_t BTRequestStream::num_awaiting_response() const
+    {
+        return call_get_accessor(&BTRequestStream::num_awaiting_response_impl);
+    }
+
 }  // namespace oxen::quic
