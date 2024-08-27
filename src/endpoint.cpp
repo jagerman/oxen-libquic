@@ -16,6 +16,7 @@ extern "C"
 #include <optional>
 
 #include "connection.hpp"
+#include "gnutls_crypto.hpp"
 #include "internal.hpp"
 #include "types.hpp"
 #include "utils.hpp"
@@ -83,6 +84,12 @@ namespace oxen::quic
     void Endpoint::handle_ep_opt(opt::manual_routing mrouting)
     {
         _manual_routing = std::move(mrouting);
+    }
+
+    void Endpoint::handle_ep_opt(opt::enable_0rtt rtt)
+    {
+        _0rtt_enabled = true;
+        _0rtt_window = rtt.window.count();
     }
 
     ConnectionID Endpoint::next_reference_id()
@@ -421,28 +428,55 @@ namespace oxen::quic
         }
     }
 
-    int Endpoint::validate_anti_replay(ustring key, ustring data, time_t /* exp */)
+    int Endpoint::validate_anti_replay(gtls_session_ticket ticket, time_t current)
     {
-        if (auto itr = anti_replay_db.find(key); itr != anti_replay_db.end())
+        int ret = 0;
+        auto key = ticket.key();
+
+        if (auto itr = session_tickets.find(key); itr != session_tickets.end())
         {
-            auto& entry = itr->second;
-
-            if (entry == data)
-                return GNUTLS_E_DB_ENTRY_EXISTS;
+            if (auto exp = gnutls_db_check_entry_expire_time(const_cast<gtls_session_ticket&>(itr->second)); current > exp)
+            {
+                log::debug(log_cat, "Found expired anti-replay ticket for incoming connection");
+            }
+            else
+                ret = GNUTLS_E_DB_ENTRY_EXISTS;
+            // erase the old value regardless
+            session_tickets.erase(itr);
         }
-
-        anti_replay_db[std::move(key)] = std::move(data);
-        return 0;
+        // unordered_set::emplace does not overwrite previously existing values
+        session_tickets.emplace(std::move(key), std::move(ticket));
+        return ret;
     }
 
     void Endpoint::store_0rtt_transport_params(ustring remote_pk, ustring encoded_params)
     {
-        encoded_transport_params.insert_or_assign(remote_pk, std::move(encoded_params));
+        encoded_transport_params.insert_or_assign(std::move(remote_pk), std::move(encoded_params));
     }
 
-    std::optional<ustring> Endpoint::get_0rtt_transport_params(ustring remote_pk)
+    std::optional<ustring> Endpoint::get_0rtt_transport_params(const ustring& remote_pk)
     {
         if (auto itr = encoded_transport_params.find(remote_pk); itr != encoded_transport_params.end())
+            return itr->second;
+
+        return std::nullopt;
+    }
+
+    void Endpoint::store_session_ticket(gtls_session_ticket ticket)
+    {
+        auto key = ticket.key();
+        if (auto itr = session_tickets.find(key); itr != session_tickets.end())
+        {
+            log::debug(log_cat, "Found anti-replay ticket for incoming connection; replacing with new one");
+            session_tickets.erase(itr);
+        }
+
+        session_tickets.emplace(std::move(key), std::move(ticket));
+    }
+
+    std::optional<gtls_session_ticket> Endpoint::get_session_ticket(const ustring_view& remote_pk)
+    {
+        if (auto itr = session_tickets.find(remote_pk); itr != session_tickets.end())
             return itr->second;
 
         return std::nullopt;
@@ -641,7 +675,7 @@ namespace oxen::quic
         path_validation_tokens.insert_or_assign(std::move(remote_pk), std::move(token));
     }
 
-    std::optional<ustring> Endpoint::get_path_validation_token(ustring remote_pk)
+    std::optional<ustring> Endpoint::get_path_validation_token(const ustring& remote_pk)
     {
         if (auto itr = path_validation_tokens.find(remote_pk); itr != path_validation_tokens.end())
             return itr->second;

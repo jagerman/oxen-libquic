@@ -367,29 +367,27 @@ namespace oxen::quic
             Moreover, decoding and setting 0RTT transport parameters must be handled in connection creation. Both that
             location and the required callbacks are comment-blocked in the relevant location.
         */
-        // if (not tls_session->get_early_data_accepted())
-        //{
-        // log::info(log_cat, "Early data was rejected by server!");
+        if (not tls_session->get_early_data_accepted())
+        {
+            log::info(log_cat, "Early data was rejected by server!");
 
-        // if (auto rv = ngtcp2_conn_tls_early_data_rejected(conn.get()); rv != 0)
-        // {
-        //     log::error(log_cat, "ngtcp2_conn_tls_early_data_rejected: {}", ngtcp2_strerror(rv));
-        //     return -1;
-        // }
-        //}
+            if (auto rv = ngtcp2_conn_tls_early_data_rejected(conn.get()); rv != 0)
+            {
+                log::error(log_cat, "ngtcp2_conn_tls_early_data_rejected: {}", ngtcp2_strerror(rv));
+                return -1;
+            }
+        }
 
-        // ustring data;
-        // data.resize(256);
+        ustring data;
+        data.resize(256);
 
-        // if (auto len = ngtcp2_conn_encode_0rtt_transport_params(conn.get(), data.data(), data.size()); len > 0)
-        // {
-        //     _endpoint.store_0rtt_transport_params(remote_pubkey, data);
-        //     log::info(log_cat, "Client encoded and stored 0rtt transport params");
-        // }
-        // else
-        // {
-        //     log::warning(log_cat, "Client could not encode 0-RTT transport parameters: {}", ngtcp2_strerror(len));
-        // }
+        if (auto len = ngtcp2_conn_encode_0rtt_transport_params(conn.get(), data.data(), data.size()); len > 0)
+        {
+            _endpoint.store_0rtt_transport_params(remote_pubkey, std::move(data));
+            log::info(log_cat, "Client encoded and stored 0rtt transport params");
+        }
+        else
+            log::warning(log_cat, "Client could not encode 0-RTT transport parameters: {}", ngtcp2_strerror(len));
 
         return 0;
     }
@@ -1559,6 +1557,8 @@ namespace oxen::quic
             _source_cid{scid},
             _dest_cid{dcid},
             _path{path},
+            _0rtt_enabled{_endpoint._0rtt_enabled},
+            _0rtt_window{_endpoint._0rtt_window},
             _max_streams{context->config.max_streams ? context->config.max_streams : DEFAULT_MAX_BIDI_STREAMS},
             _datagrams_enabled{context->config.datagram_support},
             _packet_splitting{context->config.split_packet},
@@ -1616,17 +1616,6 @@ namespace oxen::quic
                 settings.tokenlen = maybe_token->size();
             }
 
-            // TODO: uncomment this with 0RTT resumption
-            // if (auto maybe_params = _endpoint.get_0rtt_transport_params(remote_pubkey))
-            // {
-            //     if (auto rv = ngtcp2_conn_decode_and_set_0rtt_transport_params(
-            //                 conn.get(), maybe_params->data(), maybe_params->size());
-            //         rv != 0)
-            //         log::warning(log_cat, "Client failed to decode and set 0rtt transport params!");
-            //     else
-            //         log::info(log_cat, "Client decoded and set 0rtt transport params!");
-            // }
-
             rv = ngtcp2_conn_client_new(
                     &connptr,
                     &_dest_cid,
@@ -1638,6 +1627,19 @@ namespace oxen::quic
                     &params,
                     nullptr,
                     this);
+
+            if (_0rtt_enabled)
+            {
+                if (auto maybe_params = _endpoint.get_0rtt_transport_params(remote_pubkey))
+                {
+                    if (auto rv = ngtcp2_conn_decode_and_set_0rtt_transport_params(
+                                connptr, maybe_params->data(), maybe_params->size());
+                        rv != 0)
+                        log::warning(log_cat, "Client failed to decode and set 0rtt transport params!");
+                    else
+                        log::info(log_cat, "Client decoded and set 0rtt transport params!");
+                }
+            }
         }
         else
         {

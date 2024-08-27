@@ -112,6 +112,8 @@ namespace oxen::quic
     inline constexpr std::chrono::seconds DEFAULT_HANDSHAKE_TIMEOUT = 10s;
     inline constexpr std::chrono::seconds DEFAULT_IDLE_TIMEOUT = 30s;
 
+    inline constexpr size_t inverse_golden_ratio = sizeof(size_t) >= 8 ? 0x9e37'79b9'7f4a'7c15 : 0x9e37'79b9;
+
     // NGTCP2 sets the path_pmtud_payload to 1200 on connection creation, then discovers upwards
     // to a theoretical max of 1452. In 'lazy' mode, we take in split packets under the current max
     // pmtud size. In 'greedy' mode, we take in up to double the current pmtud size to split amongst
@@ -260,3 +262,19 @@ namespace oxen::quic
     }
 
 }  // namespace oxen::quic
+
+namespace std
+{
+    template <>
+    struct hash<oxen::quic::ustring_view>
+    {
+        size_t operator()(const oxen::quic::ustring_view& sv) const noexcept
+        {
+            return hash<string_view>{}({reinterpret_cast<const char*>(sv.data()), sv.size()});
+        }
+    };
+
+    template <>
+    struct hash<oxen::quic::ustring> : hash<oxen::quic::ustring_view>
+    {};
+}  //  namespace std

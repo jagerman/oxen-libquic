@@ -366,12 +366,10 @@ namespace oxen::quic
 
 namespace std
 {
-    inline constexpr size_t inverse_golden_ratio = sizeof(size_t) >= 8 ? 0x9e37'79b9'7f4a'7c15 : 0x9e37'79b9;
-
     template <>
     struct hash<oxen::quic::Address>
     {
-        size_t operator()(const oxen::quic::Address& addr) const
+        size_t operator()(const oxen::quic::Address& addr) const noexcept
         {
             std::string_view addr_data;
             uint16_t port;
@@ -390,7 +388,7 @@ namespace std
             }
 
             auto h = hash<string_view>{}(addr_data);
-            h ^= hash<decltype(port)>{}(port) + inverse_golden_ratio + (h << 6) + (h >> 2);
+            h ^= hash<decltype(port)>{}(port) + oxen::quic::inverse_golden_ratio + (h << 6) + (h >> 2);
             return h;
         }
     };
@@ -398,10 +396,10 @@ namespace std
     template <>
     struct hash<oxen::quic::Path>
     {
-        size_t operator()(const oxen::quic::Path& addr) const
+        size_t operator()(const oxen::quic::Path& addr) const noexcept
         {
             auto h = hash<oxen::quic::Address>{}(addr.local);
-            h ^= hash<oxen::quic::Address>{}(addr.remote) + inverse_golden_ratio + (h << 6) + (h >> 2);
+            h ^= hash<oxen::quic::Address>{}(addr.remote) + oxen::quic::inverse_golden_ratio + (h << 6) + (h >> 2);
             return h;
         }
     };

@@ -14,7 +14,8 @@ extern "C"
 
 namespace oxen::quic
 {
-    constexpr auto default_alpn_str = "default"sv;
+    inline constexpr auto default_alpn_str = "default"sv;
+    inline constexpr std::chrono::milliseconds DEFAULT_ANTI_REPLAY_WINDOW{10min};
 
     class TLSSession;
     class Connection;

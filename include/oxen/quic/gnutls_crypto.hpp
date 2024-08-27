@@ -3,6 +3,7 @@
 #include <oxenc/base64.h>
 #include <oxenc/hex.h>
 
+#include <array>
 #include <optional>
 #include <variant>
 
@@ -26,6 +27,8 @@ namespace oxen::quic
         int cert_verify_callback_gnutls(gnutls_session_t g_session);
 
         void gnutls_log(int level, const char* str);
+
+        int anti_replay_db_add_func(void* dbf, time_t exp_time, const gnutls_datum_t* key, const gnutls_datum_t* data);
 
         struct gnutls_log_setter
         {
@@ -259,20 +262,72 @@ namespace oxen::quic
         }
     };
 
+    struct gtls_session_ticket
+    {
+        std::vector<unsigned char> _key;
+        std::vector<unsigned char> _ticket;
+        gnutls_datum_t _data;
+
+        explicit gtls_session_ticket(
+                const unsigned char* key, unsigned int keysize, const unsigned char* ticket, unsigned int ticketsize) :
+                _key(keysize), _ticket(ticketsize)
+        {
+            std::memcpy(_key.data(), key, keysize);
+            std::memcpy(_ticket.data(), ticket, ticketsize);
+            _data.data = _ticket.data();
+            _data.size = _ticket.size();
+        }
+
+        gtls_session_ticket(const gnutls_datum_t* key, const gnutls_datum_t* ticket) :
+                gtls_session_ticket{key->data, key->size, ticket->data, ticket->size}
+        {}
+
+        gtls_session_ticket(const gtls_session_ticket& t) :
+                gtls_session_ticket{
+                        t._key.data(),
+                        static_cast<unsigned int>(t._key.size()),
+                        t._ticket.data(),
+                        static_cast<unsigned int>(t._ticket.size())}
+        {}
+
+        ustring_view key() { return {_key.data(), _key.size()}; }
+
+        bool operator==(const gtls_session_ticket& other) const { return _ticket == other._ticket; }
+
+        bool operator==(const gnutls_datum_t* other) const
+        {
+            return gnutls_memcmp(_data.data, other->data, _data.size) == 0;
+        }
+
+        template <typename T>
+            requires std::same_as<T, gnutls_datum_t>
+        operator T*()
+        {
+            return &_data;
+        }
+        template <typename T>
+            requires std::same_as<T, gnutls_datum_t>
+        operator const T*() const
+        {
+            return &_data;
+        }
+    };
+
     class GNUTLSCreds : public TLSCreds
     {
         friend class GNUTLSSession;
 
-      private:
-        // Construct from raw Ed25519 keys
         GNUTLSCreds(std::string_view ed_seed, std::string_view ed_pubkey);
 
       public:
-        gnutls_pcert_st pcrt;
-        gnutls_privkey_t pkey;
+        static std::shared_ptr<GNUTLSCreds> make_from_ed_keys(std::string_view seed, std::string_view pubkey);
+        static std::shared_ptr<GNUTLSCreds> make_from_ed_seckey(std::string_view sk);
 
         ~GNUTLSCreds();
 
+      private:
+        gnutls_pcert_st pcrt;
+        gnutls_privkey_t pkey;
         const bool using_raw_pk{false};
 
         gnutls_certificate_credentials_t cred;
@@ -281,15 +336,12 @@ namespace oxen::quic
 
         gnutls_priority_t priority_cache;
 
+      public:
+        std::unique_ptr<TLSSession> make_session(Connection& c, const std::vector<ustring>& alpns) override;
+
         void load_keys(x509_loader& seed, x509_loader& pk);
 
         void set_key_verify_callback(key_verify_callback cb) { key_verify = std::move(cb); }
-
-        static std::shared_ptr<GNUTLSCreds> make_from_ed_keys(std::string_view seed, std::string_view pubkey);
-
-        static std::shared_ptr<GNUTLSCreds> make_from_ed_seckey(std::string_view sk);
-
-        std::unique_ptr<TLSSession> make_session(Connection& c, const std::vector<ustring>& alpns) override;
     };
 
     class GNUTLSSession : public TLSSession
@@ -303,6 +355,7 @@ namespace oxen::quic
         gnutls_anti_replay_t anti_replay;
 
         bool is_client;
+        bool _0rtt_enabled;
 
         gnutls_key _expected_remote_key{};
 
@@ -343,3 +396,18 @@ namespace oxen::quic
     Connection* get_connection_from_gnutls(gnutls_session_t g_session);
 
 }  // namespace oxen::quic
+
+namespace std
+{
+    template <>
+    struct hash<oxen::quic::gtls_session_ticket>
+    {
+        size_t operator()(const oxen::quic::gtls_session_ticket& t) const noexcept
+        {
+            auto h = hash<string_view>{}(oxen::quic::to_sv(oxen::quic::ustring_view{t._ticket.data(), t._ticket.size()}));
+            h ^= hash<string_view>{}(oxen::quic::to_sv(oxen::quic::ustring_view{t._key.data(), t._key.size()})) +
+                 oxen::quic::inverse_golden_ratio + (h << 7) + (h >> 3);
+            return h;
+        }
+    };
+}  //  namespace std

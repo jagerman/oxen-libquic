@@ -77,7 +77,7 @@ namespace std
     template <>
     struct hash<oxen::quic::quic_cid>
     {
-        size_t operator()(const oxen::quic::quic_cid& cid) const
+        size_t operator()(const oxen::quic::quic_cid& cid) const noexcept
         {
             static_assert(
                     alignof(oxen::quic::quic_cid) >= alignof(size_t) &&
@@ -89,6 +89,9 @@ namespace std
     template <>
     struct hash<oxen::quic::ConnectionID>
     {
-        size_t operator()(const oxen::quic::ConnectionID& rid) const { return std::hash<decltype(rid.id)>{}(rid.id); }
+        size_t operator()(const oxen::quic::ConnectionID& rid) const noexcept
+        {
+            return std::hash<decltype(rid.id)>{}(rid.id);
+        }
     };
 }  // namespace std

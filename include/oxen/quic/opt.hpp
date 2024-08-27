@@ -202,5 +202,11 @@ namespace oxen::quic
                     _hook = nullptr;
             }
         };
+
+        /// Used to enable QUIC 0-RTT mode.
+        struct enable_0rtt
+        {
+            std::chrono::milliseconds window{DEFAULT_ANTI_REPLAY_WINDOW};
+        };
     }  //  namespace opt
 }  // namespace oxen::quic

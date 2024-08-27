@@ -317,6 +317,9 @@ namespace oxen::quic
         bool datagrams_enabled() const override { return _datagrams_enabled; }
         bool packet_splitting_enabled() const override { return _packet_splitting; }
 
+        bool zero_rtt_enabled() const { return _0rtt_enabled; }
+        unsigned int zero_rtt_window() const { return _0rtt_window; }
+
         std::optional<size_t> max_datagram_size_changed() override;
 
         // public debug functions; to be removed with friend test fixture class
@@ -395,6 +398,9 @@ namespace oxen::quic
         quic_cid _dest_cid;
 
         Path _path;
+
+        const bool _0rtt_enabled{false};
+        const unsigned int _0rtt_window{};
 
         const uint64_t _max_streams{DEFAULT_MAX_BIDI_STREAMS};
         const bool _datagrams_enabled{false};

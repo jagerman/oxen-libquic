@@ -39,7 +39,7 @@ namespace oxen::quic
                 - this is an equally annoying typedef for `suseconds_t`
         Alas, yet again another mac idiosyncrasy...
      */
-    timeval loop_time_to_timeval(std::chrono::microseconds t)
+    static timeval loop_time_to_timeval(std::chrono::microseconds t)
     {
         return timeval{
                 .tv_sec = static_cast<decltype(timeval::tv_sec)>(t / 1s),

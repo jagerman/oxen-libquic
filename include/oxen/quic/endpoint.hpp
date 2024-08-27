@@ -28,6 +28,7 @@ extern "C"
 
 #include "connection.hpp"
 #include "context.hpp"
+#include "gnutls_crypto.hpp"
 #include "network.hpp"
 #include "udp.hpp"
 #include "utils.hpp"
@@ -41,6 +42,8 @@ namespace oxen::quic
                 (0 + ... + std::is_convertible_v<std::remove_cvref_t<Opt>, std::shared_ptr<TLSCreds>>) == 1,
                 "Endpoint listen/connect require exactly one std::shared_ptr<TLSCreds> argument");
     }
+
+    // struct gtls_session_ticket;
 
     class Endpoint : public std::enable_shared_from_this<Endpoint>
     {
@@ -200,6 +203,15 @@ namespace oxen::quic
 
         void manually_receive_packet(Packet&& pkt);
 
+        bool zero_rtt_enabled() const { return _0rtt_enabled; }
+        unsigned int zero_rtt_window() const { return _0rtt_window; }
+
+        int validate_anti_replay(gtls_session_ticket ticket, time_t exp);
+
+        void store_session_ticket(gtls_session_ticket ticket);
+
+        std::optional<gtls_session_ticket> get_session_ticket(const ustring_view& remote_pk);
+
       private:
         friend class Network;
         friend class Loop;
@@ -218,6 +230,8 @@ namespace oxen::quic
         int _rbufsize{4096};
 
         opt::manual_routing _manual_routing;
+        bool _0rtt_enabled{false};
+        unsigned int _0rtt_window{};
 
         uint64_t _next_rid{0};
 
@@ -230,9 +244,10 @@ namespace oxen::quic
         std::vector<ustring> inbound_alpns;
         std::chrono::nanoseconds handshake_timeout{DEFAULT_HANDSHAKE_TIMEOUT};
 
-        std::map<ustring, ustring> anti_replay_db;
-        std::map<ustring, ustring> encoded_transport_params;
-        std::map<ustring, ustring> path_validation_tokens;
+        std::unordered_map<ustring_view, gtls_session_ticket> session_tickets;
+        std::unordered_map<ustring, ustring> session_resumption_data;
+        std::unordered_map<ustring, ustring> encoded_transport_params;
+        std::unordered_map<ustring, ustring> path_validation_tokens;
 
         const std::shared_ptr<event_base>& get_loop() { return net._loop->loop(); }
 
@@ -251,6 +266,7 @@ namespace oxen::quic
         void handle_ep_opt(connection_closed_callback conn_closed_cb);
         void handle_ep_opt(opt::static_secret ssecret);
         void handle_ep_opt(opt::manual_routing mrouting);
+        void handle_ep_opt(opt::enable_0rtt rtt);
 
         // Takes a std::optional-wrapped option that does nothing if the optional is empty,
         // otherwise passes it through to the above.  This is here to allow runtime-dependent
@@ -291,15 +307,15 @@ namespace oxen::quic
 
         void connection_established(connection_interface& conn);
 
-        int validate_anti_replay(ustring key, ustring data, time_t exp);
+        void store_session_token();
 
         void store_0rtt_transport_params(ustring remote_pk, ustring encoded_params);
 
-        std::optional<ustring> get_0rtt_transport_params(ustring remote_pk);
+        std::optional<ustring> get_0rtt_transport_params(const ustring& remote_pk);
 
         void store_path_validation_token(ustring remote_pk, ustring token);
 
-        std::optional<ustring> get_path_validation_token(ustring remote_pk);
+        std::optional<ustring> get_path_validation_token(const ustring& remote_pk);
 
         void initial_association(Connection& conn);
 

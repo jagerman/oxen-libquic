@@ -11,22 +11,25 @@ namespace oxen::quic
             gnutls_session_get_data2 to be called in hook function after handshake completion
     */
 
+    static constexpr auto SESSION_TICKET_HEADER = "GNUTLS SESSION PARAMETERS";
+
     extern "C"
     {
         int anti_replay_db_add_func(void* dbf, time_t exp_time, const gnutls_datum_t* key, const gnutls_datum_t* data)
         {
+            log::debug(log_cat, "{} called", __PRETTY_FUNCTION__);
             auto* ep = static_cast<Endpoint*>(dbf);
             assert(ep);
 
-            log::warning(log_cat, "0RTT session resumption is not available; callback is no-op");
-            return 0;
+            if (not ep->zero_rtt_enabled())
+                throw std::runtime_error{"Anti-replay DB hook should not be called on 0rtt-disabled endpoint!"};
 
             (void)exp_time;
             (void)key;
             (void)data;
             (void)ep;
 
-            // return ep->validate_anti_replay({key->data, key->size}, {data->data, data->size}, exp_time);
+            return ep->validate_anti_replay({key, data}, exp_time);
         }
 
         int client_hook_func(
@@ -39,8 +42,24 @@ namespace oxen::quic
             if (htype == GNUTLS_HANDSHAKE_NEW_SESSION_TICKET)
             {
                 auto* conn = get_connection_from_gnutls(session);
+                auto remote_key = conn->remote_key();
                 auto& ep = conn->endpoint();
-                (void)ep;
+                gnutls_datum_t data{}, encoded{};
+
+                if (auto rv = gnutls_session_get_data2(session, &data); rv != 0)
+                {
+                    log::warning(log_cat, "Failed to query session data: {}", gnutls_strerror(rv));
+                    return rv;
+                }
+
+                if (auto rv = gnutls_pem_base64_encode2(SESSION_TICKET_HEADER, &data, &encoded); rv != 0)
+                {
+                    log::warning(log_cat, "Failed to encode session data: {}", gnutls_strerror(rv));
+                    return rv;
+                }
+
+                ep.store_session_ticket(gtls_session_ticket{
+                        remote_key.data(), static_cast<unsigned int>(remote_key.size()), encoded.data, encoded.size});
             }
 
             return 0;
@@ -68,7 +87,7 @@ namespace oxen::quic
     {
         log::trace(log_cat, "Entered {}", __PRETTY_FUNCTION__);
 
-        if (not is_client)
+        if (not is_client and _0rtt_enabled)
             gnutls_anti_replay_deinit(anti_replay);
 
         gnutls_deinit(session);
@@ -77,15 +96,16 @@ namespace oxen::quic
 
     GNUTLSSession::GNUTLSSession(
             GNUTLSCreds& creds, Connection& c, const std::vector<ustring>& alpns, std::optional<gnutls_key> expected_key) :
-            creds{creds}, session_ticket_key{}, is_client{c.is_outbound()}
+            creds{creds}, session_ticket_key{}, is_client{c.is_outbound()}, _0rtt_enabled{c.zero_rtt_enabled()}
     {
         log::trace(log_cat, "Entered {}", __PRETTY_FUNCTION__);
 
-        if (not is_client)
+        if (not is_client and _0rtt_enabled)
         {
             gnutls_anti_replay_init(&anti_replay);
             gnutls_anti_replay_set_add_function(anti_replay, anti_replay_db_add_func);
             gnutls_anti_replay_set_ptr(anti_replay, &c.endpoint());
+            gnutls_anti_replay_set_window(anti_replay, c.zero_rtt_window());
 
             if (auto rv = gnutls_session_ticket_key_generate(&session_ticket_key); rv != 0)
             {
@@ -99,11 +119,14 @@ namespace oxen::quic
             _expected_remote_key = *expected_key;
 
         auto direction_string = (is_client) ? "Client"s : "Server"s;
-        log::trace(log_cat, "Creating {} GNUTLSSession", direction_string);
+        log::trace(log_cat, "Creating {} GNUTLSSession with 0-rtt {}abled", direction_string, _0rtt_enabled ? "en" : "dis");
 
-        uint32_t init_flags = is_client ? GNUTLS_CLIENT : GNUTLS_SERVER | GNUTLS_NO_AUTO_SEND_TICKET;
+        uint32_t init_flags = is_client ? GNUTLS_CLIENT : GNUTLS_SERVER;
 
-        init_flags |= GNUTLS_ENABLE_EARLY_DATA | GNUTLS_NO_END_OF_EARLY_DATA;
+        if (_0rtt_enabled)
+            init_flags |= GNUTLS_ENABLE_EARLY_DATA | GNUTLS_NO_END_OF_EARLY_DATA;
+        else
+            init_flags |= GNUTLS_NO_AUTO_SEND_TICKET;
 
         // DISCUSS: we actually don't want to do this if the requested certificate is expecting
         // x509 (see gnutls_creds.cpp::cert_retrieve_callback_gnutls function body)
@@ -144,11 +167,17 @@ namespace oxen::quic
         {
             log::trace(log_cat, "gnutls configuring server session...");
 
-            if (auto rv = gnutls_session_ticket_enable_server(session, &session_ticket_key); rv != 0)
+            if (_0rtt_enabled)
             {
-                auto err = "gnutls_session_ticket_enable_server failed: {}"_format(gnutls_strerror(rv));
-                log::error(log_cat, "{}", err);
-                throw std::runtime_error{err};
+                if (auto rv = gnutls_session_ticket_enable_server(session, &session_ticket_key); rv != 0)
+                {
+                    auto err = "gnutls_session_ticket_enable_server failed: {}"_format(gnutls_strerror(rv));
+                    log::error(log_cat, "{}", err);
+                    throw std::runtime_error{err};
+                }
+
+                gnutls_anti_replay_enable(session, anti_replay);
+                gnutls_record_set_max_early_data_size(session, 0xffffffffu);
             }
 
             if (auto rv = ngtcp2_crypto_gnutls_configure_server_session(session); rv < 0)
@@ -157,19 +186,44 @@ namespace oxen::quic
                 throw std::runtime_error("ngtcp2_crypto_gnutls_configure_client_session failed");
             }
 
-            gnutls_anti_replay_enable(session, anti_replay);
-            gnutls_record_set_max_early_data_size(session, 0xffffffffu);
-
             // server always requests cert from client
             gnutls_certificate_server_set_request(session, GNUTLS_CERT_REQUIRE);
         }
         else
         {
             log::trace(log_cat, "gnutls configuring client session...");
+
+            if (_0rtt_enabled)
+            {
+                log::trace(log_cat, "Setting client session ticket db hook...");
+                gnutls_handshake_set_hook_function(
+                        session, GNUTLS_HANDSHAKE_NEW_SESSION_TICKET, GNUTLS_HOOK_POST, client_hook_func);
+            }
+
             if (auto rv = ngtcp2_crypto_gnutls_configure_client_session(session); rv < 0)
             {
                 log::warning(log_cat, "ngtcp2_crypto_gnutls_configure_client_session failed: {}", ngtcp2_strerror(rv));
                 throw std::runtime_error("ngtcp2_crypto_gnutls_configure_client_session failed");
+            }
+
+            if (_0rtt_enabled and _expected_remote_key)
+            {
+                if (auto maybe_ticket = c.endpoint().get_session_ticket(_expected_remote_key.view()))
+                {
+                    gnutls_datum_t d;
+
+                    if (auto rv = gnutls_pem_base64_decode2(SESSION_TICKET_HEADER, &maybe_ticket->_data, &d); rv != 0)
+                    {
+                        log::warning(log_cat, "Failed to decode session ticket: {}", ngtcp2_strerror(rv));
+                        throw std::runtime_error("gnutls_pem_base64_decode2 failed");
+                    }
+
+                    if (auto rv = gnutls_session_set_data(session, d.data, d.size); rv != 0)
+                    {
+                        log::warning(log_cat, "Failed to set decoded session data: {}", ngtcp2_strerror(rv));
+                        throw std::runtime_error("gnutls_session_set_data failed");
+                    }
+                }
             }
         }
 
