@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 #include "address.hpp"
-#include "crypto.hpp"
+#include "gnutls_crypto.hpp"
 #include "types.hpp"
 
 namespace oxen::quic
@@ -202,11 +202,64 @@ namespace oxen::quic
                     _hook = nullptr;
             }
         };
+    }  // namespace opt
 
-        /// Used to enable QUIC 0-RTT mode.
-        struct enable_0rtt
+    using gtls_ticket_ptr = std::unique_ptr<gtls_session_ticket>;
+
+    using gtls_db_validate_cb = std::function<bool(gtls_ticket_ptr, time_t)>;
+    using gtls_db_get_cb = std::function<gtls_ticket_ptr(ustring_view)>;
+    using gtls_db_put_cb = std::function<void(gtls_ticket_ptr, time_t)>;
+
+    namespace opt
+    {
+        /** 0-RTT ticketing:
+                The application has two choices in managing 0-RTT ticket storage and the server-side anti-replay db. Passing
+            either the default-constructed or expiry window constructed struct will signal to the endpoints that all storage
+            will happen internally.
+                The application can also pass ALL callbacks and take full responsiblity for management. In doing so, the user
+            must still pass an expiry window value, as that is given directly to gnutls. The following details enumerate the
+            specifics on the parameters and resulting capacities needed from the application.
+
+            - `gtls_db_validate_cb` : The invocation of this cb provides the session ticket and the current ticket time given
+                by ngtcp2. All tickets should be held through the application chosen expiry window. The server must return
+                true/false in the following circumstances:
+                    - Ticket not found -> store ticket, return true
+                    - Ticket found...
+                        - ...and is expired -> store ticket, return true
+                        - ...and is NOT expired -> KEEP TICKET, return false
+            see:
+           https://www.gnutls.org/manual/html_node/Core-TLS-API.html#gnutls_005fanti_005freplay_005fset_005fadd_005ffunction
+
+
+            - `gtls_db_get_cb` : The invocation is provided one ustring_view storing the ticket key. The application will
+                return the session ticket in a unique ptr, or nullptr if not found. This can be constructed using the static
+                gtls_session_ticket::make(...) overrides provded. If the endpoint successfully fetches the ticket, it must
+                ERASE THE ENTRY. Servers will reject already used tokens in their cb, so the client must not store them.
+
+            - `gtls_db_put_cb` : The invocation is provided one gtls_session_ticket held in a unique pointer and the expiry
+                time for the entry. This can be queried independently at any time using the gnutls method
+                `gnutls_db_check_entry_expire_time`, but why be redundant?
+
+            Note: If one callback is provided, all the other must be as well. Endpoints are bi-directional in libquic, so
+                the sever-only validate hooks and client-only get/put hooks must be provided together.
+         */
+        struct enable_0rtt_ticketing
         {
             std::chrono::milliseconds window{DEFAULT_ANTI_REPLAY_WINDOW};
+
+            gtls_db_validate_cb _check = nullptr;
+            gtls_db_get_cb _fetch = nullptr;
+            gtls_db_put_cb _put = nullptr;
+
+            explicit enable_0rtt_ticketing(std::chrono::milliseconds w) : window{w} {}
+
+            explicit enable_0rtt_ticketing(
+                    std::chrono::milliseconds w, gtls_db_validate_cb v, gtls_db_get_cb g, gtls_db_put_cb p) :
+                    window{w}, _check{std::move(v)}, _fetch{std::move(g)}, _put{std::move(p)}
+            {
+                if (not(_check and _fetch and _put))
+                    throw std::invalid_argument{"All callbacks must be set!"};
+            }
         };
     }  //  namespace opt
 }  // namespace oxen::quic

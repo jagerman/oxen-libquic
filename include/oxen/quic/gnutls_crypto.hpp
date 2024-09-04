@@ -8,7 +8,7 @@
 #include <variant>
 
 #include "crypto.hpp"
-#include "utils.hpp"
+#include "types.hpp"
 
 namespace oxen::quic
 {
@@ -222,8 +222,7 @@ namespace oxen::quic
         //
         // Hidden behind a template so that implicit conversion to pointer doesn't cause trouble via
         // other unwanted implicit conversions.
-        template <typename T>
-            requires std::same_as<T, gnutls_datum_t>
+        template <concepts::gtls_datum_type T>
         operator const T*() const
         {
             return &mem;
@@ -264,6 +263,9 @@ namespace oxen::quic
 
     struct gtls_session_ticket
     {
+        friend class Endpoint;
+        friend class Connection;
+
         std::vector<unsigned char> _key;
         std::vector<unsigned char> _ticket;
         gnutls_datum_t _data;
@@ -278,6 +280,14 @@ namespace oxen::quic
             _data.size = _ticket.size();
         }
 
+        explicit gtls_session_ticket(ustring_view key, ustring_view ticket) :
+                gtls_session_ticket{
+                        key.data(),
+                        static_cast<unsigned int>(key.size()),
+                        ticket.data(),
+                        static_cast<unsigned int>(ticket.size())}
+        {}
+
         gtls_session_ticket(const gnutls_datum_t* key, const gnutls_datum_t* ticket) :
                 gtls_session_ticket{key->data, key->size, ticket->data, ticket->size}
         {}
@@ -290,7 +300,26 @@ namespace oxen::quic
                         static_cast<unsigned int>(t._ticket.size())}
         {}
 
-        ustring_view key() { return {_key.data(), _key.size()}; }
+        gtls_session_ticket& operator=(gtls_session_ticket&& other)
+        {
+            _key = std::move(other._key);
+            _ticket = std::move(other._ticket);
+            _data.data = _ticket.data();
+            _data.size = _ticket.size();
+            return *this;
+        }
+
+        static std::unique_ptr<gtls_session_ticket> make(ustring_view key, ustring_view ticket)
+        {
+            return std::make_unique<gtls_session_ticket>(key, ticket);
+        }
+
+        static std::unique_ptr<gtls_session_ticket> make(gtls_session_ticket&& g)
+        {
+            return std::make_unique<gtls_session_ticket>(std::move(g));
+        }
+
+        ustring_view key() const { return {_key.data(), _key.size()}; }
 
         bool operator==(const gtls_session_ticket& other) const { return _ticket == other._ticket; }
 
@@ -299,14 +328,12 @@ namespace oxen::quic
             return gnutls_memcmp(_data.data, other->data, _data.size) == 0;
         }
 
-        template <typename T>
-            requires std::same_as<T, gnutls_datum_t>
+        template <concepts::gtls_datum_type T>
         operator T*()
         {
             return &_data;
         }
-        template <typename T>
-            requires std::same_as<T, gnutls_datum_t>
+        template <concepts::gtls_datum_type T>
         operator const T*() const
         {
             return &_data;
@@ -404,9 +431,8 @@ namespace std
     {
         size_t operator()(const oxen::quic::gtls_session_ticket& t) const noexcept
         {
-            auto h = hash<string_view>{}(oxen::quic::to_sv(oxen::quic::ustring_view{t._ticket.data(), t._ticket.size()}));
-            h ^= hash<string_view>{}(oxen::quic::to_sv(oxen::quic::ustring_view{t._key.data(), t._key.size()})) +
-                 oxen::quic::inverse_golden_ratio + (h << 7) + (h >> 3);
+            auto h = hash<oxen::quic::ustring_view>{}(oxen::quic::ustring_view{t._ticket.data(), t._ticket.size()});
+            h ^= hash<oxen::quic::ustring_view>{}(t.key()) + oxen::quic::inverse_golden_ratio + (h << 7) + (h >> 3);
             return h;
         }
     };

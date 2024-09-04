@@ -19,7 +19,7 @@ namespace oxen::quic
             sin6.sin6_port = oxenc::host_to_big(port);
             _addr.addrlen = sizeof(sockaddr_in6);
             if (!addr.empty())
-                parse_addr(sin6.sin6_addr, addr);
+                detail::parse_addr(sin6.sin6_addr, addr);
             else
                 // Otherwise default to all-0 IPv6 address with the dual stack flag enabled
                 dual_stack = true;
@@ -33,7 +33,7 @@ namespace oxen::quic
 #ifdef OXEN_LIBQUIC_ADDRESS_NO_DUAL_STACK
             if (!addr.empty())
 #endif
-                parse_addr(sin4.sin_addr, addr);
+                detail::parse_addr(sin4.sin_addr, addr);
         }
     }
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -15,7 +14,6 @@
 #include "context.hpp"
 #include "format.hpp"
 #include "types.hpp"
-#include "utils.hpp"
 
 namespace oxen::quic
 {
@@ -24,9 +22,6 @@ namespace oxen::quic
 
     inline constexpr uint64_t MAX_ACTIVE_CIDS{8};
     inline constexpr size_t NGTCP2_RETRY_SCIDLEN{18};
-
-    template <typename T>
-    concept StreamDerived = std::derived_from<T, Stream>;
 
     class connection_interface : public std::enable_shared_from_this<connection_interface>
     {
@@ -45,7 +40,7 @@ namespace oxen::quic
         /// ID; it will be made ready once the associated stream id is seen from the remote
         /// connection.  Note that this constructor bypasses the stream constructor callback for the
         /// applicable stream id.
-        template <StreamDerived StreamT, typename... Args, typename EndpointDeferred = Endpoint>
+        template <concepts::stream_derived_type StreamT, typename... Args, typename EndpointDeferred = Endpoint>
         std::shared_ptr<StreamT> queue_incoming_stream(Args&&... args)
         {
             // We defer resolution of `Endpoint` here via `EndpointDeferred` because the header only
@@ -70,7 +65,7 @@ namespace oxen::quic
         /// such as from an increase in available stream ids resulting from the closure of an
         /// existing stream.  Note that this constructor bypasses the stream constructor callback
         /// for the applicable stream id.
-        template <StreamDerived StreamT, typename... Args, typename EndpointDeferred = Endpoint>
+        template <concepts::stream_derived_type StreamT, typename... Args, typename EndpointDeferred = Endpoint>
             requires std::derived_from<StreamT, Stream>
         std::shared_ptr<StreamT> open_stream(Args&&... args)
         {
@@ -90,7 +85,7 @@ namespace oxen::quic
         /// StreamT is specified, is of the given Stream subclass).  Returns nullptr if the id is
         /// not currently an open stream; throws std::invalid_argument if the stream exists but is
         /// not an instance of the given StreamT type.
-        template <StreamDerived StreamT = Stream>
+        template <concepts::stream_derived_type StreamT = Stream>
         std::shared_ptr<StreamT> maybe_stream(int64_t id)
         {
             auto s = get_stream_impl(id);
@@ -111,7 +106,7 @@ namespace oxen::quic
         /// StreamT is specified, is of the given Stream subclass).  Otherwise throws
         /// std::out_of_range if the stream was not found, and std::invalid_argument if the stream
         /// was found, but is not an instance of StreamT.
-        template <StreamDerived StreamT = Stream>
+        template <concepts::stream_derived_type StreamT = Stream>
         std::shared_ptr<StreamT> get_stream(int64_t id)
         {
             if (auto s = maybe_stream<StreamT>(id))

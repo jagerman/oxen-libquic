@@ -7,14 +7,7 @@ extern "C"
 #else
 #include <netinet/in.h>
 #endif
-#include <gnutls/crypto.h>
-#include <gnutls/gnutls.h>
-#include <ngtcp2/ngtcp2.h>
-#include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_gnutls.h>
 }
-
-#include <event2/event.h>
 
 #include <cstddef>
 #include <list>
@@ -42,8 +35,6 @@ namespace oxen::quic
                 (0 + ... + std::is_convertible_v<std::remove_cvref_t<Opt>, std::shared_ptr<TLSCreds>>) == 1,
                 "Endpoint listen/connect require exactly one std::shared_ptr<TLSCreds> argument");
     }
-
-    // struct gtls_session_ticket;
 
     class Endpoint : public std::enable_shared_from_this<Endpoint>
     {
@@ -206,17 +197,23 @@ namespace oxen::quic
         bool zero_rtt_enabled() const { return _0rtt_enabled; }
         unsigned int zero_rtt_window() const { return _0rtt_window; }
 
+        gtls_db_validate_cb _validate_0rtt_ticket;
+
+        gtls_db_get_cb _get_session_ticket;
+
+        gtls_db_put_cb _put_session_ticket;
+
         int validate_anti_replay(gtls_session_ticket ticket, time_t exp);
 
         void store_session_ticket(gtls_session_ticket ticket);
 
-        std::optional<gtls_session_ticket> get_session_ticket(const ustring_view& remote_pk);
+        gtls_ticket_ptr get_session_ticket(const ustring_view& remote_pk);
 
       private:
         friend class Network;
         friend class Loop;
         friend class Connection;
-        friend struct Callbacks;
+        friend struct connection_callbacks;
         friend class TestHelper;
 
         Network& net;
@@ -245,7 +242,7 @@ namespace oxen::quic
         std::chrono::nanoseconds handshake_timeout{DEFAULT_HANDSHAKE_TIMEOUT};
 
         std::unordered_map<ustring_view, gtls_session_ticket> session_tickets;
-        std::unordered_map<ustring, ustring> session_resumption_data;
+        std::unordered_map<ustring_view, gtls_ticket_ptr> _session_tickets;
         std::unordered_map<ustring, ustring> encoded_transport_params;
         std::unordered_map<ustring, ustring> path_validation_tokens;
 
@@ -266,7 +263,7 @@ namespace oxen::quic
         void handle_ep_opt(connection_closed_callback conn_closed_cb);
         void handle_ep_opt(opt::static_secret ssecret);
         void handle_ep_opt(opt::manual_routing mrouting);
-        void handle_ep_opt(opt::enable_0rtt rtt);
+        void handle_ep_opt(opt::enable_0rtt_ticketing rtt);
 
         // Takes a std::optional-wrapped option that does nothing if the optional is empty,
         // otherwise passes it through to the above.  This is here to allow runtime-dependent

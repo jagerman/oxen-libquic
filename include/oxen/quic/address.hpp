@@ -6,7 +6,7 @@
 
 #include "formattable.hpp"
 #include "ip.hpp"
-#include "utils.hpp"
+#include "types.hpp"
 
 #if defined(__OpenBSD__) || defined(__DragonFly__)
 // These systems are known to disallow dual stack binding, and so on such systems when
@@ -24,9 +24,6 @@
 namespace oxen::quic
 {
     inline constexpr std::array<uint8_t, 16> _ipv6_any_addr = {0};
-
-    template <typename T>
-    concept RawSockAddr = std::same_as<T, sockaddr> || std::same_as<T, sockaddr_in> || std::same_as<T, sockaddr_in6>;
 
     // Holds an address, with a ngtcp2_addr held for easier passing into ngtcp2 functions
     struct Address
@@ -71,7 +68,7 @@ namespace oxen::quic
         explicit Address(const ipv6& v6, uint16_t port = 0);
 
         // Assignment from a sockaddr pointer; we copy the sockaddr's contents
-        template <RawSockAddr T>
+        template <concepts::raw_sockaddr_type T>
         Address& operator=(const T* s)
         {
             _addr.addrlen = std::is_same_v<T, sockaddr>
@@ -215,12 +212,12 @@ namespace oxen::quic
         // pointer to other things (like bool) won't occur.
         //
         // If the given pointer is mutated you *must* call update_socklen() afterwards.
-        template <RawSockAddr T>
+        template <concepts::raw_sockaddr_type T>
         operator T*()
         {
             return reinterpret_cast<T*>(&_sock_addr);
         }
-        template <RawSockAddr T>
+        template <concepts::raw_sockaddr_type T>
         operator const T*() const
         {
             return reinterpret_cast<const T*>(&_sock_addr);

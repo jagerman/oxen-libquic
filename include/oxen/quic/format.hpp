@@ -48,7 +48,7 @@ namespace oxen::quic
 
 namespace fmt
 {
-    template <oxen::quic::ToStringFormattable T>
+    template <oxen::quic::concepts::ToStringFormattable T>
     struct formatter<T, char> : formatter<std::string_view>
     {
         template <typename FormatContext>
