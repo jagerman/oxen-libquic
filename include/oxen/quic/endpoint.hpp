@@ -197,16 +197,8 @@ namespace oxen::quic
         bool zero_rtt_enabled() const { return _0rtt_enabled; }
         unsigned int zero_rtt_window() const { return _0rtt_window; }
 
-        gtls_db_validate_cb _validate_0rtt_ticket;
-
-        gtls_db_get_cb _get_session_ticket;
-
-        gtls_db_put_cb _put_session_ticket;
-
         int validate_anti_replay(gtls_session_ticket ticket, time_t exp);
-
         void store_session_ticket(gtls_session_ticket ticket);
-
         gtls_ticket_ptr get_session_ticket(const ustring_view& remote_pk);
 
       private:
@@ -229,6 +221,10 @@ namespace oxen::quic
         opt::manual_routing _manual_routing;
         bool _0rtt_enabled{false};
         unsigned int _0rtt_window{};
+
+        gtls_db_validate_cb _validate_0rtt_ticket;
+        gtls_db_get_cb _get_session_ticket;
+        gtls_db_put_cb _put_session_ticket;
 
         uint64_t _next_rid{0};
 

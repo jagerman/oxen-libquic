@@ -83,4 +83,13 @@ namespace oxen::quic
         log::trace(log_cat, "IO context stored connection closed callback");
         conn_closed_cb = std::move(func);
     }
+
+    void IOContext::handle_ioctx_opt(opt::disable_key_verification)
+    {
+        log::warning(
+                log_cat,
+                "IOContext disabling key verification for {}bound connections!",
+                dir == Direction::INBOUND ? "in" : "out");
+        disable_key_verification = true;
+    }
 }  // namespace oxen::quic

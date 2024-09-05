@@ -19,11 +19,13 @@ namespace oxen::quic
 
     class TLSSession;
     class Connection;
+    struct IOContext;
 
     class TLSCreds
     {
       public:
-        virtual std::unique_ptr<TLSSession> make_session(Connection& c, const std::vector<ustring>& alpns) = 0;
+        virtual std::unique_ptr<TLSSession> make_session(
+                Connection& c, const std::shared_ptr<IOContext>& ctx, const std::vector<ustring>& alpns) = 0;
         virtual ~TLSCreds() = default;
     };
 

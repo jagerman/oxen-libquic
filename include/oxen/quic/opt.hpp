@@ -261,5 +261,11 @@ namespace oxen::quic
                     throw std::invalid_argument{"All callbacks must be set!"};
             }
         };
+
+        /** This can be passed on endpoint creation to turn OFF key verification in the handshake process. This can be passed
+            to either endpoint::listen(...) or endpoint::connect(...) to disable it for that tls session
+         */
+        struct disable_key_verification
+        {};
     }  //  namespace opt
 }  // namespace oxen::quic

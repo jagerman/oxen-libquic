@@ -46,6 +46,7 @@ namespace oxen::quic
         connection_established_callback conn_established_cb;
         connection_closed_callback conn_closed_cb;
         user_config config{};
+        bool disable_key_verification = false;
 
         template <typename... Opt>
         IOContext(Direction d, Opt&&... opts) : dir{d}
@@ -73,6 +74,7 @@ namespace oxen::quic
         void handle_ioctx_opt(dgram_data_callback func);
         void handle_ioctx_opt(connection_established_callback func);
         void handle_ioctx_opt(connection_closed_callback func);
+        void handle_ioctx_opt(opt::disable_key_verification db);
 
         /// Unwraps an optional option: does nothing if nullopt, otherwise applies the option.  This
         /// is here to make runtime-dependent options (i.e. options whose presence depends on a

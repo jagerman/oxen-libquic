@@ -43,34 +43,6 @@ namespace oxen::quic
         {
             log::debug(log_cat, "GNUTLS Log (level {}): {}", level, str);
         }
-
-        // Return value: 0 is pass, negative is fail
-        int cert_verify_callback_gnutls(gnutls_session_t session)
-        {
-            log::debug(log_cat, "{} called", __PRETTY_FUNCTION__);
-            auto* conn = get_connection_from_gnutls(session);
-
-            GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
-            assert(tls_session);
-
-            bool success = false;
-            auto local_name = (conn->is_outbound()) ? "CLIENT" : "SERVER";
-
-            //  true: Peer provided a valid cert; connection is accepted and marked validated
-            //  false: Peer either provided an invalid cert or no cert; connection is rejected
-            if (success = tls_session->validate_remote_key(); success)
-                conn->set_validated();
-
-            auto err = "Quic {} was {}able to validate peer certificate; {} connection!"_format(
-                    local_name, success ? "" : "un", success ? "accepting" : "rejecting");
-
-            if (success)
-                log::debug(log_cat, "{}", err);
-            else
-                log::error(log_cat, "{}", err);
-
-            return !success;
-        }
     }
 
     void GNUTLSCreds::load_keys(x509_loader& s, x509_loader& pk)
@@ -139,8 +111,6 @@ namespace oxen::quic
 
             throw std::runtime_error("gnutls key exchange algorithm priority setup failed");
         }
-
-        gnutls_certificate_set_verify_function(cred, cert_verify_callback_gnutls);
     }
 
     GNUTLSCreds::~GNUTLSCreds()
@@ -168,8 +138,9 @@ namespace oxen::quic
         return p;
     }
 
-    std::unique_ptr<TLSSession> GNUTLSCreds::make_session(Connection& c, const std::vector<ustring>& alpns)
+    std::unique_ptr<TLSSession> GNUTLSCreds::make_session(
+            Connection& c, const std::shared_ptr<IOContext>& ctx, const std::vector<ustring>& alpns)
     {
-        return std::make_unique<GNUTLSSession>(*this, c, alpns);
+        return std::make_unique<GNUTLSSession>(*this, ctx, c, alpns);
     }
 }  // namespace oxen::quic

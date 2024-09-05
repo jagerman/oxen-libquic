@@ -1588,7 +1588,7 @@ namespace oxen::quic
         if (rv = init(settings, params, callbacks, handshake_timeout); rv != 0)
             log::critical(log_cat, "Error: {} connection not created", d_str);
 
-        tls_session = tls_creds->make_session(*this, alpns);
+        tls_session = tls_creds->make_session(*this, context, alpns);
 
         if (is_outbound())
         {

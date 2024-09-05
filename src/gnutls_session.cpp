@@ -59,6 +59,34 @@ namespace oxen::quic
         return 0;
     }
 
+    // Return value: 0 is pass, negative is fail
+    int gtls_session_callbacks::cert_verify_callback_gnutls(gnutls_session_t session)
+    {
+        log::debug(log_cat, "{} called", __PRETTY_FUNCTION__);
+        auto* conn = get_connection_from_gnutls(session);
+
+        GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
+        assert(tls_session);
+
+        bool success = false;
+        auto local_name = (conn->is_outbound()) ? "CLIENT" : "SERVER";
+
+        //  true: Peer provided a valid cert; connection is accepted and marked validated
+        //  false: Peer either provided an invalid cert or no cert; connection is rejected
+        if (success = tls_session->validate_remote_key(); success)
+            conn->set_validated();
+
+        auto err = "Quic {} was {}able to validate peer certificate; {} connection!"_format(
+                local_name, success ? "" : "un", success ? "accepting" : "rejecting");
+
+        if (success)
+            log::debug(log_cat, "{}", err);
+        else
+            log::error(log_cat, "{}", err);
+
+        return !success;
+    }
+
     Connection* get_connection_from_gnutls(gnutls_session_t g_session)
     {
         auto* conn_ref = static_cast<ngtcp2_crypto_conn_ref*>(gnutls_session_get_ptr(g_session));
@@ -88,7 +116,11 @@ namespace oxen::quic
     }
 
     GNUTLSSession::GNUTLSSession(
-            GNUTLSCreds& creds, Connection& c, const std::vector<ustring>& alpns, std::optional<gnutls_key> expected_key) :
+            GNUTLSCreds& creds,
+            const std::shared_ptr<IOContext>& ctx,
+            Connection& c,
+            const std::vector<ustring>& alpns,
+            std::optional<gnutls_key> expected_key) :
             creds{creds}, session_ticket_key{}, is_client{c.is_outbound()}, _0rtt_enabled{c.zero_rtt_enabled()}
     {
         log::trace(log_cat, "Entered {}", __PRETTY_FUNCTION__);
@@ -271,6 +303,14 @@ namespace oxen::quic
                 throw std::runtime_error("gnutls_alpn_set_protocols failed");
             }
         }
+
+        if (not ctx->disable_key_verification)
+        {
+            log::debug(log_cat, "Setting key verify hook for {}bound session...", is_client ? "out" : "in");
+            gnutls_session_set_verify_function(session, gtls_session_callbacks::cert_verify_callback_gnutls);
+        }
+        else
+            log::info(log_cat, "Key verification has been turned OFF for this session!");
     }
 
     int GNUTLSSession::send_session_ticket()

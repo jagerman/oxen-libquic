@@ -136,6 +136,8 @@ namespace oxen::quic
                 unsigned when,
                 unsigned int incoming,
                 const gnutls_datum_t* msg);
+
+        static int cert_verify_callback_gnutls(gnutls_session_t session);
     };
 
 }  // namespace oxen::quic

@@ -28,8 +28,6 @@ namespace oxen::quic
 
         void gnutls_log(int level, const char* str);
 
-        int anti_replay_db_add_func(void* dbf, time_t exp_time, const gnutls_datum_t* key, const gnutls_datum_t* data);
-
         struct gnutls_log_setter
         {
             gnutls_log_setter()
@@ -364,7 +362,8 @@ namespace oxen::quic
         gnutls_priority_t priority_cache;
 
       public:
-        std::unique_ptr<TLSSession> make_session(Connection& c, const std::vector<ustring>& alpns) override;
+        std::unique_ptr<TLSSession> make_session(
+                Connection& c, const std::shared_ptr<IOContext>&, const std::vector<ustring>& alpns) override;
 
         void load_keys(x509_loader& seed, x509_loader& pk);
 
@@ -391,6 +390,7 @@ namespace oxen::quic
       public:
         GNUTLSSession(
                 GNUTLSCreds& creds,
+                const std::shared_ptr<IOContext>& ctx,
                 Connection& c,
                 const std::vector<ustring>& alpns,
                 std::optional<gnutls_key> expected_key = std::nullopt);
