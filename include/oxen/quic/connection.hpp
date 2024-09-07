@@ -315,6 +315,8 @@ namespace oxen::quic
         bool zero_rtt_enabled() const { return _0rtt_enabled; }
         unsigned int zero_rtt_window() const { return _0rtt_window; }
 
+        bool stateless_reset_enabled() const { return _stateless_reset_enabled; }
+
         std::optional<size_t> max_datagram_size_changed() override;
 
         // public debug functions; to be removed with friend test fixture class
@@ -340,13 +342,19 @@ namespace oxen::quic
 
         void store_associated_cid(const quic_cid& cid);
 
+        void delete_associated_cid(const quic_cid& cid);
+
         std::unordered_set<quic_cid>& associated_cids() { return _associated_cids; }
 
         int client_handshake_completed();
 
         int server_handshake_completed();
 
-        int server_path_validation(const ngtcp2_path* path);
+        int recv_stateless_reset(std::shared_ptr<gtls_reset_token> tok);
+
+        int client_path_validation(const ngtcp2_path* path, bool res, uint32_t flags);
+
+        int server_path_validation(const ngtcp2_path* path, bool res, uint32_t flags);
 
         void set_new_path(Path new_path);
 
@@ -394,8 +402,10 @@ namespace oxen::quic
 
         Path _path;
 
-        const bool _0rtt_enabled{false};
+        bool _0rtt_enabled{false};
         const unsigned int _0rtt_window{};
+
+        bool _stateless_reset_enabled{false};
 
         const uint64_t _max_streams{DEFAULT_MAX_BIDI_STREAMS};
         const bool _datagrams_enabled{false};

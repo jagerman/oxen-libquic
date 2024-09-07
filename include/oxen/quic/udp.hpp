@@ -35,23 +35,25 @@ namespace oxen::quic
     {
         Path path;
         ngtcp2_pkt_info pkt_info{};
-        std::variant<bstring_view, bstring> pkt_data;
+        std::vector<std::byte> pkt_data;
 
+        size_t size() const { return pkt_data.size(); }
+
+        // Return a string_view type, starting from index `pos`
         template <oxenc::basic_char Char = std::byte>
-        std::basic_string_view<Char> data() const
+        std::basic_string_view<Char> data(size_t pos = 0) const
         {
-            return std::visit(
-                    [](const auto& d) {
-                        return std::basic_string_view<Char>{reinterpret_cast<const Char*>(d.data()), d.size()};
-                    },
-                    pkt_data);
+            return std::basic_string_view<Char>{reinterpret_cast<const Char*>(pkt_data.data() + pos), pkt_data.size()};
         }
 
         /// Constructs a packet from a path and data view:
-        Packet(Path p, bstring_view d) : path{std::move(p)}, pkt_data{std::move(d)} {}
+        Packet(Path p, bstring_view d) : path{std::move(p)}, pkt_data{d.begin(), d.end()} {}
 
         /// Constructs a packet from a path and transferred data:
-        Packet(Path p, bstring&& d) : path{std::move(p)}, pkt_data{std::move(d)} {}
+        Packet(Path p, bstring&& d) : path{std::move(p)}, pkt_data(d.size())
+        {
+            std::memmove(pkt_data.data(), d.data(), d.size());
+        }
 
         /// Constructs a packet from a local address, data, and the IP header; remote addr and ECN
         /// data are extracted from the header.

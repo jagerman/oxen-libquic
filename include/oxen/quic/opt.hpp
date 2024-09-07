@@ -228,7 +228,7 @@ namespace oxen::quic
                         - ...and is expired -> store ticket, return true
                         - ...and is NOT expired -> KEEP TICKET, return false
             see:
-           https://www.gnutls.org/manual/html_node/Core-TLS-API.html#gnutls_005fanti_005freplay_005fset_005fadd_005ffunction
+            https://www.gnutls.org/manual/html_node/Core-TLS-API.html#gnutls_005fanti_005freplay_005fset_005fadd_005ffunction
 
 
             - `gtls_db_get_cb` : The invocation is provided one ustring_view storing the ticket key. The application will
@@ -251,6 +251,8 @@ namespace oxen::quic
             gtls_db_get_cb _fetch = nullptr;
             gtls_db_put_cb _put = nullptr;
 
+            enable_0rtt_ticketing() = default;
+
             explicit enable_0rtt_ticketing(std::chrono::milliseconds w) : window{w} {}
 
             explicit enable_0rtt_ticketing(
@@ -262,10 +264,23 @@ namespace oxen::quic
             }
         };
 
-        /** This can be passed on endpoint creation to turn OFF key verification in the handshake process. This can be passed
+        /** Handshake Key Verification:
+            This can be passed on endpoint creation to turn OFF key verification in the handshake process. This can be passed
             to either endpoint::listen(...) or endpoint::connect(...) to disable it for that tls session
          */
         struct disable_key_verification
+        {};
+
+        /** Stateless Reset Tokens:
+            This can be passed on endpoint creation to turn ON stateless reset tokens. This will result in few main
+            functional differences:
+                - When processing incoming packets, if both the dcid cannot be matched to an active connection and calls to
+                    `ngtcp2_accept` are unsuccessful, then a stateless reset packet will be sent
+                -
+
+            Note: DO NOT ENABLE STATELESS RESET AMONGST ENDPOINTS SHARING THE SAME STATIC KEY
+         */
+        struct enable_stateless_reset
         {};
     }  //  namespace opt
 }  // namespace oxen::quic

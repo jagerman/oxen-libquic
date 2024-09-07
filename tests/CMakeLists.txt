@@ -40,6 +40,7 @@ if(LIBQUIC_BUILD_TESTS)
         011-manual_transmission.cpp
         012-watermarks.cpp
         013-eventhandler.cpp
+        014-0rtt-resets.cpp
 
         main.cpp
         case_logger.cpp

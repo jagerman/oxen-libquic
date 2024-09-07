@@ -124,6 +124,8 @@ namespace oxen::quic
                 void* user_data);
 
         static int on_early_data_rejected(ngtcp2_conn* _conn, void* user_data);
+
+        static int recv_stateless_reset(ngtcp2_conn* conn, const ngtcp2_pkt_stateless_reset* sr, void* user_data);
     };
 
     struct gtls_session_callbacks

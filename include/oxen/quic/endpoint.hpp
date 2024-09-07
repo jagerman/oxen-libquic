@@ -222,6 +222,8 @@ namespace oxen::quic
         bool _0rtt_enabled{false};
         unsigned int _0rtt_window{};
 
+        bool _stateless_reset_enabled{false};
+
         gtls_db_validate_cb _validate_0rtt_ticket;
         gtls_db_get_cb _get_session_ticket;
         gtls_db_put_cb _put_session_ticket;
@@ -260,6 +262,7 @@ namespace oxen::quic
         void handle_ep_opt(opt::static_secret ssecret);
         void handle_ep_opt(opt::manual_routing mrouting);
         void handle_ep_opt(opt::enable_0rtt_ticketing rtt);
+        void handle_ep_opt(opt::enable_stateless_reset rst);
 
         // Takes a std::optional-wrapped option that does nothing if the optional is empty,
         // otherwise passes it through to the above.  This is here to allow runtime-dependent
@@ -300,8 +303,6 @@ namespace oxen::quic
 
         void connection_established(connection_interface& conn);
 
-        void store_session_token();
-
         void store_0rtt_transport_params(ustring remote_pk, ustring encoded_params);
 
         std::optional<ustring> get_0rtt_transport_params(const ustring& remote_pk);
@@ -311,6 +312,10 @@ namespace oxen::quic
         std::optional<ustring> get_path_validation_token(const ustring& remote_pk);
 
         void initial_association(Connection& conn);
+
+        void activate_cid(const ngtcp2_cid* cid, const uint8_t* token, Connection& conn);
+
+        void associate_cid(quic_cid qcid, Connection& conn);
 
         void associate_cid(const ngtcp2_cid* cid, Connection& conn);
 
@@ -376,6 +381,10 @@ namespace oxen::quic
 
         std::unordered_map<quic_cid, ConnectionID> conn_lookup;
 
+        // only used if stateless reset enabled
+        std::unordered_map<ConnectionID, std::shared_ptr<gtls_reset_token>> reset_token_lookup;
+        std::unordered_map<std::shared_ptr<gtls_reset_token>, ConnectionID> reset_token_map;
+
         std::map<std::chrono::steady_clock::time_point, ConnectionID> draining_closing;
 
         std::optional<quic_cid> handle_packet_connid(const Packet& pkt);
@@ -390,11 +399,15 @@ namespace oxen::quic
         void send_or_queue_packet(
                 const Path& p, std::vector<std::byte> buf, uint8_t ecn, std::function<void(io_result)> callback = nullptr);
 
+        void send_stateless_reset(const Packet& pkt, quic_cid& cid);
+
+        Connection* check_stateless_reset(const Packet& pkt, quic_cid& cid);
+
         void send_version_negotiation(const ngtcp2_version_cid& vid, Path p);
 
         void check_timeouts();
 
-        Connection* accept_initial_connection(const Packet& pkt);
+        Connection* accept_initial_connection(const Packet& pkt, quic_cid& cid);
     };
 
 }  // namespace oxen::quic

@@ -220,6 +220,13 @@ namespace oxen::quic
 
             if (_0rtt_enabled)
             {
+                if (auto rv = gnutls_session_ticket_enable_client(session); rv != 0)
+                {
+                    auto err = "gnutls_session_ticket_enable_client failed: {}"_format(gnutls_strerror(rv));
+                    log::error(log_cat, "{}", err);
+                    throw std::runtime_error{err};
+                }
+
                 log::trace(log_cat, "Setting client session ticket db hook...");
                 gnutls_handshake_set_hook_function(
                         session,

@@ -7,6 +7,7 @@
 #include <optional>
 #include <variant>
 
+#include "connection_ids.hpp"
 #include "crypto.hpp"
 #include "types.hpp"
 
@@ -336,6 +337,34 @@ namespace oxen::quic
         {
             return &_data;
         }
+    };
+
+    struct Packet;
+
+    struct gtls_reset_token
+    {
+        static constexpr size_t TOKENSIZE{NGTCP2_STATELESS_RESET_TOKENLEN};
+        static constexpr size_t RANDSIZE{NGTCP2_MIN_STATELESS_RESET_RANDLEN};
+
+      private:
+        gtls_reset_token(const uint8_t* _tok, const uint8_t* _rand = nullptr);
+        gtls_reset_token(uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
+
+      public:
+        std::array<uint8_t, TOKENSIZE> _tok{};
+        std::array<uint8_t, RANDSIZE> _rand{};
+
+        const uint8_t* token() { return _tok.data(); }
+        const uint8_t* rand() { return _rand.data(); }
+
+        static void generate_token(uint8_t* buffer, uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
+        static void generate_rand(uint8_t* buffer);
+        static std::shared_ptr<gtls_reset_token> generate(uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
+        static std::shared_ptr<gtls_reset_token> make_copy(const uint8_t* tok_buf, const uint8_t* rand_buf = nullptr);
+        static std::shared_ptr<gtls_reset_token> parse_packet(const Packet& pkt);
+
+        auto operator<=>(const gtls_reset_token& t) const { return std::tie(_tok, _rand) <=> std::tie(t._tok, t._rand); }
+        bool operator==(const gtls_reset_token& t) const { return (*this <=> t) == 0; }
     };
 
     class GNUTLSCreds : public TLSCreds

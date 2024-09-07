@@ -172,27 +172,19 @@ namespace oxen::quic
             ngtcp2_connection_id_status_type type,
             uint64_t /* seq */,
             const ngtcp2_cid* cid,
-            const uint8_t* /* token */,
+            const uint8_t* token,
             void* user_data)
     {
         auto* conn = static_cast<Connection*>(user_data);
+        assert(conn->stateless_reset_enabled());
 
-        auto dir_str = conn->is_inbound() ? "SERVER"s : "CLIENT"s;
-        auto action = type == NGTCP2_CONNECTION_ID_STATUS_TYPE_ACTIVATE ? "ACTIVATING"s : "DEACTIVATING"s;
-        log::trace(log_cat, "{} {} DCID:{}", dir_str, action, oxenc::to_hex(cid->data, cid->data + cid->datalen));
+        auto& ep = conn->endpoint();
 
-        // auto& ep = conn->endpoint();
-
-        switch (type)
+        // if token is not null, map to cid
+        if (token and type == NGTCP2_CONNECTION_ID_STATUS_TYPE_ACTIVATE)
         {
-            case NGTCP2_CONNECTION_ID_STATUS_TYPE_ACTIVATE:
-                // ep.associate_cid(cid, *conn);
-                break;
-            case NGTCP2_CONNECTION_ID_STATUS_TYPE_DEACTIVATE:
-                // ep.dissociate_cid(cid, *conn);
-                break;
-            default:
-                break;
+            log::debug(log_cat, "Activating stateless reset token for new CID from remote: {}", conn->remote());
+            ep.activate_cid(cid, token, *conn);
         }
 
         return 0;
@@ -214,14 +206,8 @@ namespace oxen::quic
             0)
             return NGTCP2_ERR_CALLBACK_FAILURE;
 
-        auto dir_str = conn->is_outbound() ? "CLIENT"s : "SERVER"s;
-        log::trace(log_cat, "{} generated new CID for {}", dir_str, conn->reference_id());
+        log::trace(log_cat, "{} generated new CID for {}", conn->is_outbound() ? "CLIENT" : "SERVER", conn->reference_id());
         ep.associate_cid(cid, *conn);
-
-        // TODO: send new stateless reset token
-        //  write packet using ngtcp2_pkt_write_stateless_reset
-        //  define recv_stateless_reset for client
-        //  set stateless_reset_present in transport params
 
         return 0;
     }
@@ -242,9 +228,8 @@ namespace oxen::quic
             [[maybe_unused]] ngtcp2_conn* _conn, uint64_t /*max_streams*/, void* user_data)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-
+        // removed assert to call this hook in 0rtt connection config
         auto& conn = *static_cast<Connection*>(user_data);
-        assert(_conn == conn);
 
         if (auto remaining = ngtcp2_conn_get_streams_bidi_left(conn); remaining > 0)
             conn.check_pending_streams(remaining);
@@ -265,65 +250,92 @@ namespace oxen::quic
         auto& conn = *static_cast<Connection*>(user_data);
         assert(_conn == conn);
 
-        if (conn.is_outbound())
-        {
-            log::trace(log_cat, "Client updating remote addr...");
-            conn.set_remote_addr(path->remote);
+        auto b = res == NGTCP2_PATH_VALIDATION_RESULT_SUCCESS;
 
-            return 0;
-        }
-        else if (res != NGTCP2_PATH_VALIDATION_RESULT_SUCCESS)
-        {
-            log::debug(log_cat, "Path validation unsuccessful!");
-            return 0;
-        }
-        else if (not(flags & NGTCP2_PATH_VALIDATION_FLAG_NEW_TOKEN))
-        {
-            log::debug(log_cat, "Path validation successful!");
-            return 0;
-        }
+        if (conn.is_outbound())
+            return conn.client_path_validation(path, b, flags);
         else
-            return conn.server_path_validation(path);
+            return conn.server_path_validation(path, b, flags);
     }
 
-    int connection_callbacks::on_early_data_rejected(ngtcp2_conn* _conn, void* user_data)
+    int connection_callbacks::on_early_data_rejected(ngtcp2_conn* _conn [[maybe_unused]], void* user_data)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
         auto& conn = *static_cast<Connection*>(user_data);
         assert(_conn == conn);
 
-        // TODO: close connection
-
-        (void)conn;
-        (void)_conn;
+        log::warning(log_cat, "Client dropping connection; early data rejected by server!");
+        conn.endpoint().drop_connection(conn, io_error{CONN_EARLY_DATA_REJECTED});
 
         return 0;
     }
 
-    void Connection::set_close_quietly()
+    int connection_callbacks::recv_stateless_reset(
+            ngtcp2_conn* _conn [[maybe_unused]], const ngtcp2_pkt_stateless_reset* sr, void* user_data)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
-        _close_quietly = true;
+        auto& conn = *static_cast<Connection*>(user_data);
+        assert(_conn == conn);
+
+        return conn.recv_stateless_reset(gtls_reset_token::make_copy(sr->stateless_reset_token, sr->rand));
     }
 
-    void Connection::set_new_path(Path new_path)
+    int Connection::recv_stateless_reset(std::shared_ptr<gtls_reset_token> tok)
     {
-        _endpoint.call([this, new_path]() { _path = new_path; });
-    }
+        log::trace(log_cat, "Client recv_stateless_reset cb called...");
 
-    int Connection::recv_token(const uint8_t* token, size_t tokenlen)
-    {
-        // This should only be called by the client, and therefore this will always have a value
-        assert(not remote_pubkey.empty());
-        _endpoint.store_path_validation_token(remote_pubkey, {token, tokenlen});
+        if (auto it = _endpoint.reset_token_map.find(tok); it != _endpoint.reset_token_map.end())
+        {
+            log::warning(
+                    log_cat,
+                    "Received stateless reset for connection ({}) on path: {}; closing immediately!",
+                    _ref_id,
+                    _path);
+            _endpoint.drop_connection(*this, io_error{CONN_STATELESS_RESET});
+        }
+        else
+            log::info(log_cat, "Could not match received stateless reset to any connection!");
         return 0;
     }
 
-    int Connection::server_path_validation(const ngtcp2_path* path)
+    int Connection::client_path_validation(const ngtcp2_path* path, bool success, uint32_t flags)
     {
+        log::trace(log_cat, "Client path_validation cb called...");
+        assert(is_outbound());
+
+        if (flags & NGTCP2_PATH_VALIDATION_FLAG_PREFERRED_ADDR)
+        {
+            set_remote_addr(path->remote);
+            log::debug(log_cat, "Client set new remote ({}) on successful path validation...", _path.remote);
+        }
+        else
+            log::warning(
+                    log_cat,
+                    "Client path validation {}; no address was provided by server...",
+                    success ? "succeeded" : "failed");
+
+        return 0;
+    }
+
+    int Connection::server_path_validation(const ngtcp2_path* path, bool success, uint32_t flags)
+    {
+        log::trace(log_cat, "Server path_validation cb called...");
         assert(is_inbound());
+
+        if (not success)
+        {
+            log::warning(log_cat, "Server path validation failed!");
+            return 0;
+        }
+
+        if (not(flags & NGTCP2_PATH_VALIDATION_FLAG_NEW_TOKEN))
+        {
+            log::debug(log_cat, "Server path validation cb did not request a new token...");
+            return 0;
+        }
+
         std::array<uint8_t, NGTCP2_CRYPTO_MAX_REGULAR_TOKENLEN> token;
 
         auto len = ngtcp2_crypto_generate_regular_token(
@@ -349,6 +361,25 @@ namespace oxen::quic
         log::debug(log_cat, "Server completed path validation!");
         return 0;
     }
+    void Connection::set_close_quietly()
+    {
+        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+
+        _close_quietly = true;
+    }
+
+    void Connection::set_new_path(Path new_path)
+    {
+        _endpoint.call([this, new_path]() { _path = new_path; });
+    }
+
+    int Connection::recv_token(const uint8_t* token, size_t tokenlen)
+    {
+        // This should only be called by the client, and therefore this will always have a value
+        assert(not remote_pubkey.empty());
+        _endpoint.store_path_validation_token(remote_pubkey, {token, tokenlen});
+        return 0;
+    }
 
     int Connection::client_handshake_completed()
     {
@@ -361,7 +392,7 @@ namespace oxen::quic
             Moreover, decoding and setting 0RTT transport parameters must be handled in connection creation. Both that
             location and the required callbacks are comment-blocked in the relevant location.
         */
-        if (not tls_session->get_early_data_accepted())
+        if (_0rtt_enabled and not tls_session->get_early_data_accepted())
         {
             log::info(log_cat, "Early data was rejected by server!");
 
@@ -388,8 +419,7 @@ namespace oxen::quic
 
     int Connection::server_handshake_completed()
     {
-        // TODO: uncomment this when 0rtt is implemented
-        // tls_session->send_session_ticket();
+        tls_session->send_session_ticket();
 
         auto path = ngtcp2_conn_get_path(conn.get());
         auto now = get_timestamp().count();
@@ -454,6 +484,12 @@ namespace oxen::quic
     {
         log::debug(log_cat, "Connection (RID:{}) storing associated cid:{}", _ref_id, cid);
         _associated_cids.insert(cid);
+    }
+
+    void Connection::delete_associated_cid(const quic_cid& cid)
+    {
+        log::debug(log_cat, "Connection (RID:{}) deleting associated cid:{}", _ref_id, cid);
+        _associated_cids.erase(cid);
     }
 
     ustring_view Connection::remote_key() const
@@ -1464,7 +1500,6 @@ namespace oxen::quic
         callbacks.rand = connection_callbacks::rand_cb;
         callbacks.get_new_connection_id = connection_callbacks::get_new_connection_id;
         callbacks.remove_connection_id = connection_callbacks::remove_connection_id;
-        callbacks.dcid_status = connection_callbacks::on_connection_id_status;
         callbacks.update_key = ngtcp2_crypto_update_key_cb;
         callbacks.stream_reset = connection_callbacks::on_stream_reset;
         callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
@@ -1473,6 +1508,12 @@ namespace oxen::quic
         callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
         callbacks.stream_open = connection_callbacks::on_stream_open;
         callbacks.handshake_completed = connection_callbacks::on_handshake_completed;
+
+        if (_stateless_reset_enabled)
+        {
+            callbacks.dcid_status = connection_callbacks::on_connection_id_status;
+            log::info(log_cat, "Connection configured to monitor activated dcids and stateless reset tokens");
+        }
 
         ngtcp2_settings_default(&settings);
 
@@ -1553,6 +1594,7 @@ namespace oxen::quic
             _path{path},
             _0rtt_enabled{_endpoint._0rtt_enabled},
             _0rtt_window{_endpoint._0rtt_window},
+            _stateless_reset_enabled{_endpoint._stateless_reset_enabled},
             _max_streams{context->config.max_streams ? context->config.max_streams : DEFAULT_MAX_BIDI_STREAMS},
             _datagrams_enabled{context->config.datagram_support},
             _packet_splitting{context->config.split_packet},
@@ -1596,6 +1638,7 @@ namespace oxen::quic
             callbacks.handshake_confirmed = connection_callbacks::on_handshake_confirmed;
             callbacks.recv_retry = ngtcp2_crypto_recv_retry_cb;
             callbacks.recv_new_token = connection_callbacks::on_recv_token;
+            callbacks.tls_early_data_rejected = connection_callbacks::on_early_data_rejected;
 
             // Clients should be the ones providing a remote pubkey here. This way we can emplace it into
             // the gnutlssession object to be verified. Servers should be verifying via callback
@@ -1603,7 +1646,14 @@ namespace oxen::quic
             remote_pubkey = *remote_pk;
             tls_session->set_expected_remote_key(remote_pubkey);
 
+            if (_stateless_reset_enabled)
+            {
+                callbacks.recv_stateless_reset = connection_callbacks::recv_stateless_reset;
+                log::info(log_cat, "Inbound connection configured to watch for stateless reset packets");
+            }
+
             auto maybe_token = _endpoint.get_path_validation_token(remote_pubkey);
+
             if (maybe_token)
             {
                 settings.token = maybe_token->data();
@@ -1624,14 +1674,34 @@ namespace oxen::quic
 
             if (_0rtt_enabled)
             {
-                if (auto maybe_params = _endpoint.get_0rtt_transport_params(remote_pubkey))
+                auto maybe_params = _endpoint.get_0rtt_transport_params(remote_pubkey);
+                if (not maybe_params)
                 {
-                    if (auto rv = ngtcp2_conn_decode_and_set_0rtt_transport_params(
-                                connptr, maybe_params->data(), maybe_params->size());
-                        rv != 0)
-                        log::warning(log_cat, "Client failed to decode and set 0rtt transport params!");
+                    log::warning(
+                            log_cat,
+                            "Client failed to fetch 0rtt transport params for outbound; disabling 0rtt and proceeding...");
+                    _0rtt_enabled = false;
+                }
+                else
+                {
+                    if (ngtcp2_conn_decode_and_set_0rtt_transport_params(
+                                connptr, maybe_params->data(), maybe_params->size()) != 0)
+                    {
+                        log::warning(
+                                log_cat,
+                                "Client failed to decode and set 0rtt transport params; disabling 0rtt and proceeding...");
+                        _0rtt_enabled = false;
+                    }
                     else
-                        log::info(log_cat, "Client decoded and set 0rtt transport params!");
+                    {
+                        if (connection_callbacks::extend_max_local_streams_bidi(nullptr, 0, this) != 0)
+                        {
+                            log::warning(
+                                    log_cat,
+                                    "Client failed open streams to send early data; disabling 0rtt and proceeding...");
+                            _0rtt_enabled = false;
+                        }
+                    }
                 }
             }
         }
@@ -1651,11 +1721,19 @@ namespace oxen::quic
             }
 
             params.original_dcid_present = 1;
-            // params.stateless_reset_token_present = 1;
             settings.token = hdr->token;
             settings.tokenlen = hdr->tokenlen;
 
-            // gnutls_rnd(GNUTLS_RND_RANDOM, params.stateless_reset_token, NGTCP2_STATELESS_RESET_TOKENLEN);
+            if (_stateless_reset_enabled)
+            {
+                params.stateless_reset_token_present = 1;
+                // generate stateless reset token using scid chosen by server
+                gtls_reset_token::generate_token(
+                        params.stateless_reset_token,
+                        _endpoint._static_secret.data(),
+                        _endpoint._static_secret.size(),
+                        _source_cid);
+            }
 
             if (token_type)
                 settings.token_type = *token_type;

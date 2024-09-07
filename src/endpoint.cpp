@@ -134,6 +134,11 @@ namespace oxen::quic
         };
     }
 
+    void Endpoint::handle_ep_opt(opt::enable_stateless_reset /* rst */)
+    {
+        _stateless_reset_enabled = true;
+    }
+
     ConnectionID Endpoint::next_reference_id()
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
@@ -276,11 +281,20 @@ namespace oxen::quic
         {
             if (_accepting_inbound)
             {
-                cptr = accept_initial_connection(pkt);
+                cptr = accept_initial_connection(pkt, dcid);
 
                 if (!cptr)
                 {
-                    log::warning(log_cat, "Error: connection could not be created");
+                    if (_stateless_reset_enabled)  // must be done within the check for _accepting_inbound
+                    {
+                        send_stateless_reset(pkt, dcid);
+                        log::info(
+                                log_cat,
+                                "Server failed to decode pkt: dispatched reset token to remote ({})",
+                                pkt.path.remote);
+                    }
+                    else
+                        log::warning(log_cat, "Error: connection could not be created");
                     return;
                 }
 
@@ -437,21 +451,31 @@ namespace oxen::quic
 
         conn.halt_events();
 
-        log::debug(log_cat, "Deleting associated CIDs for connection ({})", rid);
+        log::debug(log_cat, "Deleting associated CIDs for connection {}", rid);
 
         if (conn.is_inbound())
         {
             dissociate_cid(ngtcp2_conn_get_client_initial_dcid(conn), conn);
         }
 
-        log::debug(log_cat, "Deleting {} associated CIDs for connection ({})", conn.associated_cids().size(), rid);
-
         auto& cids = conn.associated_cids();
 
-        for (auto itr = cids.begin(); itr != cids.end();)
+        log::debug(log_cat, "Deleting {} associated CIDs for connection {}", cids.size(), rid);
+
+        while (not cids.empty())
         {
+            auto itr = cids.begin();
+            // call to dissociate_cid deletes from cids in Connection object
             dissociate_cid(&*itr, conn);
-            itr = cids.erase(itr);
+        }
+
+        if (_stateless_reset_enabled)
+        {
+            log::debug(log_cat, "Erasing any reset tokens for connection {}", rid);
+            if (reset_token_lookup.contains(rid))
+                reset_token_map.erase(reset_token_lookup[rid]);
+
+            reset_token_lookup.erase(rid);
         }
 
         conn.drop_streams();
@@ -522,38 +546,51 @@ namespace oxen::quic
         log::debug(log_cat, "Connection (RID:{}) completed initial CID association", conn.reference_id());
     }
 
+    void Endpoint::activate_cid(const ngtcp2_cid* cid, const uint8_t* token, Connection& conn)
+    {
+        assert(in_event_loop());
+        log::debug(
+                log_cat,
+                "{} activating reset token for new CID:{} to {}",
+                conn.is_inbound() ? "SERVER" : "CLIENT",
+                quic_cid{*cid},
+                conn.reference_id());
+        associate_cid(cid, conn);
+
+        // We only hold one reset token per connection at a time!
+        auto [it, _] = reset_token_map.emplace(gtls_reset_token::make_copy(token), conn.reference_id());
+        reset_token_lookup[conn.reference_id()] = it->first;
+    }
+
+    void Endpoint::associate_cid(quic_cid qcid, Connection& conn)
+    {
+        assert(in_event_loop());
+        log::trace(
+                log_cat, "{} associating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
+
+        conn_lookup.emplace(qcid, conn.reference_id());
+        conn.store_associated_cid(qcid);
+    }
+
     void Endpoint::associate_cid(const ngtcp2_cid* cid, Connection& conn)
     {
-        auto dir_str = conn.is_inbound() ? "SERVER"s : "CLIENT"s;
-        log::trace(
-                log_cat,
-                "{} associating CID:{} to {}",
-                dir_str,
-                oxenc::to_hex(cid->data, cid->data + cid->datalen),
-                conn.reference_id());
-
         assert(in_event_loop());
-        auto ccid = quic_cid{*cid};
-        conn_lookup.emplace(ccid, conn.reference_id());
-        conn.store_associated_cid(ccid);
+        return associate_cid(quic_cid{*cid}, conn);
     }
 
     void Endpoint::dissociate_cid(const ngtcp2_cid* cid, Connection& conn)
     {
+        assert(in_event_loop());
         if (not cid->datalen)
             return;
 
-        auto dir_str = conn.is_inbound() ? "SERVER"s : "CLIENT"s;
-        log::trace(
-                log_cat,
-                "{} dissociating CID:{} to {}",
-                dir_str,
-                oxenc::to_hex(cid->data, cid->data + cid->datalen),
-                conn.reference_id());
-
-        assert(in_event_loop());
         auto ccid = quic_cid{*cid};
+
+        log::trace(
+                log_cat, "{} dissociating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", ccid, conn.reference_id());
+
         conn_lookup.erase(ccid);
+        conn.delete_associated_cid(ccid);
     }
 
     Connection* Endpoint::fetch_associated_conn(quic_cid& ccid)
@@ -586,11 +623,16 @@ namespace oxen::quic
                     now);
             rv != 0)
         {
-            log::warning(log_cat, "Server could not verify regular token!");
+            log::critical(
+                    log_cat,
+                    "Server (local={}) could not verify regular token! path: [local={}, remote={}]",
+                    _local,
+                    pkt.path.local,
+                    pkt.path.remote);
             return false;
         }
 
-        log::debug(log_cat, "Server successfully verified regular token!");
+        log::critical(log_cat, "Server successfully verified regular token!");
         return true;
     }
 
@@ -618,6 +660,31 @@ namespace oxen::quic
 
         log::debug(log_cat, "Server successfully verified retry token!");
         return true;
+    }
+
+    void Endpoint::send_stateless_reset(const Packet& pkt, quic_cid& cid)
+    {
+        auto token = gtls_reset_token::generate(_static_secret.data(), _static_secret.size(), cid);
+
+        std::vector<std::byte> buf;
+        buf.resize(MAX_PMTUD_UDP_PAYLOAD);
+
+        auto nwrite =
+                ngtcp2_pkt_write_stateless_reset(u8data(buf), buf.size(), token->token(), token->rand(), token->RANDSIZE);
+
+        if (nwrite < 0)
+        {
+            log::warning(log_cat, "Server failed to write stateless reset packet!");
+            return;
+        }
+
+        // map stateless reset
+
+        // ensure we had enough write space
+        assert(static_cast<size_t>(nwrite) <= buf.size());
+        buf.resize(nwrite);
+
+        send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0);
     }
 
     void Endpoint::send_retry(const Packet& pkt, ngtcp2_pkt_hd* hdr)
@@ -741,7 +808,33 @@ namespace oxen::quic
         return std::make_optional<quic_cid>(vid.dcid, vid.dcidlen);
     }
 
-    Connection* Endpoint::accept_initial_connection(const Packet& pkt)
+    Connection* Endpoint::check_stateless_reset(const Packet& pkt, quic_cid& cid)
+    {
+        log::info(log_cat, "Checking last 16B of pkt for stateless reset token...");
+
+        auto gtls_token = gtls_reset_token::parse_packet(pkt);
+
+        if (auto rit = reset_token_map.find(gtls_token); rit != reset_token_map.end())
+        {
+            if (auto cit = conns.find(rit->second); cit != conns.end())
+            {
+                log::info(log_cat, "Matched stateless reset token in unknown packet to connection {}", cit->first);
+                associate_cid(&cid, *cit->second);
+                return cit->second.get();
+            }
+            else
+            {
+                log::warning(log_cat, "Received good stateless reset token but no connection exists for it; deleting entry");
+                reset_token_map.erase(rit);
+            }
+        }
+        else
+            log::info(log_cat, "No stateless reset token match for pkt from remote: {}", pkt.path.remote);
+
+        return nullptr;
+    }
+
+    Connection* Endpoint::accept_initial_connection(const Packet& pkt, quic_cid& dcid)
     {
         log::trace(log_cat, "Accepting new connection...");
 
@@ -752,17 +845,24 @@ namespace oxen::quic
 
         if (rv < 0)  // catches all other possible ngtcp2 errors
         {
-            log::warning(
-                    log_cat,
-                    "Unknown packet received from {}, length={}, code={}; ignoring it.",
-                    pkt.path.remote,
-                    data.size(),
-                    ngtcp2_strerror(rv));
+            if (_stateless_reset_enabled)
+            {
+                // TODO: may not need this if the ngtcp2 cb works as it should...?
+                return check_stateless_reset(pkt, dcid);
+            }
+            else
+                log::warning(
+                        log_cat,
+                        "Unknown packet received from {}, length={}, code={}; ignoring it.",
+                        pkt.path.remote,
+                        data.size(),
+                        ngtcp2_strerror(rv));
             return nullptr;
         }
-        if (hdr.type == NGTCP2_PKT_0RTT)
+
+        if (not _0rtt_enabled and hdr.type == NGTCP2_PKT_0RTT)
         {
-            log::error(log_cat, "0RTT is under development in this implementation; dropping packet");
+            log::error(log_cat, "0-RTT is disabled for this endpoint; dropping 0-RTT packet");
             return nullptr;
         }
 

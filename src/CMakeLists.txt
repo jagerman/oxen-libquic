@@ -12,6 +12,7 @@ add_library(quic
     endpoint.cpp
     error.cpp
     format.cpp
+    gnutls_crypto.cpp
     gnutls_creds.cpp
     gnutls_session.cpp
     iochannel.cpp
