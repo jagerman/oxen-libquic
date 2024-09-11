@@ -303,6 +303,14 @@ namespace oxen::quic
         return std::make_pair(std::move(it), offset);
     }
 
+    void Stream::revert_stream()
+    {
+        assert(endpoint.in_event_loop());
+        log::trace(log_cat, "Stream (ID:{}) reverting after early data rejected...", _stream_id);
+        _unacked_size = 0;
+        log::debug(log_cat, "Stream (ID:{}) has {}B in buffer, 0B unacacked...", _stream_id, size());
+    }
+
     std::vector<ngtcp2_vec> Stream::pending()
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);

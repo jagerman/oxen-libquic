@@ -35,6 +35,7 @@ namespace oxen::quic
     {
         if (htype == GNUTLS_HANDSHAKE_NEW_SESSION_TICKET)
         {
+            log::debug(log_cat, "Client received new session ticket from server!");
             auto* conn = get_connection_from_gnutls(session);
             auto remote_key = conn->remote_key();
             auto& ep = conn->endpoint();

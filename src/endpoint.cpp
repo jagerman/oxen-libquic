@@ -94,9 +94,7 @@ namespace oxen::quic
         _validate_0rtt_ticket = rtt._check ? std::move(rtt._check) : [this](gtls_ticket_ptr ticket, time_t current) -> bool {
             auto key = ticket->key();
 
-            // auto [it, b] = _session_tickets.try_emplace(key, ticket);
-
-            if (auto it = _session_tickets.find(key); it != _session_tickets.end())
+            if (auto it = session_tickets.find(key); it != session_tickets.end())
             {
                 if (auto exp = gnutls_db_check_entry_expire_time(*it->second); current < exp)
                 {
@@ -107,16 +105,16 @@ namespace oxen::quic
                 log::debug(log_cat, "Found expired anti-replay ticket for incoming connection");
             }
 
-            _session_tickets[std::move(key)] = std::move(ticket);
+            session_tickets[std::move(key)] = std::move(ticket);
             return 0;
         };
 
         _get_session_ticket = rtt._fetch ? std::move(rtt._fetch) : [this](ustring_view key) -> gtls_ticket_ptr {
             gtls_ticket_ptr ret = nullptr;
-            if (auto it = _session_tickets.find(key); it != _session_tickets.end())
+            if (auto it = session_tickets.find(key); it != session_tickets.end())
             {
                 ret = std::move(it->second);
-                _session_tickets.erase(it);
+                session_tickets.erase(it);
                 log::debug(log_cat, "Found session ticket for remote; entry extracted and returned...");
             }
             else
@@ -127,7 +125,7 @@ namespace oxen::quic
 
         _put_session_ticket = rtt._put ? std::move(rtt._put) : [this](gtls_ticket_ptr ticket, time_t /* exp */) {
             auto key = ticket->key();
-            auto [_, b] = _session_tickets.insert_or_assign(std::move(key), std::move(ticket));
+            auto [_, b] = session_tickets.insert_or_assign(std::move(key), std::move(ticket));
 
             log::debug(
                     log_cat, "Stored anti-replay ticket for connection to remote{}!", b ? "" : "; old ticket overwritten");
@@ -501,25 +499,25 @@ namespace oxen::quic
 
     void Endpoint::store_session_ticket(gtls_session_ticket ticket)
     {
+        log::trace(log_cat, "Storing session ticket...");
         return _put_session_ticket(gtls_session_ticket::make(std::move(ticket)), 0);
-        auto key = ticket.key();
-        auto [_, b] = session_tickets.insert_or_assign(std::move(key), std::move(ticket));
-
-        log::debug(log_cat, "Stored anti-replay ticket for connection to remote{}!", b ? "" : "; old ticket overwritten");
     }
 
     gtls_ticket_ptr Endpoint::get_session_ticket(const ustring_view& remote_pk)
     {
+        log::trace(log_cat, "Fetching session ticket (remote key: {})...", buffer_printer{remote_pk});
         return _get_session_ticket(remote_pk);
     }
 
     void Endpoint::store_0rtt_transport_params(ustring remote_pk, ustring encoded_params)
     {
+        log::trace(log_cat, "Storing 0rtt tranpsport params...");
         encoded_transport_params.insert_or_assign(std::move(remote_pk), std::move(encoded_params));
     }
 
     std::optional<ustring> Endpoint::get_0rtt_transport_params(const ustring& remote_pk)
     {
+        log::trace(log_cat, "Fetching 0rtt transport params...");
         if (auto itr = encoded_transport_params.find(remote_pk); itr != encoded_transport_params.end())
             return itr->second;
 

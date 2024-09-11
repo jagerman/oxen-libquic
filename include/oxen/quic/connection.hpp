@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 
 #include "connection_ids.hpp"
@@ -236,6 +237,7 @@ namespace oxen::quic
     {
         friend class TestHelper;
         friend struct rotating_buffer;
+        friend struct connection_callbacks;
 
       public:
         // Non-movable/non-copyable; you must always hold a Connection in a shared_ptr
@@ -336,8 +338,6 @@ namespace oxen::quic
         connection_established_callback conn_established_cb;
         connection_closed_callback conn_closed_cb;
 
-        void early_data_rejected();
-
         void set_remote_addr(const ngtcp2_addr& new_remote);
 
         void store_associated_cid(const quic_cid& cid);
@@ -417,6 +417,12 @@ namespace oxen::quic
         std::atomic<bool> _is_validated{false};
 
         ustring remote_pubkey;
+
+        std::set<int64_t> _early_streams;
+
+        void make_early_streams(ngtcp2_conn* connptr);
+
+        void revert_early_streams();
 
         struct connection_deleter
         {
@@ -503,7 +509,7 @@ namespace oxen::quic
         void stream_execute_close(Stream& s, uint64_t app_code);
         void stream_closed(int64_t id, uint64_t app_code);
         void close_all_streams();
-        void check_pending_streams(uint64_t available);
+        void check_pending_streams(uint64_t available, bool is_early_stream = false);
         int recv_datagram(bstring_view data, bool fin);
         int ack_datagram(uint64_t dgram_id);
         int recv_token(const uint8_t* token, size_t tokenlen);

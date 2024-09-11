@@ -138,7 +138,7 @@ namespace oxen::quic
 
         if (auto type = msg.type(); type == message::TYPE_REPLY || type == message::TYPE_ERROR)
         {
-            log::trace(log_cat, "Looking for request with req_id={}", msg.req_id);
+            log::debug(bp_cat, "Looking for request with req_id={}", msg.req_id);
             // Iterate using forward iterators, s.t. we go highest (newest) rids to lowest (oldest) rids.
             // As a result, our comparator checks if the sent request ID is greater thanthan the target rid
             auto itr = std::lower_bound(
@@ -149,7 +149,7 @@ namespace oxen::quic
 
             if (itr != sent_reqs.end())
             {
-                log::debug(bp_cat, "Successfully matched response to sent request!");
+                log::debug(bp_cat, "Successfully matched response (req_id={}) to sent request!", msg.req_id);
                 auto req = std::move(*itr);
                 sent_reqs.erase(itr);
                 try

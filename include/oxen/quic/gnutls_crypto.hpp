@@ -262,9 +262,6 @@ namespace oxen::quic
 
     struct gtls_session_ticket
     {
-        friend class Endpoint;
-        friend class Connection;
-
         std::vector<unsigned char> _key;
         std::vector<unsigned char> _ticket;
         gnutls_datum_t _data;

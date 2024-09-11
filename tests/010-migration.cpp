@@ -60,10 +60,10 @@ namespace oxen::quic::test
                 }
 
                 // Uncomment this when NGTCP2 releases v1.2.0
-                // SECTION("Immediate migration")
-                // {
-                // TestHelper::migrate_connection_immediate(conn, client_secondary);
-                // }
+                SECTION("Immediate migration")
+                {
+                    TestHelper::migrate_connection_immediate(conn, client_secondary);
+                }
 
                 address_flipped = true;
                 conn_promise_a.set_value();

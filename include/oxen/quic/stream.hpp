@@ -137,6 +137,9 @@ namespace oxen::quic
         size_t unsent_impl() const override;
 
       private:
+        // Called if 0-RTT early data was rejected; marks all sent data as unacked
+        void revert_stream();
+
         std::vector<ngtcp2_vec> pending() override;
 
         size_t _unacked_size{0};

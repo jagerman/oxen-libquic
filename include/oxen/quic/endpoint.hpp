@@ -239,9 +239,10 @@ namespace oxen::quic
         std::vector<ustring> inbound_alpns;
         std::chrono::nanoseconds handshake_timeout{DEFAULT_HANDSHAKE_TIMEOUT};
 
-        std::unordered_map<ustring_view, gtls_session_ticket> session_tickets;
-        std::unordered_map<ustring_view, gtls_ticket_ptr> _session_tickets;
+        std::unordered_map<ustring_view, gtls_ticket_ptr> session_tickets;
+
         std::unordered_map<ustring, ustring> encoded_transport_params;
+
         std::unordered_map<ustring, ustring> path_validation_tokens;
 
         const std::shared_ptr<event_base>& get_loop() { return net._loop->loop(); }

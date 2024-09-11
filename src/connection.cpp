@@ -265,8 +265,8 @@ namespace oxen::quic
         auto& conn = *static_cast<Connection*>(user_data);
         assert(_conn == conn);
 
-        log::warning(log_cat, "Client dropping connection; early data rejected by server!");
-        conn.endpoint().drop_connection(conn, io_error{CONN_EARLY_DATA_REJECTED});
+        log::info(log_cat, "Client resetting early streams; 0-rtt rejected by server!");
+        conn.revert_early_streams();
 
         return 0;
     }
@@ -383,36 +383,32 @@ namespace oxen::quic
 
     int Connection::client_handshake_completed()
     {
-        /** TODO:
-            This section will be uncommented and finished upon completion of 0RTT and session resumption capabilities.
-                - If early data is NOT ACCEPTED, then the call to ngtcp2_conn_tls_early_data_rejected must be invoked
-                to reset aspects of connection state prior to early data rejection.
-                - If early data is ACCEPTED, then we can open streams and start doing things immediately. At that point,
-                we should encode and store 0RTT transport parameters.
-            Moreover, decoding and setting 0RTT transport parameters must be handled in connection creation. Both that
-            location and the required callbacks are comment-blocked in the relevant location.
-        */
-        if (_0rtt_enabled and not tls_session->get_early_data_accepted())
+        if (_0rtt_enabled)
         {
-            log::info(log_cat, "Early data was rejected by server!");
-
-            if (auto rv = ngtcp2_conn_tls_early_data_rejected(conn.get()); rv != 0)
+            if (not tls_session->get_early_data_accepted())
             {
-                log::error(log_cat, "ngtcp2_conn_tls_early_data_rejected: {}", ngtcp2_strerror(rv));
-                return -1;
+                log::info(log_cat, "Early data was rejected by server!");
+
+                if (auto rv = ngtcp2_conn_tls_early_data_rejected(conn.get()); rv != 0)
+                {
+                    log::error(log_cat, "ngtcp2_conn_tls_early_data_rejected failed: {}", ngtcp2_strerror(rv));
+                    return -1;
+                }
             }
+
+            ustring data;
+            data.resize(256);
+
+            if (auto len = ngtcp2_conn_encode_0rtt_transport_params(conn.get(), data.data(), data.size()); len > 0)
+            {
+                _endpoint.store_0rtt_transport_params(remote_pubkey, std::move(data));
+                log::info(log_cat, "Client successfully encoded and stored 0rtt transport params");
+            }
+            else
+                log::warning(log_cat, "Client could not encode 0-RTT transport parameters: {}", ngtcp2_strerror(len));
         }
 
-        ustring data;
-        data.resize(256);
-
-        if (auto len = ngtcp2_conn_encode_0rtt_transport_params(conn.get(), data.data(), data.size()); len > 0)
-        {
-            _endpoint.store_0rtt_transport_params(remote_pubkey, std::move(data));
-            log::info(log_cat, "Client encoded and stored 0rtt transport params");
-        }
-        else
-            log::warning(log_cat, "Client could not encode 0-RTT transport parameters: {}", ngtcp2_strerror(len));
+        log::debug(log_cat, "Client handshake completed!");
 
         return 0;
     }
@@ -446,6 +442,8 @@ namespace oxen::quic
             return -1;
         }
 
+        log::debug(log_cat, "Server successfully submitted regular token on handshake completion...");
+
         return 0;
     }
 
@@ -460,11 +458,6 @@ namespace oxen::quic
     int Connection::last_cleared() const
     {
         return datagrams->recv_buffer.last_cleared;
-    }
-
-    void Connection::early_data_rejected()
-    {
-        close_connection();
     }
 
     void Connection::set_remote_addr(const ngtcp2_addr& new_remote)
@@ -522,6 +515,36 @@ namespace oxen::quic
     void Connection::close_connection(uint64_t error_code)
     {
         _endpoint.close_connection(*this, io_error{error_code});
+    }
+
+    void Connection::make_early_streams(ngtcp2_conn* connptr)
+    {
+        log::debug(log_cat, "Client making streams to attempt 0-rtt early data!");
+
+        if (auto remaining = ngtcp2_conn_get_streams_bidi_left(connptr); remaining > 0)
+        {
+            log::debug(log_cat, "Client has room to promote {} streams for early data!", remaining);
+            check_pending_streams(remaining, true);
+        }
+    }
+
+    void Connection::revert_early_streams()
+    {
+        _endpoint.call([&]() {
+            log::debug(log_cat, "Client reverting {} 0-rtt streams", _early_streams.size());
+
+            for (auto& _id : _early_streams)
+            {
+                if (auto it = _streams.find(_id); it != _streams.end())
+                {
+                    log::trace(log_cat, "Reverting stream (ID:{})...", _id);
+                    it->second->revert_stream();
+                }
+                else
+                    log::warning(log_cat, "Could not find early stream (ID:{}) to revert!", _id);
+            }
+            _early_streams.clear();
+        });
     }
 
     void Connection::handle_conn_packet(const Packet& pkt)
@@ -622,7 +645,7 @@ namespace oxen::quic
     // so, we move them to the streams map, where they will get picked up by flush_streams and dump
     // their buffers. If none are ready, we keep chugging along and make another stream as usual. Though
     // if none of the pending streams are ready, the new stream really shouldn't be ready, but here we are
-    void Connection::check_pending_streams(uint64_t available)
+    void Connection::check_pending_streams(uint64_t available, bool is_early_stream)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         uint64_t popped = 0;
@@ -633,11 +656,15 @@ namespace oxen::quic
 
             if (int rv = ngtcp2_conn_open_bidi_stream(conn.get(), &str->_stream_id, str.get()); rv == 0)
             {
-                log::debug(log_cat, "Stream [ID:{}] ready for broadcast, moving out of pending streams", str->_stream_id);
+                auto _id = str->_stream_id;
+                log::debug(log_cat, "Stream [ID:{}] ready for broadcast, moving out of pending streams", _id);
                 str->set_ready();
                 popped += 1;
-                _streams[str->_stream_id] = std::move(str);
+                _streams[_id] = std::move(str);
                 pending_streams.pop_front();
+
+                if (_0rtt_enabled and is_early_stream)
+                    _early_streams.emplace_hint(_early_streams.end(), _id);
             }
             else
                 return;
@@ -1638,7 +1665,9 @@ namespace oxen::quic
             callbacks.handshake_confirmed = connection_callbacks::on_handshake_confirmed;
             callbacks.recv_retry = ngtcp2_crypto_recv_retry_cb;
             callbacks.recv_new_token = connection_callbacks::on_recv_token;
-            callbacks.tls_early_data_rejected = connection_callbacks::on_early_data_rejected;
+
+            if (_0rtt_enabled)
+                callbacks.tls_early_data_rejected = connection_callbacks::on_early_data_rejected;
 
             // Clients should be the ones providing a remote pubkey here. This way we can emplace it into
             // the gnutlssession object to be verified. Servers should be verifying via callback
@@ -1694,13 +1723,8 @@ namespace oxen::quic
                     }
                     else
                     {
-                        if (connection_callbacks::extend_max_local_streams_bidi(nullptr, 0, this) != 0)
-                        {
-                            log::warning(
-                                    log_cat,
-                                    "Client failed open streams to send early data; disabling 0rtt and proceeding...");
-                            _0rtt_enabled = false;
-                        }
+                        make_early_streams(connptr);
+                        log::info(log_cat, "Client encoded and set 0rtt params, ready to attempt early data!");
                     }
                 }
             }
