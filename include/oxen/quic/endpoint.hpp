@@ -222,7 +222,7 @@ namespace oxen::quic
         bool _0rtt_enabled{false};
         unsigned int _0rtt_window{};
 
-        bool _stateless_reset_enabled{false};
+        bool _stateless_reset_enabled{true};
 
         gtls_db_validate_cb _validate_0rtt_ticket;
         gtls_db_get_cb _get_session_ticket;
@@ -263,7 +263,7 @@ namespace oxen::quic
         void handle_ep_opt(opt::static_secret ssecret);
         void handle_ep_opt(opt::manual_routing mrouting);
         void handle_ep_opt(opt::enable_0rtt_ticketing rtt);
-        void handle_ep_opt(opt::enable_stateless_reset rst);
+        void handle_ep_opt(opt::disable_stateless_reset rst);
 
         // Takes a std::optional-wrapped option that does nothing if the optional is empty,
         // otherwise passes it through to the above.  This is here to allow runtime-dependent

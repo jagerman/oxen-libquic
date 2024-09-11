@@ -132,9 +132,9 @@ namespace oxen::quic
         };
     }
 
-    void Endpoint::handle_ep_opt(opt::enable_stateless_reset /* rst */)
+    void Endpoint::handle_ep_opt(opt::disable_stateless_reset /* rst */)
     {
-        _stateless_reset_enabled = true;
+        _stateless_reset_enabled = false;
     }
 
     ConnectionID Endpoint::next_reference_id()
