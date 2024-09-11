@@ -316,11 +316,15 @@ namespace oxen::quic
 
         void activate_cid(const ngtcp2_cid* cid, const uint8_t* token, Connection& conn);
 
+        void deactivate_cid(const ngtcp2_cid* cid, Connection& conn);
+
         void associate_cid(quic_cid qcid, Connection& conn);
 
         void associate_cid(const ngtcp2_cid* cid, Connection& conn);
 
         void dissociate_cid(const ngtcp2_cid* cid, Connection& conn);
+
+        void dissociate_cid(quic_cid qcid, Connection& conn);
 
         const ustring& static_secret() const { return _static_secret; }
 
@@ -383,8 +387,8 @@ namespace oxen::quic
         std::unordered_map<quic_cid, ConnectionID> conn_lookup;
 
         // only used if stateless reset enabled
-        std::unordered_map<ConnectionID, std::shared_ptr<gtls_reset_token>> reset_token_lookup;
-        std::unordered_map<std::shared_ptr<gtls_reset_token>, ConnectionID> reset_token_map;
+        std::unordered_map<quic_cid, std::shared_ptr<gtls_reset_token>> reset_token_lookup;
+        std::unordered_map<std::shared_ptr<gtls_reset_token>, quic_cid> reset_token_map;
 
         std::map<std::chrono::steady_clock::time_point, ConnectionID> draining_closing;
 

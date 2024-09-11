@@ -464,16 +464,10 @@ namespace oxen::quic
         {
             auto itr = cids.begin();
             // call to dissociate_cid deletes from cids in Connection object
-            dissociate_cid(&*itr, conn);
-        }
-
-        if (_stateless_reset_enabled)
-        {
-            log::debug(log_cat, "Erasing any reset tokens for connection {}", rid);
-            if (reset_token_lookup.contains(rid))
-                reset_token_map.erase(reset_token_lookup[rid]);
-
-            reset_token_lookup.erase(rid);
+            if (_stateless_reset_enabled)
+                deactivate_cid(&*itr, conn);
+            else
+                dissociate_cid(*itr, conn);
         }
 
         conn.drop_streams();
@@ -547,17 +541,40 @@ namespace oxen::quic
     void Endpoint::activate_cid(const ngtcp2_cid* cid, const uint8_t* token, Connection& conn)
     {
         assert(in_event_loop());
+        auto qcid = quic_cid{*cid};
         log::debug(
                 log_cat,
-                "{} activating reset token for new CID:{} to {}",
+                "{} activating new CID:{} with reset token for {}",
                 conn.is_inbound() ? "SERVER" : "CLIENT",
-                quic_cid{*cid},
+                qcid,
                 conn.reference_id());
-        associate_cid(cid, conn);
+        associate_cid(qcid, conn);
 
         // We only hold one reset token per connection at a time!
-        auto [it, _] = reset_token_map.emplace(gtls_reset_token::make_copy(token), conn.reference_id());
-        reset_token_lookup[conn.reference_id()] = it->first;
+        auto [it, _] = reset_token_map.emplace(gtls_reset_token::make_copy(token), qcid);
+        reset_token_lookup[qcid] = it->first;
+    }
+
+    void Endpoint::deactivate_cid(const ngtcp2_cid* cid, Connection& conn)
+    {
+        assert(in_event_loop());
+        auto qcid = quic_cid{*cid};
+        log::debug(
+                log_cat,
+                "{} deactivating CID:{} with reset token for {}",
+                conn.is_inbound() ? "SERVER" : "CLIENT",
+                qcid,
+                conn.reference_id());
+        dissociate_cid(qcid, conn);
+
+        if (auto it = reset_token_lookup.find(qcid); it != reset_token_lookup.end())
+        {
+            reset_token_map.erase(it->second);
+            reset_token_lookup.erase(it);
+            log::debug(log_cat, "Successfully deleted token for deactivated CID:{}", qcid);
+        }
+        else
+            log::debug(log_cat, "Could not find token corresponding to deactivated CID:{}", qcid);
     }
 
     void Endpoint::associate_cid(quic_cid qcid, Connection& conn)
@@ -573,22 +590,25 @@ namespace oxen::quic
     void Endpoint::associate_cid(const ngtcp2_cid* cid, Connection& conn)
     {
         assert(in_event_loop());
-        return associate_cid(quic_cid{*cid}, conn);
+        if (cid->datalen)
+            return associate_cid(quic_cid{*cid}, conn);
+    }
+
+    void Endpoint::dissociate_cid(quic_cid qcid, Connection& conn)
+    {
+        assert(in_event_loop());
+        log::trace(
+                log_cat, "{} dissociating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
+
+        conn_lookup.erase(qcid);
+        conn.delete_associated_cid(qcid);
     }
 
     void Endpoint::dissociate_cid(const ngtcp2_cid* cid, Connection& conn)
     {
         assert(in_event_loop());
-        if (not cid->datalen)
-            return;
-
-        auto ccid = quic_cid{*cid};
-
-        log::trace(
-                log_cat, "{} dissociating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", ccid, conn.reference_id());
-
-        conn_lookup.erase(ccid);
-        conn.delete_associated_cid(ccid);
+        if (cid->datalen)
+            return dissociate_cid(quic_cid{*cid}, conn);
     }
 
     Connection* Endpoint::fetch_associated_conn(quic_cid& ccid)
@@ -806,30 +826,29 @@ namespace oxen::quic
         return std::make_optional<quic_cid>(vid.dcid, vid.dcidlen);
     }
 
-    Connection* Endpoint::check_stateless_reset(const Packet& pkt, quic_cid& cid)
+    Connection* Endpoint::check_stateless_reset(const Packet& pkt, quic_cid& /* cid */)
     {
         log::info(log_cat, "Checking last 16B of pkt for stateless reset token...");
+        Connection* cptr = nullptr;
 
         auto gtls_token = gtls_reset_token::parse_packet(pkt);
 
         if (auto rit = reset_token_map.find(gtls_token); rit != reset_token_map.end())
         {
-            if (auto cit = conns.find(rit->second); cit != conns.end())
+            if (cptr = get_conn(rit->second); cptr)
             {
-                log::info(log_cat, "Matched stateless reset token in unknown packet to connection {}", cit->first);
-                associate_cid(&cid, *cit->second);
-                return cit->second.get();
+                log::info(log_cat, "Matched stateless reset token in unknown packet to connection {}", cptr->reference_id());
+                reset_token_lookup.erase(rit->second);
             }
             else
-            {
                 log::warning(log_cat, "Received good stateless reset token but no connection exists for it; deleting entry");
-                reset_token_map.erase(rit);
-            }
+
+            reset_token_map.erase(rit);
         }
         else
             log::info(log_cat, "No stateless reset token match for pkt from remote: {}", pkt.path.remote);
 
-        return nullptr;
+        return cptr;
     }
 
     Connection* Endpoint::accept_initial_connection(const Packet& pkt, quic_cid& dcid)

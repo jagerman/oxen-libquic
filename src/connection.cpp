@@ -186,6 +186,11 @@ namespace oxen::quic
             log::debug(log_cat, "Activating stateless reset token for new CID from remote: {}", conn->remote());
             ep.activate_cid(cid, token, *conn);
         }
+        else if (type == NGTCP2_CONNECTION_ID_STATUS_TYPE_DEACTIVATE)
+        {
+            log::debug(log_cat, "Deactivating stateless reset token for CID from remote: {}", conn->remote());
+            ep.deactivate_cid(cid, *conn);
+        }
 
         return 0;
     }
