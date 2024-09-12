@@ -9,11 +9,15 @@
 namespace oxen::quic
 {
     class Stream;
+    struct Address;
 
     namespace concepts
     {
         template <typename T>
         concept stream_derived_type = std::derived_from<T, Stream>;
+
+        template <typename T>
+        concept quic_address_type = std::derived_from<T, Address>;
 
         template <typename T>
         concept raw_sockaddr_type =

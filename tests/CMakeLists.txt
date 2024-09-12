@@ -50,9 +50,10 @@ if(LIBQUIC_BUILD_TESTS)
 
 endif()
 
+
 if(LIBQUIC_BUILD_SPEEDTEST)
     set(LIBQUIC_SPEEDTEST_PREFIX "" CACHE STRING "Binary prefix for speedtest binaries")
-    set(speedtests speedtest-client speedtest-server dgram-speed-client dgram-speed-server)
+    set(speedtests speedtest-client speedtest-server dgram-speed-client dgram-speed-server ping-client ping-server)
     foreach(x ${speedtests})
         add_executable(${x} ${x}.cpp)
         target_link_libraries(${x} PRIVATE tests_common)

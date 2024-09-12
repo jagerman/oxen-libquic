@@ -88,17 +88,17 @@ namespace oxen::quic
 
             Configurable parameters:
                 - start_immediately : will call ::event_add() before returning the ticker
-                - fixed_interval :
-                        - if FALSE (default behavior), will attempt to execute every `interval`, regardless of how long the
-                            event itself takes
-                        - if TRUE, will wait the entire `interval` after finishing execution of the event before attempting
-                            execution again
+                - wait :
+                    - if FALSE (default behavior), the interval will not wait for the event to complete. will attempt to
+                        execute every `interval`, regardless of how long the event itself takes.
+                    - if TRUE, the interval will wait for the event to complete before beginning. It will wait the entire
+                        `interval` after finishing execution of the event before attempting execution again.
         */
         template <typename Callable>
         [[nodiscard]] std::shared_ptr<Ticker> call_every(
-                std::chrono::microseconds interval, Callable&& f, bool start_immediately = true, bool fixed_interval = false)
+                std::chrono::microseconds interval, Callable&& f, bool start_immediately = true, bool wait = false)
         {
-            return _loop->_call_every(interval, std::forward<Callable>(f), net_id, start_immediately, fixed_interval);
+            return _loop->_call_every(interval, std::forward<Callable>(f), net_id, start_immediately, wait);
         }
 
         template <typename Callable>

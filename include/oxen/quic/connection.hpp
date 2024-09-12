@@ -416,7 +416,7 @@ namespace oxen::quic
         std::atomic<bool> _close_quietly{false};
         std::atomic<bool> _is_validated{false};
 
-        ustring remote_pubkey;
+        ustring remote_pubkey{};
 
         std::set<int64_t> _early_streams;
 

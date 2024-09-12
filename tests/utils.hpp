@@ -14,6 +14,7 @@
 #include <oxen/quic/network.hpp>
 #include <oxen/quic/utils.hpp>
 #include <string>
+#include <type_traits>
 
 namespace oxen::quic
 {

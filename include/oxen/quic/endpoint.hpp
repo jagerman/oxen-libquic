@@ -28,14 +28,6 @@ extern "C"
 
 namespace oxen::quic
 {
-    template <typename... Opt>
-    static constexpr void check_for_tls_creds()
-    {
-        static_assert(
-                (0 + ... + std::is_convertible_v<std::remove_cvref_t<Opt>, std::shared_ptr<TLSCreds>>) == 1,
-                "Endpoint listen/connect require exactly one std::shared_ptr<TLSCreds> argument");
-    }
-
     class Endpoint : public std::enable_shared_from_this<Endpoint>
     {
       public:
@@ -61,6 +53,7 @@ namespace oxen::quic
         void listen(Opt&&... opts)
         {
             check_for_tls_creds<Opt...>();
+            check_verification_scheme<Opt...>(this);
 
             net.call_get([&opts..., this]() mutable {
                 if (inbound_ctx)
@@ -73,11 +66,11 @@ namespace oxen::quic
             });
         }
 
-        // creates new outbound connection to remote; emplaces conn/interface pair in outbound map
-        template <typename... Opt>
-        std::shared_ptr<connection_interface> connect(RemoteAddress remote, Opt&&... opts)
+        template <concepts::quic_address_type T, typename... Opt>
+        std::shared_ptr<connection_interface> connect(T remote, Opt&&... opts)
         {
             check_for_tls_creds<Opt...>();
+            check_address_scheme<T, Opt...>();
 
             std::promise<std::shared_ptr<Connection>> p;
             auto f = p.get_future();
@@ -88,10 +81,8 @@ namespace oxen::quic
             if (_local.is_ipv6() && !remote.is_ipv6())
                 remote.map_ipv4_as_ipv6();
 
-            Path _path = Path{_local, remote};
-
-            net.call([&opts..., &p, path = _path, this, remote_pk = std::move(remote).get_remote_key()]() mutable {
-                quic_cid qcid;
+            net.call([this, &opts..., &p, remote = std::move(remote)]() mutable {
+                quic_cid qcid{};
                 auto next_rid = next_reference_id();
 
                 try
@@ -99,32 +90,7 @@ namespace oxen::quic
                     // initialize client context and client tls context simultaneously
                     outbound_ctx = std::make_shared<IOContext>(Direction::OUTBOUND, std::forward<Opt>(opts)...);
                     _set_context_globals(outbound_ctx);
-
-                    for (;;)
-                    {
-                        // emplace random CID into lookup keyed to unique reference ID
-                        if (auto [it_a, res_a] = conn_lookup.emplace(quic_cid::random(), next_rid); res_a)
-                        {
-                            qcid = it_a->first;
-
-                            if (auto [it_b, res_b] = conns.emplace(next_rid, nullptr); res_b)
-                            {
-                                it_b->second = Connection::make_conn(
-                                        *this,
-                                        next_rid,
-                                        it_a->first,
-                                        quic_cid::random(),
-                                        std::move(path),
-                                        outbound_ctx,
-                                        outbound_alpns,
-                                        handshake_timeout,
-                                        remote_pk);
-
-                                p.set_value(it_b->second);
-                                return;
-                            }
-                        }
-                    }
+                    _connect(std::move(remote), qcid, next_rid, p);
                 }
                 catch (...)
                 {
@@ -241,9 +207,9 @@ namespace oxen::quic
 
         std::unordered_map<ustring_view, gtls_ticket_ptr> session_tickets;
 
-        std::unordered_map<ustring, ustring> encoded_transport_params;
+        std::unordered_map<Address, ustring> encoded_transport_params;
 
-        std::unordered_map<ustring, ustring> path_validation_tokens;
+        std::unordered_map<Address, ustring> path_validation_tokens;
 
         const std::shared_ptr<event_base>& get_loop() { return net._loop->loop(); }
 
@@ -251,6 +217,10 @@ namespace oxen::quic
 
         // Does the non-templated bit of `listen()`
         void _listen();
+
+        void _connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid, std::promise<std::shared_ptr<Connection>>& p);
+
+        void _connect(Address remote, quic_cid qcid, ConnectionID rid, std::promise<std::shared_ptr<Connection>>& p);
 
         void handle_ep_opt(opt::enable_datagrams dc);
         void handle_ep_opt(opt::outbound_alpns alpns);
@@ -304,13 +274,13 @@ namespace oxen::quic
 
         void connection_established(connection_interface& conn);
 
-        void store_0rtt_transport_params(ustring remote_pk, ustring encoded_params);
+        void store_0rtt_transport_params(Address remote, ustring encoded_params);
 
-        std::optional<ustring> get_0rtt_transport_params(const ustring& remote_pk);
+        std::optional<ustring> get_0rtt_transport_params(const Address& remote);
 
-        void store_path_validation_token(ustring remote_pk, ustring token);
+        void store_path_validation_token(Address remote, ustring token);
 
-        std::optional<ustring> get_path_validation_token(const ustring& remote_pk);
+        std::optional<ustring> get_path_validation_token(const Address& remote);
 
         void initial_association(Connection& conn);
 
@@ -413,6 +383,33 @@ namespace oxen::quic
         void check_timeouts();
 
         Connection* accept_initial_connection(const Packet& pkt, quic_cid& cid);
+
+        template <typename... Opt>
+        static constexpr void check_for_tls_creds()
+        {
+            static_assert(
+                    (0 + ... + std::is_convertible_v<std::remove_cvref_t<Opt>, std::shared_ptr<TLSCreds>>) == 1,
+                    "Endpoint listen/connect require exactly one std::shared_ptr<TLSCreds> argument");
+        }
+
+        template <typename... Opt>
+        static void check_verification_scheme(Endpoint* e)
+        {
+            if constexpr ((std::is_same_v<opt::disable_key_verification, std::remove_cvref_t<Opt>> || ...))
+            {
+                if (e->zero_rtt_enabled())
+                    throw std::invalid_argument{"Disabling key verification is incompatible with 0rtt ticketing!"};
+            }
+        }
+
+        template <concepts::quic_address_type T, typename... Opt>
+        static constexpr void check_address_scheme()
+        {
+            if constexpr ((std::is_same_v<opt::disable_key_verification, std::remove_cvref_t<Opt>> || ...))
+            {
+                static_assert(std::is_same_v<T, Address>, "Disabling key verification requires keyless address!");
+            }
+        }
     };
 
 }  // namespace oxen::quic

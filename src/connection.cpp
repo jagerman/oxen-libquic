@@ -381,8 +381,7 @@ namespace oxen::quic
     int Connection::recv_token(const uint8_t* token, size_t tokenlen)
     {
         // This should only be called by the client, and therefore this will always have a value
-        assert(not remote_pubkey.empty());
-        _endpoint.store_path_validation_token(remote_pubkey, {token, tokenlen});
+        _endpoint.store_path_validation_token(_path.remote, {token, tokenlen});
         return 0;
     }
 
@@ -406,7 +405,7 @@ namespace oxen::quic
 
             if (auto len = ngtcp2_conn_encode_0rtt_transport_params(conn.get(), data.data(), data.size()); len > 0)
             {
-                _endpoint.store_0rtt_transport_params(remote_pubkey, std::move(data));
+                _endpoint.store_0rtt_transport_params(_path.remote, std::move(data));
                 log::info(log_cat, "Client successfully encoded and stored 0rtt transport params");
             }
             else
@@ -456,7 +455,7 @@ namespace oxen::quic
     {
         _is_validated = true;
 
-        if (is_inbound())
+        if (is_inbound() and not context->disable_key_verification)
             remote_pubkey = dynamic_cast<GNUTLSSession*>(get_session())->remote_key();
     }
 
@@ -1543,6 +1542,8 @@ namespace oxen::quic
 
         if (_stateless_reset_enabled)
         {
+            callbacks.recv_stateless_reset = connection_callbacks::recv_stateless_reset;
+            log::info(log_cat, "Connection configured to watch for stateless reset packets");
             callbacks.dcid_status = connection_callbacks::on_connection_id_status;
             log::info(log_cat, "Connection configured to monitor activated dcids and stateless reset tokens");
         }
@@ -1676,17 +1677,15 @@ namespace oxen::quic
 
             // Clients should be the ones providing a remote pubkey here. This way we can emplace it into
             // the gnutlssession object to be verified. Servers should be verifying via callback
-            assert(remote_pk.has_value());
-            remote_pubkey = *remote_pk;
-            tls_session->set_expected_remote_key(remote_pubkey);
-
-            if (_stateless_reset_enabled)
+            if (not context->disable_key_verification)
             {
-                callbacks.recv_stateless_reset = connection_callbacks::recv_stateless_reset;
-                log::info(log_cat, "Inbound connection configured to watch for stateless reset packets");
+                log::debug(log_cat, "Outbound connection configured for key verification");
+                assert(remote_pk.has_value());
+                remote_pubkey = *remote_pk;
+                tls_session->set_expected_remote_key(remote_pubkey);
             }
 
-            auto maybe_token = _endpoint.get_path_validation_token(remote_pubkey);
+            auto maybe_token = _endpoint.get_path_validation_token(_path.remote);
 
             if (maybe_token)
             {
@@ -1708,7 +1707,7 @@ namespace oxen::quic
 
             if (_0rtt_enabled)
             {
-                auto maybe_params = _endpoint.get_0rtt_transport_params(remote_pubkey);
+                auto maybe_params = _endpoint.get_0rtt_transport_params(_path.remote);
                 if (not maybe_params)
                 {
                     log::warning(

@@ -190,6 +190,69 @@ namespace oxen::quic
         log::debug(log_cat, "Inbound context ready for incoming connections");
     }
 
+    void Endpoint::_connect(
+            RemoteAddress remote, quic_cid qcid, ConnectionID rid, std::promise<std::shared_ptr<Connection>>& p)
+    {
+        Path path = Path{_local, remote};
+        auto remote_pk = std::move(remote).get_remote_key();
+
+        for (;;)
+        {
+            // emplace random CID into lookup keyed to unique reference ID
+            if (auto [it_a, res_a] = conn_lookup.emplace(quic_cid::random(), rid); res_a)
+            {
+                qcid = it_a->first;
+
+                if (auto [it_b, res_b] = conns.emplace(rid, nullptr); res_b)
+                {
+                    it_b->second = Connection::make_conn(
+                            *this,
+                            rid,
+                            it_a->first,
+                            quic_cid::random(),
+                            std::move(path),
+                            outbound_ctx,
+                            outbound_alpns,
+                            handshake_timeout,
+                            remote_pk);
+
+                    p.set_value(it_b->second);
+                    return;
+                }
+            }
+        }
+    }
+
+    void Endpoint::_connect(Address remote, quic_cid qcid, ConnectionID rid, std::promise<std::shared_ptr<Connection>>& p)
+    {
+        Path path = Path{_local, std::move(remote)};
+
+        for (;;)
+        {
+            // emplace random CID into lookup keyed to unique reference ID
+            if (auto [it_a, res_a] = conn_lookup.emplace(quic_cid::random(), rid); res_a)
+            {
+                qcid = it_a->first;
+
+                if (auto [it_b, res_b] = conns.emplace(rid, nullptr); res_b)
+                {
+                    it_b->second = Connection::make_conn(
+                            *this,
+                            rid,
+                            it_a->first,
+                            quic_cid::random(),
+                            std::move(path),
+                            outbound_ctx,
+                            outbound_alpns,
+                            handshake_timeout);
+
+                    p.set_value(it_b->second);
+                    return;
+                }
+            }
+        }
+    }
+
     void Endpoint::_set_context_globals(std::shared_ptr<IOContext>& ctx)
     {
         ctx->config.datagram_support = _datagrams;
@@ -286,7 +349,7 @@ namespace oxen::quic
                     if (_stateless_reset_enabled)  // must be done within the check for _accepting_inbound
                     {
                         send_stateless_reset(pkt, dcid);
-                        log::info(
+                        log::debug(
                                 log_cat,
                                 "Server failed to decode pkt: dispatched reset token to remote ({})",
                                 pkt.path.remote);
@@ -503,16 +566,16 @@ namespace oxen::quic
         return _get_session_ticket(remote_pk);
     }
 
-    void Endpoint::store_0rtt_transport_params(ustring remote_pk, ustring encoded_params)
+    void Endpoint::store_0rtt_transport_params(Address remote, ustring encoded_params)
     {
         log::trace(log_cat, "Storing 0rtt tranpsport params...");
-        encoded_transport_params.insert_or_assign(std::move(remote_pk), std::move(encoded_params));
+        encoded_transport_params.insert_or_assign(std::move(remote), std::move(encoded_params));
     }
 
-    std::optional<ustring> Endpoint::get_0rtt_transport_params(const ustring& remote_pk)
+    std::optional<ustring> Endpoint::get_0rtt_transport_params(const Address& remote)
     {
         log::trace(log_cat, "Fetching 0rtt transport params...");
-        if (auto itr = encoded_transport_params.find(remote_pk); itr != encoded_transport_params.end())
+        if (auto itr = encoded_transport_params.find(remote); itr != encoded_transport_params.end())
             return itr->second;
 
         return std::nullopt;
@@ -697,6 +760,8 @@ namespace oxen::quic
         }
 
         // map stateless reset
+        auto [it, _] = reset_token_lookup.emplace(cid, std::move(token));
+        reset_token_map.emplace(it->second, cid);
 
         // ensure we had enough write space
         assert(static_cast<size_t>(nwrite) <= buf.size());
@@ -775,14 +840,14 @@ namespace oxen::quic
         send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0);
     }
 
-    void Endpoint::store_path_validation_token(ustring remote_pk, ustring token)
+    void Endpoint::store_path_validation_token(Address remote, ustring token)
     {
-        path_validation_tokens.insert_or_assign(std::move(remote_pk), std::move(token));
+        path_validation_tokens.insert_or_assign(std::move(remote), std::move(token));
     }
 
-    std::optional<ustring> Endpoint::get_path_validation_token(const ustring& remote_pk)
+    std::optional<ustring> Endpoint::get_path_validation_token(const Address& remote)
     {
-        if (auto itr = path_validation_tokens.find(remote_pk); itr != path_validation_tokens.end())
+        if (auto itr = path_validation_tokens.find(remote); itr != path_validation_tokens.end())
             return itr->second;
 
         return std::nullopt;
@@ -828,7 +893,7 @@ namespace oxen::quic
 
     Connection* Endpoint::check_stateless_reset(const Packet& pkt, quic_cid& /* cid */)
     {
-        log::info(log_cat, "Checking last 16B of pkt for stateless reset token...");
+        log::trace(log_cat, "Checking last 16B of pkt for stateless reset token...");
         Connection* cptr = nullptr;
 
         auto gtls_token = gtls_reset_token::parse_packet(pkt);
@@ -846,7 +911,7 @@ namespace oxen::quic
             reset_token_map.erase(rit);
         }
         else
-            log::info(log_cat, "No stateless reset token match for pkt from remote: {}", pkt.path.remote);
+            log::trace(log_cat, "No stateless reset token match for pkt from remote: {}", pkt.path.remote);
 
         return cptr;
     }
