@@ -11,15 +11,15 @@ extern "C"
 #endif
 }
 
-#include <cstddef>
-#include <list>
-#include <optional>
-
 #include "connection.hpp"
 #include "gnutls_crypto.hpp"
 #include "internal.hpp"
 #include "types.hpp"
 #include "utils.hpp"
+
+#include <cstddef>
+#include <list>
+#include <optional>
 
 namespace oxen::quic
 {
@@ -36,20 +36,29 @@ namespace oxen::quic
                 _packet_splitting ? "" : "no");
     }
 
-    void Endpoint::handle_ep_opt(opt::outbound_alpns alpns)
-    {
-        outbound_alpns = std::move(alpns.alpns);
-    }
-
-    void Endpoint::handle_ep_opt(opt::inbound_alpns alpns)
-    {
-        inbound_alpns = std::move(alpns.alpns);
-    }
-
     void Endpoint::handle_ep_opt(opt::alpns alpns)
     {
-        inbound_alpns = std::move(alpns.inout_alpns);
-        outbound_alpns = inbound_alpns;
+        // Rather than overwriting the ALPNs that the endpoint holds, we emplace at the back of the vector. This allows the
+        // user to pass multiple values. For example, one can pass an I/O ALPNs value, followed by an outbound-specific ALPN
+        // and an inbound-specific ALPN
+        switch (alpns.direction)
+        {
+            case opt::alpns::DIR::I:
+                for (auto& a : alpns.protos)
+                    inbound_alpns.emplace_back(std::move(a));
+                break;
+            case opt::alpns::DIR::O:
+                for (auto& a : alpns.protos)
+                    outbound_alpns.emplace_back(std::move(a));
+                break;
+            case opt::alpns::DIR::IO:
+                for (auto& a : alpns.protos)
+                {
+                    auto& e = inbound_alpns.emplace_back(std::move(a));
+                    outbound_alpns.emplace_back(e);
+                }
+                break;
+        }
     }
 
     void Endpoint::handle_ep_opt(opt::handshake_timeout timeout)
@@ -92,7 +101,7 @@ namespace oxen::quic
         _0rtt_window = rtt.window.count();
 
         _validate_0rtt_ticket = rtt.check ? std::move(rtt.check) : [this](gtls_ticket_ptr ticket, time_t current) -> bool {
-            auto key = ticket->key();
+            auto key = ticket->span();
 
             if (auto it = session_tickets.find(key); it != session_tickets.end())
             {
@@ -109,7 +118,7 @@ namespace oxen::quic
             return 0;
         };
 
-        _get_session_ticket = rtt.fetch ? std::move(rtt.fetch) : [this](ustring_view key) -> gtls_ticket_ptr {
+        _get_session_ticket = rtt.fetch ? std::move(rtt.fetch) : [this](uspan key) -> gtls_ticket_ptr {
             gtls_ticket_ptr ret = nullptr;
             if (auto it = session_tickets.find(key); it != session_tickets.end())
             {
@@ -124,7 +133,7 @@ namespace oxen::quic
         };
 
         _put_session_ticket = rtt.put ? std::move(rtt.put) : [this](gtls_ticket_ptr ticket, time_t /* exp */) {
-            auto key = ticket->key();
+            auto key = ticket->span();
             auto [_, b] = session_tickets.insert_or_assign(std::move(key), std::move(ticket));
 
             log::debug(
@@ -145,9 +154,9 @@ namespace oxen::quic
         return ConnectionID{++_next_rid};
     }
 
-    ustring Endpoint::make_static_secret()
+    std::vector<unsigned char> Endpoint::make_static_secret()
     {
-        ustring secret;
+        std::vector<unsigned char> secret;
         secret.resize(32);
         gnutls_rnd(gnutls_rnd_level_t::GNUTLS_RND_KEY, secret.data(), secret.size());
         return secret;
@@ -198,7 +207,7 @@ namespace oxen::quic
     }
 
     std::shared_ptr<Connection> Endpoint::_connect(
-            Address remote, quic_cid qcid, ConnectionID rid, std::optional<ustring> pk)
+            Address remote, quic_cid qcid, ConnectionID rid, std::optional<std::vector<unsigned char>> pk)
     {
         Path path = Path{_local, std::move(remote)};
 
@@ -535,19 +544,19 @@ namespace oxen::quic
         return _put_session_ticket(std::move(ticket), 0);
     }
 
-    gtls_ticket_ptr Endpoint::get_session_ticket(const ustring_view& remote_pk)
+    gtls_ticket_ptr Endpoint::get_session_ticket(const uspan& remote_pk)
     {
         log::trace(log_cat, "Fetching session ticket (remote key: {})...", buffer_printer{remote_pk});
         return _get_session_ticket(remote_pk);
     }
 
-    void Endpoint::store_0rtt_transport_params(Address remote, ustring encoded_params)
+    void Endpoint::store_0rtt_transport_params(Address remote, std::vector<unsigned char> encoded_params)
     {
         log::trace(log_cat, "Storing 0rtt tranpsport params...");
         encoded_transport_params.insert_or_assign(std::move(remote), std::move(encoded_params));
     }
 
-    std::optional<ustring> Endpoint::get_0rtt_transport_params(const Address& remote)
+    std::optional<std::vector<unsigned char>> Endpoint::get_0rtt_transport_params(const Address& remote)
     {
         log::trace(log_cat, "Fetching 0rtt transport params...");
         if (auto itr = encoded_transport_params.find(remote); itr != encoded_transport_params.end())
@@ -833,12 +842,12 @@ namespace oxen::quic
         send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0);
     }
 
-    void Endpoint::store_path_validation_token(Address remote, ustring token)
+    void Endpoint::store_path_validation_token(Address remote, std::vector<unsigned char> token)
     {
         path_validation_tokens.insert_or_assign(std::move(remote), std::move(token));
     }
 
-    std::optional<ustring> Endpoint::get_path_validation_token(const Address& remote)
+    std::optional<std::vector<unsigned char>> Endpoint::get_path_validation_token(const Address& remote)
     {
         if (auto itr = path_validation_tokens.find(remote); itr != path_validation_tokens.end())
             return itr->second;
@@ -1020,7 +1029,7 @@ namespace oxen::quic
 
         if (_manual_routing)
         {
-            return _manual_routing(path, bstring_view{buf, *bufsize}, n_pkts);
+            return _manual_routing(path, bspan{buf, *bufsize}, n_pkts);
         }
 
         if (!socket)

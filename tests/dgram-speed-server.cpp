@@ -2,18 +2,20 @@
     Test server binary
 */
 
-#include <gnutls/gnutls.h>
+#include "utils.hpp"
+
+#include <oxen/quic.hpp>
+#include <oxen/quic/connection.hpp>
+#include <oxen/quic/gnutls_crypto.hpp>
 #include <oxenc/endian.h>
 #include <oxenc/hex.h>
 
 #include <CLI/Validators.hpp>
-#include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/connection.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
 
-#include "utils.hpp"
+#include <gnutls/gnutls.h>
+
+#include <future>
+#include <thread>
 
 using namespace oxen::quic;
 
@@ -65,7 +67,7 @@ int main(int argc, char* argv[])
 
     std::shared_ptr<Endpoint> server;
 
-    dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, bstring_view data) {
+    dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, bspan data) {
         if (dgram_data.n_expected == 0)
         {
             // The very first packet should be 8 bytes containing the uint64_t count of total

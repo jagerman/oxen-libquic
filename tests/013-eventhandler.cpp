@@ -1,10 +1,3 @@
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers.hpp>
-#include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
 #include "utils.hpp"
 
 namespace oxen::quic::test
@@ -19,7 +12,7 @@ namespace oxen::quic::test
     TEST_CASE("013 - EventHandler event repeater: EventHandler managed lifetime", "[013][repeater][managed]")
     {
         Network test_net{};
-        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::promise<void> prom_a, prom_b;
         std::future<void> fut_a = prom_a.get_future(), fut_b = prom_b.get_future();
@@ -28,7 +21,7 @@ namespace oxen::quic::test
 
         std::shared_ptr<Ticker> handler;
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan) {
             recv_counter += 1;
             if (recv_counter == NUM_ITERATIONS)
             {

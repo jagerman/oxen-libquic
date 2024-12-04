@@ -1,8 +1,3 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
 #include "utils.hpp"
 
 namespace oxen::quic::test
@@ -10,7 +5,7 @@ namespace oxen::quic::test
     TEST_CASE("012 - Stream Buffer Watermarking", "[012][watermark][streams]")
     {
         Network test_net{};
-        bstring req_msg(100'000, std::byte{'a'});
+        std::vector<std::byte> req_msg(100'000, std::byte{'a'});
 
         auto client_established = callback_waiter{[](connection_interface&) {}};
         auto server_established = callback_waiter{[](connection_interface&) {}};
@@ -43,12 +38,12 @@ namespace oxen::quic::test
 
             CHECK(client_stream->has_watermarks());
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
 
             CHECK(low_water.wait());
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
 
             CHECK(high_water.wait());
 
@@ -75,17 +70,17 @@ namespace oxen::quic::test
                             },
                             true});
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
 
             std::this_thread::sleep_for(100ms);
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
 
             std::this_thread::sleep_for(250ms);
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
 
             std::this_thread::sleep_for(250ms);
 
@@ -118,7 +113,7 @@ namespace oxen::quic::test
                             },
                             true});
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
 
             std::this_thread::sleep_for(100ms);
 
@@ -128,10 +123,10 @@ namespace oxen::quic::test
             server_stream->pause();
             REQUIRE(server_stream->is_paused());
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
 
             server_stream->resume();
             REQUIRE_FALSE(server_stream->is_paused());

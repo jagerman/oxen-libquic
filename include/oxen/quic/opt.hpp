@@ -1,10 +1,10 @@
 #pragma once
 
-#include <stdexcept>
-
 #include "address.hpp"
 #include "gnutls_crypto.hpp"
 #include "types.hpp"
+
+#include <stdexcept>
 
 namespace oxen::quic
 {
@@ -22,35 +22,28 @@ namespace oxen::quic
             explicit max_streams(uint64_t s) : stream_count{s} {}
         };
 
-        // supported ALPNs for outbound connections
-        struct outbound_alpns
-        {
-            std::vector<ustring> alpns;
-            explicit outbound_alpns(std::vector<ustring> alpns = {}) : alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit outbound_alpns(std::string_view alpn) : outbound_alpns{{ustring{to_usv(alpn)}}} {}
-        };
-
-        // supported ALPNs for inbound connections
-        struct inbound_alpns
-        {
-            std::vector<ustring> alpns;
-            explicit inbound_alpns(std::vector<ustring> alpns = {}) : alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit inbound_alpns(std::string_view alpn) : inbound_alpns{{ustring{to_usv(alpn)}}} {}
-        };
-
-        // Sets the inbound and outbound ALPNs simulatneous to the same value(s).  This is equivalent to
-        // passing outbound_alpns and inbound_alps, separately, with the same vector argument.
+        // Sets the ALPNs protocols for a given endpoint. The user can pass protos for inbound, outbound, or both
+        // simultaneously
         struct alpns
         {
-            std::vector<ustring> inout_alpns;
-            explicit alpns(std::vector<ustring> alpns = {}) : inout_alpns{std::move(alpns)} {}
+          private:
+            void _emplace(const uspan& p) { protos.emplace_back(std::vector<unsigned char>{p.data(), p.data() + p.size()}); }
 
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit alpns(std::string_view alpn) : alpns{{ustring{to_usv(alpn)}}} {}
+          public:
+            enum class DIR { I, O, IO };
+
+            const DIR direction;
+            std::vector<std::vector<unsigned char>> protos;
+
+            constexpr alpns(DIR d, std::vector<std::vector<unsigned char>>&& alpns) : direction{d}, protos{std::move(alpns)}
+            {}
+
+            template <typename... arg>
+                requires(std::same_as<uspan, arg> && ...)
+            constexpr alpns(DIR d, arg&&... args) : direction{d}
+            {
+                ((void)_emplace(std::forward<arg>(args)), ...);
+            }
         };
 
         struct handshake_timeout
@@ -133,8 +126,8 @@ namespace oxen::quic
         {
             inline static constexpr size_t SECRET_MIN_SIZE{16};
 
-            ustring secret;
-            explicit static_secret(ustring s) : secret{std::move(s)}
+            std::vector<unsigned char> secret;
+            explicit static_secret(std::vector<unsigned char> s) : secret{std::move(s)}
             {
                 if (secret.size() < SECRET_MIN_SIZE)
                     throw std::invalid_argument{
@@ -147,7 +140,7 @@ namespace oxen::quic
         // take responsibility for passing packets into the Endpoint via Endpoint::manually_receive_packet(...)
         struct manual_routing
         {
-            using send_handler_t = std::function<void(const Path&, bstring_view)>;
+            using send_handler_t = std::function<void(const Path&, bspan)>;
 
           private:
             friend Endpoint;
@@ -163,7 +156,7 @@ namespace oxen::quic
                     throw std::runtime_error{"opt::manual_routing must be constructed with a send handler hook!"};
             }
 
-            io_result operator()(const Path& p, bstring_view data, size_t& n)
+            io_result operator()(const Path& p, bspan data, size_t& n)
             {
                 send_hook(p, data);
                 n = 0;
@@ -204,8 +197,8 @@ namespace oxen::quic
         };
     }  // namespace opt
 
-    using gtls_db_validate_cb = std::function<int(gtls_ticket_ptr, time_t)>;
-    using gtls_db_get_cb = std::function<gtls_ticket_ptr(ustring_view)>;
+    using gtls_db_validate_cb = std::function<bool(gtls_ticket_ptr, time_t)>;
+    using gtls_db_get_cb = std::function<gtls_ticket_ptr(uspan)>;
     using gtls_db_put_cb = std::function<void(gtls_ticket_ptr, time_t)>;
 
     namespace opt
@@ -235,7 +228,7 @@ namespace oxen::quic
             see:
             https://www.gnutls.org/manual/html_node/Core-TLS-API.html#gnutls_005fanti_005freplay_005fset_005fadd_005ffunction
 
-            - `gtls_db_get_cb` : The invocation is provided one ustring_view storing the ticket key. The application will
+            - `gtls_db_get_cb` : The invocation is provided one uspan storing the ticket key. The application will
                 return the session ticket in a unique ptr, or nullptr if not found. This can be constructed using the static
                 gtls_session_ticket::make(...) overrides provded. If the endpoint successfully fetches the ticket, it must
                 ERASE THE ENTRY. Servers will reject already used tokens in their cb, so the client must not store them.

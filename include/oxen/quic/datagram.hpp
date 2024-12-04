@@ -30,13 +30,15 @@ namespace oxen::quic
             requires(!std::same_as<CharType, std::byte>)
         void reply(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
         {
-            reply(convert_sv<std::byte>(data), std::move(keep_alive));
+            reply(str_to_bspan(data), std::move(keep_alive));
         }
 
         template <oxenc::basic_char Char>
         void send_datagram(std::vector<Char>&& buf)
         {
-            reply(std::basic_string_view<Char>{buf.data(), buf.size()}, std::make_shared<std::vector<Char>>(std::move(buf)));
+            auto keep_alive = std::make_shared<std::vector<Char>>(std::move(buf));
+            auto sp = vec_to_span<std::byte>(*keep_alive);
+            reply(sp, std::move(keep_alive));
         }
 
         template <oxenc::basic_char CharType>
@@ -44,16 +46,16 @@ namespace oxen::quic
         {
             auto keep_alive = std::make_shared<std::basic_string<CharType>>(std::move(data));
             std::basic_string_view<CharType> view{*keep_alive};
-            reply(view, std::move(keep_alive));
+            reply(str_to_bspan(view), std::move(keep_alive));
         }
 
-        void reply(bstring_view data, std::shared_ptr<void> keep_alive = nullptr);
+        void reply(bspan data, std::shared_ptr<void> keep_alive = nullptr);
     };
 
     // IO callbacks
-    using dgram_data_callback = std::function<void(dgram_interface&, bstring)>;
+    using dgram_data_callback = std::function<void(dgram_interface&, std::vector<std::byte>)>;
 
-    using dgram_buffer = std::deque<std::pair<uint16_t, std::pair<bstring_view, std::shared_ptr<void>>>>;
+    using dgram_buffer = std::deque<std::pair<uint16_t, std::pair<bspan, std::shared_ptr<void>>>>;
 
     class DatagramIO : public IOChannel
     {
@@ -145,7 +147,7 @@ namespace oxen::quic
 
         bool is_stream() const override { return false; }
 
-        std::optional<bstring> to_buffer(bstring_view data, uint16_t dgid);
+        std::optional<std::vector<std::byte>> to_buffer(bspan data, uint16_t dgid);
 
         int datagrams_stored() const { return recv_buffer.datagrams_stored(); }
 
@@ -159,7 +161,7 @@ namespace oxen::quic
       protected:
         bool is_empty_impl() const override { return send_buffer.empty(); }
 
-        void send_impl(bstring_view data, std::shared_ptr<void> keep_alive) override;
+        void send_impl(bspan data, std::shared_ptr<void> keep_alive) override;
 
         bool is_closing_impl() const override;
         bool sent_fin() const override;

@@ -1,6 +1,3 @@
-#include <catch2/catch_test_macros.hpp>
-#include <thread>
-
 #include "utils.hpp"
 
 namespace oxen::quic::test
@@ -31,7 +28,7 @@ namespace oxen::quic::test
     TEST_CASE("003 - Multi-client to server transmission: Execution", "[003][multi-client][execute]")
     {
         Network test_net{};
-        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::atomic<int> data_check{0};
         std::vector<std::promise<void>> stream_promises{4};
@@ -49,7 +46,7 @@ namespace oxen::quic::test
 
         auto p_itr = stream_promises.begin();
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
             data_check += 1;
             p_itr->set_value();

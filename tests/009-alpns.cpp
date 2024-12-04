@@ -1,10 +1,3 @@
-#include <oxenc/hex.h>
-
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
 #include "utils.hpp"
 
 namespace oxen::quic::test
@@ -38,12 +31,12 @@ namespace oxen::quic::test
 
             auto conn = client_endpoint->connect(client_remote, client_tls);
             REQUIRE(client_established.wait());
-            REQUIRE(conn->selected_alpn() == "default"_usv);
+            REQUIRE(conn->selected_alpn() == "default"_usp);
         }
 
         SECTION("No Server ALPNs specified (defaulted)")
         {
-            opt::outbound_alpns client_alpns{{"client"_us}};
+            opt::alpns client_alpns{opt::alpns::DIR::O, "client"_usp};
 
             auto server_endpoint = test_net.endpoint(server_local, timeout);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
@@ -59,7 +52,7 @@ namespace oxen::quic::test
 
         SECTION("No Client ALPNs specified (defaulted)")
         {
-            opt::inbound_alpns server_alpns{{"client"_us, "relay"_us}};
+            opt::alpns server_alpns{opt::alpns::DIR::I, "client"_usp, "relay"_usp};
 
             auto server_endpoint = test_net.endpoint(server_local, server_alpns, timeout);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
@@ -75,8 +68,8 @@ namespace oxen::quic::test
 
         SECTION("Client ALPNs not supported")
         {
-            opt::inbound_alpns server_alpns{{"client"_us, "relay"_us}};
-            opt::outbound_alpns client_alpns{{"foobar"_us}};
+            opt::alpns server_alpns{opt::alpns::DIR::I, "client"_usp, "relay"_usp};
+            opt::alpns client_alpns{opt::alpns::DIR::O, "foobar"_usp};
 
             auto server_endpoint = test_net.endpoint(server_local, server_alpns, timeout);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
@@ -92,9 +85,9 @@ namespace oxen::quic::test
 
         SECTION("Select first ALPN both sides support")
         {
-            opt::inbound_alpns server_alpns{{"client"_us, "relay"_us}};
-            opt::outbound_alpns client_alpns{{"client"_us}};
-            opt::outbound_alpns client_alpns2{{"relay"_us}};
+            opt::alpns server_alpns{opt::alpns::DIR::I, "client"_usp, "relay"_usp};
+            opt::alpns client_alpns{opt::alpns::DIR::O, "client"_usp};
+            opt::alpns client_alpns2{opt::alpns::DIR::O, "relay"_usp};
 
             auto server_endpoint = test_net.endpoint(server_local, server_alpns, timeout);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
@@ -105,25 +98,25 @@ namespace oxen::quic::test
 
             auto conn = client_endpoint->connect(client_remote, client_tls);
             REQUIRE(client_established.wait());
-            REQUIRE(conn->selected_alpn() == "client"_usv);
+            REQUIRE(conn->selected_alpn() == "client"_usp);
 
             auto client_endpoint2 = test_net.endpoint(client_local, client_established2, client_alpns2, timeout);
 
             auto conn2 = client_endpoint2->connect(client_remote, client_tls);
             REQUIRE(client_established2.wait());
-            REQUIRE(conn2->selected_alpn() == "relay"_usv);
+            REQUIRE(conn2->selected_alpn() == "relay"_usp);
         }
 
         SECTION("Bidirectional ALPN incoming")
         {
-            opt::alpns server_alpns{"special-alpn"};
+            opt::alpns server_alpns{opt::alpns::DIR::IO, "special-alpn"_usp};
 
             auto server_endpoint = test_net.endpoint(server_local, server_alpns, timeout);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-            opt::outbound_alpns client_alpns{{"foobar"_us}};
+            opt::alpns client_alpns{opt::alpns::DIR::O, "foobar"_usp};
             auto client_endpoint = test_net.endpoint(client_local, client_established, client_closed, client_alpns, timeout);
 
             auto conn = client_endpoint->connect(client_remote, client_tls);
@@ -133,19 +126,19 @@ namespace oxen::quic::test
 
         SECTION("Bidirectional ALPN outgoing")
         {
-            opt::inbound_alpns server_alpns{"special-alpn"};
+            opt::alpns server_alpns{opt::alpns::DIR::I, "special-alpn"_usp};
 
             auto server_endpoint = test_net.endpoint(server_local, server_alpns, timeout);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
             RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-            opt::alpns client_alpns{"special-alpn"};
+            opt::alpns client_alpns{opt::alpns::DIR::IO, "special-alpn"_usp};
             auto client_endpoint = test_net.endpoint(client_local, client_established, client_alpns, timeout);
 
             auto conn = client_endpoint->connect(client_remote, client_tls);
             REQUIRE(client_established.wait());
-            REQUIRE(conn->selected_alpn() == "special-alpn"_usv);
+            REQUIRE(conn->selected_alpn() == "special-alpn"_usp);
         }
     }
 

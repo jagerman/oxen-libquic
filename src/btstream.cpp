@@ -1,12 +1,12 @@
 #include "btstream.hpp"
 
-#include <stdexcept>
-
 #include "internal.hpp"
+
+#include <stdexcept>
 
 namespace oxen::quic
 {
-    static std::pair<std::ptrdiff_t, std::size_t> get_location(bstring& data, std::string_view substr)
+    static std::pair<std::ptrdiff_t, std::size_t> get_location(std::vector<std::byte>& data, std::string_view substr)
     {
         auto* bsubstr = reinterpret_cast<const std::byte*>(substr.data());
         // Make sure the given substr actually is a substr of data:
@@ -14,12 +14,12 @@ namespace oxen::quic
         return {bsubstr - data.data(), substr.size()};
     }
 
-    message::message(BTRequestStream& bp, bstring req, bool is_timeout) :
+    message::message(BTRequestStream& bp, std::vector<std::byte> req, bool is_timeout) :
             data{std::move(req)}, return_sender{bp.weak_from_this()}, _rid{bp.reference_id}, timed_out{is_timeout}
     {
         if (!is_timeout)
         {
-            oxenc::bt_list_consumer btlc(data);
+            oxenc::bt_list_consumer btlc(bspan{data});
 
             req_type = get_location(data, btlc.consume_string_view());
             req_id = btlc.consume_integer<int64_t>();
@@ -33,7 +33,7 @@ namespace oxen::quic
         }
     }
 
-    void message::respond(bstring_view body, bool error) const
+    void message::respond(bspan body, bool error) const
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -53,7 +53,7 @@ namespace oxen::quic
         log::debug(log_cat, "Bparser set generic request handler");
         generic_handler = std::move(request_handler);
     }
-    void BTRequestStream::respond(int64_t rid, bstring_view body, bool error)
+    void BTRequestStream::respond(int64_t rid, bspan body, bool error)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -89,7 +89,7 @@ namespace oxen::quic
         }
     }
 
-    void BTRequestStream::receive(bstring_view data)
+    void BTRequestStream::receive(bspan data)
     {
         log::trace(log_cat, "bparser recv data callback called!");
 
@@ -98,7 +98,7 @@ namespace oxen::quic
 
         try
         {
-            process_incoming(to_sv(data));
+            process_incoming(data);
         }
         catch (const std::exception& e)
         {
@@ -186,7 +186,7 @@ namespace oxen::quic
         catch (const no_such_endpoint&)
         {
             log::warning(log_cat, "No handler found for endpoint {}, returning error response", ep);
-            respond(req_id, convert_sv<std::byte, char>("Invalid endpoint '{}'"_format(ep)), true);
+            respond(req_id, str_to_bspan("Invalid endpoint '{}'"_format(ep)), true);
         }
         catch (const std::exception& e)
         {
@@ -195,11 +195,11 @@ namespace oxen::quic
                     "Handler for {} threw an uncaught exception ({}); returning a generic error message",
                     ep,
                     e.what());
-            respond(req_id, "An error occurred while processing the request"_bsv, true);
+            respond(req_id, "An error occurred while processing the request"_bsp, true);
         }
     }
 
-    void BTRequestStream::process_incoming(std::string_view req)
+    void BTRequestStream::process_incoming(bspan req)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -212,7 +212,8 @@ namespace oxen::quic
                 if (not size_buf.empty())
                 {
                     size_t prev_len = size_buf.size();
-                    size_buf += req.substr(0, MAX_REQ_LEN_ENCODED);
+                    size_buf.resize(prev_len + MAX_REQ_LEN_ENCODED);
+                    std::memcpy(size_buf.data() + prev_len, req.data(), MAX_REQ_LEN_ENCODED);
 
                     consumed = parse_length(size_buf);
 
@@ -220,18 +221,19 @@ namespace oxen::quic
                         return;
 
                     size_buf.clear();
-                    req.remove_prefix(consumed - prev_len);
+                    req = req.subspan(consumed - prev_len);
                 }
                 else
                 {
-                    consumed = parse_length(convert_sv<char>(req));
+                    consumed = parse_length(span_to_span<char>(req));
                     if (consumed == 0)
                     {
-                        size_buf += req;
+                        size_buf.resize(req.size());
+                        std::memcpy(size_buf.data(), req.data(), req.size());
                         return;
                     }
 
-                    req.remove_prefix(consumed);
+                    req = req.subspan(consumed);
                 }
             }
 
@@ -245,8 +247,8 @@ namespace oxen::quic
                 if (buf.size() < current_len)
                 {
                     size_t need = current_len - buf.size();
-                    buf += convert_sv<std::byte>(req.substr(0, need));
-                    req.remove_prefix(need);
+                    buf.insert(buf.end(), req.begin(), req.begin() + need);
+                    req = req.subspan(need);
                 }
 
                 handle_input(message{*this, std::move(buf)});
@@ -260,13 +262,13 @@ namespace oxen::quic
 
             // Otherwise we don't have enough data on hand for a complete request, so move what we
             // got to the buffer to be processed when the next incoming chunk of data arrives.
-            buf.reserve(current_len);
-            buf += convert_sv<std::byte>(req);
+            // buf.reserve(current_len);
+            buf.insert(buf.end(), req.begin(), req.end());
             return;
         }
     }
 
-    std::string BTRequestStream::encode_command(std::string_view endpoint, int64_t rid, bstring_view body)
+    std::string BTRequestStream::encode_command(std::string_view endpoint, int64_t rid, bspan body)
     {
         oxenc::bt_list_producer btlp;
 
@@ -278,7 +280,7 @@ namespace oxen::quic
         return std::move(btlp).str();
     }
 
-    std::string BTRequestStream::encode_response(int64_t rid, bstring_view body, bool error)
+    std::string BTRequestStream::encode_response(int64_t rid, bspan body, bool error)
     {
         oxenc::bt_list_producer btlp;
 
@@ -321,12 +323,12 @@ namespace oxen::quic
         Error:
             throws on invalid value
     */
-    size_t BTRequestStream::parse_length(std::string_view req)
+    size_t BTRequestStream::parse_length(cspan req)
     {
-        auto pos = req.find_first_of(':');
+        auto itr = std::find(req.begin(), req.end(), ':');
 
         // request is incomplete with no readable request length
-        if (pos == std::string_view::npos)
+        if (itr == req.end())
         {
             if (req.size() >= MAX_REQ_LEN_ENCODED)
                 // we didn't find a valid length, but do have enough consumed for the maximum valid
@@ -335,6 +337,8 @@ namespace oxen::quic
 
             return 0;
         }
+
+        size_t pos = std::distance(req.begin(), itr);
 
         auto [ptr, ec] = std::from_chars(req.data(), req.data() + pos, current_len);
 

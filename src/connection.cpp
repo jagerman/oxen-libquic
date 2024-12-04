@@ -1,14 +1,5 @@
 #include "connection.hpp"
 
-#include <cassert>
-#include <chrono>
-#include <cstdint>
-#include <exception>
-#include <limits>
-#include <memory>
-#include <random>
-#include <stdexcept>
-
 #include "datagram.hpp"
 #include "endpoint.hpp"
 #include "error.hpp"
@@ -17,6 +8,15 @@
 #include "internal.hpp"
 #include "stream.hpp"
 #include "utils.hpp"
+
+#include <cassert>
+#include <chrono>
+#include <cstdint>
+#include <exception>
+#include <limits>
+#include <memory>
+#include <random>
+#include <stdexcept>
 
 namespace oxen::quic
 {
@@ -385,7 +385,7 @@ namespace oxen::quic
     int Connection::recv_token(const uint8_t* token, size_t tokenlen)
     {
         // This should only be called by the client, and therefore this will always have a value
-        _endpoint.store_path_validation_token(_path.remote, {token, tokenlen});
+        _endpoint.store_path_validation_token(_path.remote, {token, token + tokenlen});
         return 0;
     }
 
@@ -404,7 +404,7 @@ namespace oxen::quic
                 }
             }
 
-            ustring data;
+            std::vector<unsigned char> data;
             data.resize(256);
 
             if (auto len = ngtcp2_conn_encode_0rtt_transport_params(conn.get(), data.data(), data.size()); len > 0)
@@ -460,7 +460,10 @@ namespace oxen::quic
         _is_validated = true;
 
         if (is_inbound() and not context->disable_key_verification)
-            remote_pubkey = dynamic_cast<GNUTLSSession*>(get_session())->remote_key();
+        {
+            auto key = detail::get_session(this)->remote_key();
+            remote_pubkey.assign(key.begin(), key.end());
+        }
     }
 
     int Connection::last_cleared() const
@@ -493,7 +496,7 @@ namespace oxen::quic
         _associated_cids.erase(cid);
     }
 
-    ustring_view Connection::remote_key() const
+    uspan Connection::remote_key() const
     {
         return remote_pubkey;
     }
@@ -1311,7 +1314,7 @@ namespace oxen::quic
         return NGTCP2_ERR_CALLBACK_FAILURE;
     }
 
-    int Connection::stream_receive(int64_t id, bstring_view data, bool fin)
+    int Connection::stream_receive(int64_t id, bspan data, bool fin)
     {
         auto str = get_stream(id);
 
@@ -1390,11 +1393,11 @@ namespace oxen::quic
         return 0;
     }
 
-    int Connection::recv_datagram(bstring_view data, bool fin)
+    int Connection::recv_datagram(bspan data, bool fin)
     {
         log::trace(log_cat, "Connection (CID: {}) received datagram: {}", _source_cid, buffer_printer{data});
 
-        std::optional<bstring> maybe_data;
+        std::optional<std::vector<std::byte>> maybe_data;
 
         if (_packet_splitting)
         {
@@ -1405,7 +1408,7 @@ namespace oxen::quic
             }
 
             uint16_t dgid = oxenc::load_big_to_host<uint16_t>(data.data());
-            data.remove_prefix(2);
+            data = data.subspan(2);
 
             if (dgid % 4 == 0)
                 log::trace(log_cat, "Datagram sent unsplit, bypassing rotating buffer");
@@ -1431,7 +1434,8 @@ namespace oxen::quic
 
             try
             {
-                datagrams->dgram_data_cb(*di, (maybe_data ? std::move(*maybe_data) : bstring{data.begin(), data.end()}));
+                datagrams->dgram_data_cb(
+                        *di, (maybe_data ? std::move(*maybe_data) : std::vector<std::byte>{data.begin(), data.end()}));
                 good = true;
             }
             catch (const std::exception& e)
@@ -1468,12 +1472,12 @@ namespace oxen::quic
         return 0;
     }
 
-    ustring_view Connection::selected_alpn() const
+    uspan Connection::selected_alpn() const
     {
         return _endpoint.call_get([this]() { return get_session()->selected_alpn(); });
     }
 
-    void Connection::send_datagram(bstring_view data, std::shared_ptr<void> keep_alive)
+    void Connection::send_datagram(bspan data, std::shared_ptr<void> keep_alive)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -1616,9 +1620,9 @@ namespace oxen::quic
             const quic_cid& dcid,
             const Path& path,
             std::shared_ptr<IOContext> ctx,
-            const std::vector<ustring>& alpns,
+            const std::vector<std::vector<unsigned char>>& alpns,
             std::chrono::nanoseconds default_handshake_timeout,
-            std::optional<ustring> remote_pk,
+            std::optional<std::vector<unsigned char>> remote_pk,
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
             ngtcp2_cid* ocid) :
@@ -1834,9 +1838,9 @@ namespace oxen::quic
             const quic_cid& dcid,
             const Path& path,
             std::shared_ptr<IOContext> ctx,
-            const std::vector<ustring>& alpns,
+            const std::vector<std::vector<unsigned char>>& alpns,
             std::chrono::nanoseconds default_handshake_timeout,
-            std::optional<ustring> remote_pk,
+            std::optional<std::vector<unsigned char>> remote_pk,
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
             ngtcp2_cid* ocid)

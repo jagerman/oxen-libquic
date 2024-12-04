@@ -1,8 +1,8 @@
 #include "address.hpp"
 
-#include <oxenc/endian.h>
-
 #include "internal.hpp"
+
+#include <oxenc/endian.h>
 
 namespace oxen::quic
 {

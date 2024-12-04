@@ -139,7 +139,7 @@ namespace oxen::quic
     }
 
     std::unique_ptr<TLSSession> GNUTLSCreds::make_session(
-            Connection& c, const std::shared_ptr<IOContext>& ctx, const std::vector<ustring>& alpns)
+            Connection& c, const std::shared_ptr<IOContext>& ctx, const std::vector<std::vector<unsigned char>>& alpns)
     {
         return std::make_unique<GNUTLSSession>(*this, ctx, c, alpns);
     }

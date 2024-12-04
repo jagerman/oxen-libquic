@@ -5,30 +5,36 @@
 // available (which is true in libquic itself, but may not be when libquic is installed as a
 // library).
 
+#include "formattable.hpp"
+
+#include <oxenc/span.h>
+
 #include <fmt/format.h>
-#include <oxenc/common.h>
 
 #include <iostream>
-
-#include "formattable.hpp"
 
 namespace oxen::quic
 {
     struct buffer_printer
     {
+      private:
         std::basic_string_view<std::byte> buf;
+
+      public:
+        template <oxenc::basic_char T>
+        explicit buffer_printer(const T* data, size_t datalen) : buf{reinterpret_cast<const std::byte*>(data), datalen}
+        {}
 
         // Constructed from any type of string_view<T> for a single-byte T (char, std::byte,
         // uint8_t, etc.)
         template <oxenc::basic_char T>
-        explicit buffer_printer(std::basic_string_view<T> buf) :
-                buf{reinterpret_cast<const std::byte*>(buf.data()), buf.size()}
+        explicit buffer_printer(std::basic_string_view<T> data) : buffer_printer{data.data(), data.size()}
         {}
 
         // Constructed from any type of lvalue string<T> for a single-byte T (char, std::byte,
         // uint8_t, etc.)
         template <oxenc::basic_char T>
-        explicit buffer_printer(const std::basic_string<T>& buf) : buffer_printer(std::basic_string_view<T>{buf})
+        explicit buffer_printer(const std::basic_string<T>& data) : buffer_printer{data.data(), data.size()}
         {}
 
         // *Not* constructable from a string<T> rvalue (because we only hold a view and do not take
@@ -36,9 +42,9 @@ namespace oxen::quic
         template <oxenc::basic_char T>
         explicit buffer_printer(std::basic_string<T>&& buf) = delete;
 
-        // Constructable from a (T*, size) argument pair, for byte-sized T's.
-        template <oxenc::basic_char T>
-        explicit buffer_printer(const T* data, size_t size) : buffer_printer(std::basic_string_view<T>{data, size})
+        // Constructed from any type of span
+        template <oxenc::const_span_type T>
+        explicit buffer_printer(const T& data) : buffer_printer{data.data(), data.size()}
         {}
 
         std::string to_string() const;
@@ -55,6 +61,17 @@ namespace fmt
         auto format(const T& val, FormatContext& ctx) const
         {
             return formatter<std::string_view>::format(val.to_string(), ctx);
+        }
+    };
+
+    template <oxenc::const_span_type T>
+    struct formatter<T, char> : formatter<std::string_view>
+    {
+        template <typename FormatContext>
+        auto format(const T& val, FormatContext& ctx) const
+        {
+            return formatter<std::string_view>::format(
+                    std::string_view{reinterpret_cast<const char*>(val.data()), val.size()}, ctx);
         }
     };
 }  // namespace fmt

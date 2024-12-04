@@ -74,12 +74,12 @@ namespace oxen::quic
         return ci.shared_from_this();
     }
 
-    void dgram_interface::reply(bstring_view data, std::shared_ptr<void> keep_alive)
+    void dgram_interface::reply(bspan data, std::shared_ptr<void> keep_alive)
     {
         ci.send_datagram(data, std::move(keep_alive));
     }
 
-    void DatagramIO::send_impl(bstring_view data, std::shared_ptr<void> keep_alive)
+    void DatagramIO::send_impl(bspan data, std::shared_ptr<void> keep_alive)
     {
         // if packet_splitting is lazy OR packet_splitting is off, send as "normal" datagram
         endpoint.call([this, data, keep_alive = std::move(keep_alive)]() {
@@ -134,7 +134,7 @@ namespace oxen::quic
         return send_buffer.prepare(r, _packet_splitting);
     }
 
-    std::optional<bstring> DatagramIO::to_buffer(bstring_view data, uint16_t dgid)
+    std::optional<std::vector<std::byte>> DatagramIO::to_buffer(bspan data, uint16_t dgid)
     {
         log::trace(log_cat, "DatagramIO handed datagram with endian swapped ID: {}", dgid);
 

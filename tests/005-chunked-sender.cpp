@@ -1,8 +1,6 @@
-#include <catch2/catch_test_macros.hpp>
-#include <iterator>
-#include <thread>
-
 #include "utils.hpp"
+
+#include <iterator>
 
 namespace oxen::quic::test
 {
@@ -20,7 +18,7 @@ namespace oxen::quic::test
         std::promise<void> finished_p;
         std::future<void> finished_f = finished_p.get_future();
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view data) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan data) {
             std::lock_guard lock{recv_mut};
             received.append(reinterpret_cast<const char*>(data.data()), data.size());
 

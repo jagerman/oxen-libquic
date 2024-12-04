@@ -1,10 +1,10 @@
 #pragma once
 
-#include <array>
-
 #include "address.hpp"
 #include "types.hpp"
 #include "utils.hpp"
+
+#include <array>
 
 namespace oxen::quic
 {
@@ -14,7 +14,7 @@ namespace oxen::quic
 
     struct outbound_dgram
     {
-        bstring_view data;
+        bspan data;
         uint16_t id;
         // -1: payload, 1: addendum
         int8_t type{0};
@@ -44,7 +44,7 @@ namespace oxen::quic
         std::array<std::byte, MAX_PMTUD_UDP_PAYLOAD> data;
 
         received_datagram() = default;
-        explicit received_datagram(uint16_t dgid, bstring_view d) :
+        explicit received_datagram(uint16_t dgid, bspan d) :
                 id{dgid}, part{(dgid % 4 == 2) ? int8_t{-1} : int8_t{1}}, data_size{static_cast<uint16_t>(d.size())}
         {
             std::memcpy(data.data(), d.data(), data_size);
@@ -55,26 +55,25 @@ namespace oxen::quic
     {
         uint16_t pload_id;
         std::optional<uint16_t> add_id;
-        std::optional<bstring_view> payload, addendum;
+        std::optional<bspan> payload, addendum;
         std::shared_ptr<void> keep_alive;
         dgram type;
 
         static datagram_storage make(
-                bstring_view pload, uint16_t d_id, std::shared_ptr<void> data, dgram type, size_t max_size = 0);
+                bspan pload, uint16_t d_id, std::shared_ptr<void> data, dgram type, size_t max_size = 0);
 
         bool empty() const { return !(payload || addendum); }
 
         outbound_dgram fetch(bool b);
 
-        size_t size() const { return payload->length() + addendum->length(); }
+        size_t size() const { return payload->size() + addendum->size(); }
 
       private:
-        explicit datagram_storage(bstring_view pload, uint16_t p_id, std::shared_ptr<void> data) :
+        explicit datagram_storage(bspan pload, uint16_t p_id, std::shared_ptr<void> data) :
                 pload_id{p_id}, payload{pload}, keep_alive{std::move(data)}, type{dgram::STANDARD}
         {}
 
-        explicit datagram_storage(
-                bstring_view pload, bstring_view add, uint16_t p_id, uint16_t a_id, std::shared_ptr<void> data) :
+        explicit datagram_storage(bspan pload, bspan add, uint16_t p_id, uint16_t a_id, std::shared_ptr<void> data) :
                 pload_id{p_id},
                 add_id{a_id},
                 payload{pload},
@@ -98,7 +97,7 @@ namespace oxen::quic
 
         std::array<std::vector<std::unique_ptr<received_datagram>>, 4> buf;
 
-        std::optional<bstring> receive(bstring_view data, uint16_t dgid);
+        std::optional<std::vector<std::byte>> receive(bspan data, uint16_t dgid);
         void clear_row(int index);
         int datagrams_stored() const;
     };
@@ -114,7 +113,7 @@ namespace oxen::quic
 
         prepared_datagram prepare(bool b, int is_splitting);
 
-        void emplace(bstring_view pload, uint16_t p_id, std::shared_ptr<void> data, dgram type, size_t max_size = 0);
+        void emplace(bspan pload, uint16_t p_id, std::shared_ptr<void> data, dgram type, size_t max_size = 0);
     };
 
 }  // namespace oxen::quic

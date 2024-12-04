@@ -2,17 +2,18 @@
     Test client binary
 */
 
+#include "utils.hpp"
+
+#include <oxen/quic.hpp>
+#include <oxen/quic/gnutls_crypto.hpp>
 #include <oxenc/endian.h>
 
 #include <CLI/Validators.hpp>
+
 #include <chrono>
 #include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
 #include <random>
 #include <thread>
-
-#include "utils.hpp"
 
 using namespace oxen::quic;
 
@@ -146,7 +147,7 @@ int main(int argc, char* argv[])
         log::critical(test_cat, "Stream {} (rawid={}) closed (error={})", i, s.stream_id(), errcode);
     };
 
-    stream_data_callback on_stream_data = [&](Stream& s, bstring_view data) {
+    stream_data_callback on_stream_data = [&](Stream& s, bspan data) {
         size_t i = s.stream_id() >> 2;
         if (i >= parallel)
         {
@@ -176,7 +177,7 @@ int main(int argc, char* argv[])
             log::error(test_cat, "Got unexpected data from the other side: {}B != 32B", data.size());
             sd.failed = true;
         }
-        else if (data.substr(0, 32) != sd.hash)
+        else if (auto first = data.first(32); first != sd.hash)
         {
             log::critical(
                     test_cat,
@@ -298,7 +299,7 @@ int main(int argc, char* argv[])
         {
             s.remaining = 0;
             s.done_sending = true;
-            s.stream->send(bstring_view{s.bufs[0].data(), s.bufs[0].size()});
+            s.stream->send(bspan{s.bufs[0].data(), s.bufs[0].size()});
         }
         else
         {

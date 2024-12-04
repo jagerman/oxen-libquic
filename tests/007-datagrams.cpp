@@ -1,14 +1,3 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/connection.hpp>
-#include <oxen/quic/datagram.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <oxen/quic/opt.hpp>
-#include <oxen/quic/types.hpp>
-#include <oxen/quic/utils.hpp>
-#include <stdexcept>
-#include <thread>
-
 #include "utils.hpp"
 
 namespace oxen::quic::test
@@ -153,18 +142,18 @@ namespace oxen::quic::test
             auto client_established = callback_waiter{[](connection_interface&) {}};
 
             Network test_net{};
-            constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
+            constexpr auto msg = "hello from the other siiiii-iiiiide"_bsp;
 
             std::promise<void> data_promise;
             std::future<void> data_future = data_promise.get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte>) {
                 log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
                 data_promise.set_value();
             };
             std::atomic<bool> bad_call = false;
-            dgram_data_callback overridden_dgram_cb = [&](dgram_interface&, bstring) {
+            dgram_data_callback overridden_dgram_cb = [&](dgram_interface&, std::vector<std::byte>) {
                 log::critical(test_cat, "Wrong dgram callback invoked!");
                 bad_call = true;
             };
@@ -214,10 +203,10 @@ namespace oxen::quic::test
             std::promise<void> data_promise;
             std::future<void> data_future = data_promise.get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
+            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte> data) {
                 log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
                 ++data_counter;
-                if (data == "final"_bs)
+                if (data == "final"_bsp)
                     data_promise.set_value();
             };
 
@@ -302,7 +291,7 @@ namespace oxen::quic::test
             for (int i = 0; i < n; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte>) {
                 log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
                 try
@@ -386,7 +375,7 @@ namespace oxen::quic::test
             for (size_t i = 0; i < n; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte>) {
                 log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
                 try
@@ -470,9 +459,9 @@ namespace oxen::quic::test
             for (int i = 0; i < bufsize; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            bstring received{};
+            std::vector<std::byte> received{};
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
+            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte> data) {
                 log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
                 counter += 1;
@@ -508,13 +497,13 @@ namespace oxen::quic::test
 
             auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
 
-            bstring dropped_msg(1500, std::byte{'-'});
-            bstring successful_msg(1500, std::byte{'+'});
+            std::vector<std::byte> dropped_msg(1500, std::byte{'-'});
+            std::vector<std::byte> successful_msg(1500, std::byte{'+'});
 
             TestHelper::enable_dgram_drop(static_cast<Connection&>(*server_ci));
 
             for (int i = 0; i < quarter; ++i)
-                conn_interface->send_datagram(bstring_view{dropped_msg});
+                conn_interface->send_datagram(bspan{dropped_msg});
 
             while (TestHelper::get_dgram_debug_counter(*server_ci) < quarter)
                 std::this_thread::sleep_for(10ms);
@@ -522,7 +511,7 @@ namespace oxen::quic::test
             TestHelper::disable_dgram_drop(*server_ci);
 
             for (int i = 0; i < bufsize; ++i)
-                conn_interface->send_datagram(bstring_view{successful_msg});
+                conn_interface->send_datagram(bspan{successful_msg});
 
             for (auto& f : data_futures)
                 require_future(f);
@@ -560,7 +549,7 @@ namespace oxen::quic::test
             for (size_t i = 0; i < n; ++i)
                 data_futures[i] = data_promises[i].get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte>) {
                 log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
                 try

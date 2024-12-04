@@ -13,7 +13,7 @@ namespace oxen::quic
             v.resize(rowsize);
     }
 
-    std::optional<bstring> rotating_buffer::receive(bstring_view data, uint16_t dgid)
+    std::optional<std::vector<std::byte>> rotating_buffer::receive(bspan data, uint16_t dgid)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -58,17 +58,17 @@ namespace oxen::quic
                     row,
                     col);
 
-            bstring out;
-            out.reserve(b->data_size + data.size());
+            std::vector<std::byte> out(b->data_size + data.size());
+
             if (b->part < 0)
             {  // We have the first part already
-                out.append(b->data.data(), b->data_size);
-                out.append(data);
+                std::memcpy(out.data(), b->data.data(), b->data_size);
+                std::memcpy(out.data() + b->data_size, data.data(), data.size());
             }
             else
             {
-                out.append(data);
-                out.append(b->data.data(), b->data_size);
+                std::memcpy(out.data() + b->data_size, data.data(), data.size());
+                std::memcpy(out.data(), b->data.data(), b->data_size);
             }
             b.reset();
 
@@ -95,7 +95,7 @@ namespace oxen::quic
         return std::nullopt;
     }
 
-    void buffer_que::emplace(bstring_view pload, uint16_t p_id, std::shared_ptr<void> data, dgram type, size_t max_size)
+    void buffer_que::emplace(bspan pload, uint16_t p_id, std::shared_ptr<void> data, dgram type, size_t max_size)
     {
         auto d_storage = datagram_storage::make(pload, p_id, std::move(data), type, max_size);
 
@@ -190,7 +190,7 @@ namespace oxen::quic
     }
 
     datagram_storage datagram_storage::make(
-            bstring_view pload, uint16_t d_id, std::shared_ptr<void> data, dgram type, size_t max_size)
+            bspan pload, uint16_t d_id, std::shared_ptr<void> data, dgram type, size_t max_size)
     {
         if (type == dgram::STANDARD)
             return datagram_storage(pload, d_id, std::move(data));
@@ -198,7 +198,7 @@ namespace oxen::quic
         assert(max_size != 0);
 
         auto half_size = max_size / 2;
-        auto first_half = pload.substr(0, half_size), second_half = pload.substr(half_size);
+        auto first_half = pload.subspan(0, half_size), second_half = pload.subspan(half_size);
 
         assert(d_id % 4 == 2);
 

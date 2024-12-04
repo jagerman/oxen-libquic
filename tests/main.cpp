@@ -1,6 +1,6 @@
-#include <catch2/catch_session.hpp>
-
 #include "utils.hpp"
+
+#include <catch2/catch_session.hpp>
 
 bool oxen::quic::disable_ipv6, oxen::quic::disable_rotating_buffer;
 

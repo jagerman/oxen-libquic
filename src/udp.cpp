@@ -18,10 +18,10 @@ extern "C"
 #endif
 }
 
-#include <system_error>
-
 #include "internal.hpp"
 #include "udp.hpp"
+
+#include <system_error>
 
 #ifdef _WIN32
 
@@ -291,7 +291,7 @@ namespace oxen::quic
 #endif
     }
 
-    void UDPSocket::process_packet(bstring_view payload, msghdr& hdr)
+    void UDPSocket::process_packet(bspan payload, msghdr& hdr)
     {
         if (payload.empty())
         {
@@ -368,7 +368,7 @@ namespace oxen::quic
             }
 
             for (int i = 0; i < nread; i++)
-                process_packet(bstring_view{data[i].data(), msgs[i].msg_len}, msgs[i].msg_hdr);
+                process_packet(bspan{data[i].data(), msgs[i].msg_len}, msgs[i].msg_hdr);
 
             count += nread;
 
@@ -440,7 +440,7 @@ namespace oxen::quic
             }
 #endif
 
-            process_packet(bstring_view{data.data(), static_cast<size_t>(nbytes)}, hdr);
+            process_packet(bspan{data.data(), static_cast<size_t>(nbytes)}, hdr);
 
             count++;
 
@@ -784,7 +784,7 @@ namespace oxen::quic
         event_add(wev_.get(), nullptr);
     }
 
-    Packet::Packet(const Address& local, bstring_view data, msghdr& hdr) :
+    Packet::Packet(const Address& local, bspan data, msghdr& hdr) :
             path{local,
 #ifdef _WIN32
                  {static_cast<const sockaddr*>(hdr.name), hdr.namelen}

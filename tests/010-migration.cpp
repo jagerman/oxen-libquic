@@ -1,8 +1,3 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
 #include "utils.hpp"
 
 namespace oxen::quic::test
@@ -10,7 +5,7 @@ namespace oxen::quic::test
     TEST_CASE("010 - Migration", "[010][migration]")
     {
         Network test_net{};
-        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsp;
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
@@ -30,7 +25,7 @@ namespace oxen::quic::test
         std::shared_ptr<Endpoint> client_endpoint;
         std::shared_ptr<connection_interface> server_ci;
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view dat) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
             REQUIRE(good_msg == dat);
             d_promise.set_value();

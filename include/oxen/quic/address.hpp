@@ -1,12 +1,12 @@
 #pragma once
 
-#include <oxenc/endian.h>
-
-#include <compare>
-
 #include "formattable.hpp"
 #include "ip.hpp"
 #include "types.hpp"
+
+#include <oxenc/endian.h>
+
+#include <compare>
 
 #if defined(__OpenBSD__) || defined(__DragonFly__)
 // These systems are known to disallow dual stack binding, and so on such systems when
@@ -292,28 +292,32 @@ namespace oxen::quic
     struct RemoteAddress : public Address
     {
       private:
-        ustring remote_pubkey;
+        std::vector<unsigned char> _remote_pubkey;
 
       public:
         RemoteAddress() = delete;
 
         template <typename... Opt>
         RemoteAddress(std::string_view remote_pk, Opt&&... opts) :
-                Address{std::forward<Opt>(opts)...}, remote_pubkey{to_usv(remote_pk)}
-        {}
+                Address{std::forward<Opt>(opts)...}, _remote_pubkey(remote_pk.size())
+        {
+            std::memcpy(_remote_pubkey.data(), remote_pk.data(), remote_pk.size());
+        }
 
         template <typename... Opt>
-        RemoteAddress(ustring_view remote_pk, Opt&&... opts) : Address{std::forward<Opt>(opts)...}, remote_pubkey{remote_pk}
-        {}
+        RemoteAddress(uspan remote_pk, Opt&&... opts) : Address{std::forward<Opt>(opts)...}
+        {
+            _remote_pubkey.assign(remote_pk.data(), remote_pk.data() + remote_pk.size());
+        }
 
-        ustring_view view_remote_key() const { return remote_pubkey; }
-        const ustring& get_remote_key() const& { return remote_pubkey; }
-        ustring&& get_remote_key() && { return std::move(remote_pubkey); }
+        uspan view_remote_key() const { return _remote_pubkey; }
+        const std::vector<unsigned char>& get_remote_key() const& { return _remote_pubkey; }
+        std::vector<unsigned char>&& get_remote_key() && { return std::move(_remote_pubkey); }
 
-        RemoteAddress(const RemoteAddress& obj) : Address{obj}, remote_pubkey{obj.remote_pubkey} {}
+        RemoteAddress(const RemoteAddress& obj) : Address{obj}, _remote_pubkey{obj._remote_pubkey} {}
         RemoteAddress& operator=(const RemoteAddress& obj)
         {
-            remote_pubkey = obj.remote_pubkey;
+            _remote_pubkey = obj._remote_pubkey;
             Address::operator=(obj);
             _copy_internals(obj);
             return *this;

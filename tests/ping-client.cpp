@@ -2,21 +2,23 @@
     Ping client binary
 */
 
-#include <gnutls/gnutls.h>
+#include "utils.hpp"
+
+#include <oxen/quic.hpp>
+#include <oxen/quic/gnutls_crypto.hpp>
 #include <oxenc/endian.h>
 #include <oxenc/hex.h>
 
 #include <CLI/Validators.hpp>
-#include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
 
-#include "utils.hpp"
+#include <gnutls/gnutls.h>
+
+#include <future>
+#include <thread>
 
 using namespace oxen::quic;
 
-constexpr auto client_msg = "good morning"_bsv;
+constexpr auto client_msg = "good morning"_bsp;
 
 int main(int argc, char* argv[])
 {
@@ -105,7 +107,7 @@ int main(int argc, char* argv[])
         all_done.set_value();
     };
 
-    auto stream_recv = [&](Stream& s, bstring_view) {
+    auto stream_recv = [&](Stream& s, bspan) {
         // get the time first, then do ops
         auto t = get_timestamp<std::chrono::milliseconds>().count();
         if (not first_data.exchange(true))

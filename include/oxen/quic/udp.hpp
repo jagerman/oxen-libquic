@@ -4,21 +4,22 @@ extern "C"
 {
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
-#include <mswsock.h>
 #include <winsock2.h>
+
+#include <mswsock.h>
 #else
 #include <netinet/in.h>
 #endif
 }
 
+#include "address.hpp"
+#include "types.hpp"
+#include "utils.hpp"
+
 #include <event2/event.h>
 
 #include <cstdint>
 #include <variant>
-
-#include "address.hpp"
-#include "types.hpp"
-#include "utils.hpp"
 
 namespace oxen::quic
 {
@@ -48,17 +49,18 @@ namespace oxen::quic
         }
 
         /// Constructs a packet from a path and data view:
-        Packet(Path p, bstring_view d) : path{std::move(p)}, data_sp{d.begin(), d.end()} {}
+        Packet(Path p, bspan d) : path{std::move(p)}, data_sp{d.begin(), d.end()} {}
 
         /// Constructs a packet from a path and transferred data:
-        Packet(Path p, bstring&& d) : path{std::move(p)}, pkt_data(d.size()), data_sp{pkt_data.data(), d.size()}
+        Packet(Path p, std::vector<std::byte>&& d) :
+                path{std::move(p)}, pkt_data(d.size()), data_sp{pkt_data.data(), d.size()}
         {
             std::memmove(pkt_data.data(), d.data(), d.size());
         }
 
         /// Constructs a packet from a local address, data, and the IP header; remote addr and ECN
         /// data are extracted from the header.
-        Packet(const Address& local, bstring_view data, msghdr& hdr);
+        Packet(const Address& local, bspan data, msghdr& hdr);
     };
 
     /// RAII class wrapping a UDP socket; the socket is bound at construction and closed during
@@ -130,7 +132,7 @@ namespace oxen::quic
         ~UDPSocket();
 
       private:
-        void process_packet(bstring_view payload, msghdr& hdr);
+        void process_packet(bspan payload, msghdr& hdr);
         io_result receive();
 
         socket_t sock_;

@@ -9,6 +9,13 @@ extern "C"
 #endif
 }
 
+#include "connection.hpp"
+#include "context.hpp"
+#include "gnutls_crypto.hpp"
+#include "network.hpp"
+#include "udp.hpp"
+#include "utils.hpp"
+
 #include <cstddef>
 #include <list>
 #include <memory>
@@ -18,13 +25,6 @@ extern "C"
 #include <random>
 #include <string>
 #include <unordered_map>
-
-#include "connection.hpp"
-#include "context.hpp"
-#include "gnutls_crypto.hpp"
-#include "network.hpp"
-#include "udp.hpp"
-#include "utils.hpp"
 
 namespace oxen::quic
 {
@@ -156,7 +156,7 @@ namespace oxen::quic
         bool in_event_loop() const;
 
         // Returns a random value suitable for use as the Endpoint static secret value.
-        static ustring make_static_secret();
+        static std::vector<unsigned char> make_static_secret();
 
         void manually_receive_packet(Packet&& pkt);
 
@@ -167,7 +167,7 @@ namespace oxen::quic
 
         int validate_anti_replay(gtls_ticket_ptr ticket, time_t exp);
         void store_session_ticket(gtls_ticket_ptr ticket);
-        gtls_ticket_ptr get_session_ticket(const ustring_view& remote_pk);
+        gtls_ticket_ptr get_session_ticket(const uspan& remote_pk);
 
       private:
         friend class Network;
@@ -198,20 +198,20 @@ namespace oxen::quic
 
         uint64_t _next_rid{0};
 
-        ustring _static_secret;
+        std::vector<unsigned char> _static_secret;
 
         std::shared_ptr<IOContext> outbound_ctx;
         std::shared_ptr<IOContext> inbound_ctx;
 
-        std::vector<ustring> outbound_alpns;
-        std::vector<ustring> inbound_alpns;
+        std::vector<std::vector<unsigned char>> outbound_alpns;
+        std::vector<std::vector<unsigned char>> inbound_alpns;
         std::chrono::nanoseconds handshake_timeout{DEFAULT_HANDSHAKE_TIMEOUT};
 
-        std::unordered_map<ustring_view, gtls_ticket_ptr, detail::ustring_hasher> session_tickets;
+        std::unordered_map<uspan, gtls_ticket_ptr, detail::uspan_hasher, detail::uspan_comp> session_tickets;
 
-        std::unordered_map<Address, ustring> encoded_transport_params;
+        std::unordered_map<Address, std::vector<unsigned char>> encoded_transport_params;
 
-        std::unordered_map<Address, ustring> path_validation_tokens;
+        std::unordered_map<Address, std::vector<unsigned char>> path_validation_tokens;
 
         const std::shared_ptr<event_base>& get_loop() { return net._loop->loop(); }
 
@@ -223,11 +223,9 @@ namespace oxen::quic
         std::shared_ptr<Connection> _connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid);
 
         std::shared_ptr<Connection> _connect(
-                Address remote, quic_cid qcid, ConnectionID rid, std::optional<ustring> pk = std::nullopt);
+                Address remote, quic_cid qcid, ConnectionID rid, std::optional<std::vector<unsigned char>> pk = std::nullopt);
 
         void handle_ep_opt(opt::enable_datagrams dc);
-        void handle_ep_opt(opt::outbound_alpns alpns);
-        void handle_ep_opt(opt::inbound_alpns alpns);
         void handle_ep_opt(opt::alpns alpns);
         void handle_ep_opt(opt::handshake_timeout timeout);
         void handle_ep_opt(dgram_data_callback dgram_cb);
@@ -277,13 +275,13 @@ namespace oxen::quic
 
         void connection_established(connection_interface& conn);
 
-        void store_0rtt_transport_params(Address remote, ustring encoded_params);
+        void store_0rtt_transport_params(Address remote, std::vector<unsigned char> encoded_params);
 
-        std::optional<ustring> get_0rtt_transport_params(const Address& remote);
+        std::optional<std::vector<unsigned char>> get_0rtt_transport_params(const Address& remote);
 
-        void store_path_validation_token(Address remote, ustring token);
+        void store_path_validation_token(Address remote, std::vector<unsigned char> token);
 
-        std::optional<ustring> get_path_validation_token(const Address& remote);
+        std::optional<std::vector<unsigned char>> get_path_validation_token(const Address& remote);
 
         void initial_association(Connection& conn);
 
@@ -299,7 +297,7 @@ namespace oxen::quic
 
         void dissociate_cid(quic_cid qcid, Connection& conn);
 
-        const ustring& static_secret() const { return _static_secret; }
+        const std::vector<unsigned char>& static_secret() const { return _static_secret; }
 
         Connection* fetch_associated_conn(quic_cid& cid);
 

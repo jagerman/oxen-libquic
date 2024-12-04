@@ -2,23 +2,17 @@
     Test client binary
 */
 
+#include "utils.hpp"
+
+#include <oxen/quic.hpp>
+#include <oxen/quic/gnutls_crypto.hpp>
 #include <oxenc/endian.h>
 #include <oxenc/hex.h>
 
-#include <CLI/Validators.hpp>
 #include <chrono>
-#include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
 #include <random>
-#include <thread>
-
-#include "utils.hpp"
 
 using namespace oxen::quic;
-
-using ustring = std::basic_string<unsigned char>;
-using ustring_view = std::basic_string_view<unsigned char>;
 
 int main(int argc, char* argv[])
 {
@@ -63,7 +57,7 @@ int main(int argc, char* argv[])
     {
         std::shared_ptr<Stream> stream;
         std::atomic<bool> active = false;
-        ustring msg{};
+        std::vector<unsigned char> msg{};
         uint64_t size;
         uint64_t dgram_size;
         uint64_t n_iter;
@@ -101,7 +95,7 @@ int main(int argc, char* argv[])
         log::critical(test_cat, "Stream {} (rawid={}) closed (error={})", i, s.stream_id(), errcode);
     };
 
-    dgram_data_callback recv_dgram_cb = [&](dgram_interface, bstring data) {
+    dgram_data_callback recv_dgram_cb = [&](dgram_interface, std::vector<std::byte> data) {
         log::critical(test_cat, "Calling endpoint receive datagram callback... data received...");
 
         if (d_ptr->is_sending)
@@ -114,7 +108,7 @@ int main(int argc, char* argv[])
             log::error(test_cat, "Got unexpected data from the other side: {}B != 5B", data.size());
             d_ptr->failed = true;
         }
-        else if (data != "DONE!"_bsv)
+        else if (data != "DONE!"_bsp)
         {
             log::error(
                     test_cat,
@@ -160,11 +154,11 @@ int main(int argc, char* argv[])
     send_data dgram_data{size, max_size};
     d_ptr = &dgram_data;
 
-    bstring remaining_str;
+    std::vector<std::byte> remaining_str;
     remaining_str.resize(8);
     oxenc::write_host_as_little(d_ptr->n_iter, remaining_str.data());
     log::warning(test_cat, "Sending datagram count to remote...");
-    client_ci->send_datagram(bstring_view{remaining_str.data(), remaining_str.size()});
+    client_ci->send_datagram(bspan{remaining_str.data(), remaining_str.size()});
 
     std::promise<void> send_prom;
     std::future<void> send_f = send_prom.get_future();
@@ -180,10 +174,10 @@ int main(int argc, char* argv[])
         for (uint64_t i = 1; i < d_ptr->n_iter; ++i)
         {
             // Just send these with the 0 at the beginning
-            client_ci->send_datagram(ustring_view{d_ptr->msg});
+            client_ci->send_datagram(vec_to_span<std::byte>(d_ptr->msg));
         }
         // Send a final one with the max value in the beginning so the server knows its done
-        ustring last_payload{d_ptr->msg};
+        std::vector<unsigned char> last_payload{d_ptr->msg};
         last_payload[0] = 1;  // Signals that this is the last one
         client_ci->send_datagram(std::move(last_payload));
 

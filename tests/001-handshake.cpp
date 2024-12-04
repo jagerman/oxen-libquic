@@ -1,9 +1,6 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
 #include "utils.hpp"
+
+#include <thread>
 
 namespace oxen::quic::test
 {
@@ -446,7 +443,7 @@ namespace oxen::quic::test
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-        server_tls->set_key_verify_callback([](const ustring_view& key, const ustring_view&) {
+        server_tls->set_key_verify_callback([](const uspan& key, const uspan&) {
             return key == convert_sv<unsigned char>(std::string_view{defaults::CLIENT_PUBKEY});
         });
 
@@ -469,8 +466,8 @@ namespace oxen::quic::test
         auto& server_ci = server_cis.front();
         CHECK(client_ci->is_validated());
         CHECK(server_ci->is_validated());
-        CHECK(server_ci->remote_key() == ustring{reinterpret_cast<const unsigned char*>(defaults::CLIENT_PUBKEY.data()),
-                                                 defaults::CLIENT_PUBKEY.length()});
+
+        CHECK(server_ci->remote_key() == str_to_uspan(defaults::CLIENT_PUBKEY));
     }
 
     TEST_CASE("001 - Handshaking: Types - IPv6", "[001][ipv6]")
@@ -657,15 +654,14 @@ namespace oxen::quic::test
             return defer_to_incoming;
         };
 
-        server_tls->set_key_verify_callback([&](const ustring_view& key, const ustring_view&) {
+        server_tls->set_key_verify_callback([&](const uspan& key, const uspan&) {
             std::lock_guard lock{ci_mutex};
             return defer_hook({reinterpret_cast<const char*>(key.data()), key.size()}, S_PUBKEY, C_PUBKEY, server_ci);
         });
 
-        client_tls->set_key_verify_callback([&](const ustring_view& key, const ustring_view&) {
+        client_tls->set_key_verify_callback([&](const uspan& key, const uspan&) {
             std::lock_guard lock{ci_mutex};
-            return defer_hook(
-                    std::string{reinterpret_cast<const char*>(key.data()), key.size()}, C_PUBKEY, S_PUBKEY, client_ci);
+            return defer_hook(sp_to_sv(key), C_PUBKEY, S_PUBKEY, client_ci);
         });
 
         Address server_local{};

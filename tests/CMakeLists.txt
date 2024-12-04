@@ -4,7 +4,7 @@ add_subdirectory(CLI11)
 
 add_library(tests_common STATIC utils.cpp)
 target_link_libraries(tests_common PUBLIC
-    quic CLI11::CLI11 libquic_internal-warnings gnutls::gnutls)
+    quic CLI11::CLI11 Catch2::Catch2 libquic_internal-warnings gnutls::gnutls)
 
 # We need hogweed for generating Ed25519 keys (this is already a gnutls dependency, so we shouldn't
 # be adding any new dep by requiring it)

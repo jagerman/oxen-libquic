@@ -5,16 +5,16 @@ extern "C"
 #include <ngtcp2/ngtcp2.h>
 }
 
-#include <cstddef>
-#include <cstdio>
-#include <stdexcept>
-
 #include "connection.hpp"
 #include "context.hpp"
 #include "endpoint.hpp"
 #include "internal.hpp"
 #include "network.hpp"
 #include "types.hpp"
+
+#include <cstddef>
+#include <cstdio>
+#include <stdexcept>
 
 namespace oxen::quic
 {
@@ -206,7 +206,7 @@ namespace oxen::quic
         _is_closing = _is_shutdown = true;
     }
 
-    void Stream::append_buffer(bstring_view buffer, std::shared_ptr<void> keep_alive)
+    void Stream::append_buffer(bspan buffer, std::shared_ptr<void> keep_alive)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         user_buffers.emplace_back(buffer, std::move(keep_alive));
@@ -236,7 +236,10 @@ namespace oxen::quic
 
         // advance bsv pointer to cover any remaining acked data
         if (bytes)
-            user_buffers.front().first.remove_prefix(bytes);
+        {
+            auto& front = user_buffers.front().first;
+            front = front.subspan(bytes);
+        }
 
         auto sz = size();
 
@@ -289,7 +292,7 @@ namespace oxen::quic
         _unacked_size += bytes;
     }
 
-    static auto get_buffer_it(std::deque<std::pair<bstring_view, std::shared_ptr<void>>>& bufs, size_t offset)
+    static auto get_buffer_it(std::deque<std::pair<bspan, std::shared_ptr<void>>>& bufs, size_t offset)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         auto it = bufs.begin();
@@ -337,7 +340,7 @@ namespace oxen::quic
         return nbufs;
     }
 
-    void Stream::send_impl(bstring_view data, std::shared_ptr<void> keep_alive)
+    void Stream::send_impl(bspan data, std::shared_ptr<void> keep_alive)
     {
         if (data.empty())
             return;

@@ -59,7 +59,29 @@ KeepEmptyLinesAtTheStartOfBlocks: 'true'
 NamespaceIndentation: All
 QualifierAlignment: Left
 RemoveSemicolon: true
-SortIncludes: true
+
+#includes
+SortIncludes: CaseInsensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '".+\.h'
+    Priority: 2
+  - Regex: '^<(oxenc|oxen)'
+    Priority: 3
+  - Regex: '^<(event2|ngtcp2)'
+    Priority: 4
+  - Regex: '<winsock2\.h>'
+    Priority: 5
+  - Regex: '<windows\.h>'
+    Priority: 6
+  - Regex: '^<CLI'
+    Priority: 7
+  - Regex: '^<catch2'
+    Priority: 8
+  - Regex: '^<.*\.h(pp)?>$'
+    Priority: 9
+  - Regex: '(<)(.)+(>)'
+    Priority: 10
 
 # spacing
 SpaceBeforeParens: ControlStatements

@@ -36,7 +36,7 @@ namespace oxen::quic
         if (htype == GNUTLS_HANDSHAKE_NEW_SESSION_TICKET)
         {
             log::debug(log_cat, "Client received new session ticket from server!");
-            auto* conn = get_connection_from_gnutls(session);
+            auto* conn = detail::get_connection(session);
             auto remote_key = conn->remote_key();
             auto& ep = conn->endpoint();
             gtls_datum data{}, encoded{};
@@ -63,9 +63,9 @@ namespace oxen::quic
     int gtls_session_callbacks::cert_verify_callback_gnutls(gnutls_session_t session)
     {
         log::debug(log_cat, "{} called", __PRETTY_FUNCTION__);
-        auto* conn = get_connection_from_gnutls(session);
+        auto* conn = detail::get_connection(session);
 
-        GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
+        GNUTLSSession* tls_session = detail::get_session(conn);
         assert(tls_session);
 
         bool success = false;
@@ -87,22 +87,30 @@ namespace oxen::quic
         return !success;
     }
 
-    Connection* get_connection_from_gnutls(gnutls_session_t g_session)
+    namespace detail
     {
-        auto* conn_ref = static_cast<ngtcp2_crypto_conn_ref*>(gnutls_session_get_ptr(g_session));
-        assert(conn_ref);
-        auto* conn = static_cast<Connection*>(conn_ref->user_data);
-        assert(conn);
-        return conn;
-    }
+        Connection* get_connection(gnutls_session_t g_session)
+        {
+            auto* conn_ref = static_cast<ngtcp2_crypto_conn_ref*>(gnutls_session_get_ptr(g_session));
+            assert(conn_ref);
+            auto* conn = static_cast<Connection*>(conn_ref->user_data);
+            assert(conn);
+            return conn;
+        }
 
-    GNUTLSSession* get_session_from_gnutls(gnutls_session_t g_session)
-    {
-        auto* conn = get_connection_from_gnutls(g_session);
-        GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
-        assert(tls_session);
-        return tls_session;
-    }
+        GNUTLSSession* get_session(gnutls_session_t g_session)
+        {
+            auto* conn = get_connection(g_session);
+            return get_session(conn);
+        }
+
+        GNUTLSSession* get_session(Connection* conn)
+        {
+            GNUTLSSession* tls = dynamic_cast<GNUTLSSession*>(conn->get_session());
+            assert(tls);
+            return tls;
+        }
+    }  // namespace detail
 
     GNUTLSSession::~GNUTLSSession()
     {
@@ -118,7 +126,7 @@ namespace oxen::quic
             GNUTLSCreds& creds,
             const std::shared_ptr<IOContext>& ctx,
             Connection& c,
-            const std::vector<ustring>& alpns,
+            const std::vector<std::vector<unsigned char>>& alpns,
             std::optional<gtls_key> expected_key) :
             creds{creds}, _is_client{c.is_outbound()}, _0rtt_enabled{c.zero_rtt_enabled()}
     {
@@ -242,7 +250,7 @@ namespace oxen::quic
 
             if (_0rtt_enabled and _expected_remote_key)
             {
-                if (auto maybe_ticket = c.endpoint().get_session_ticket(_expected_remote_key.view()))
+                if (auto maybe_ticket = c.endpoint().get_session_ticket(_expected_remote_key.span()))
                 {
                     gtls_datum d{};
 
@@ -287,7 +295,7 @@ namespace oxen::quic
                 log::trace(
                         log_cat,
                         "GNUTLS adding \"{}\" to {} ALPNs",
-                        to_sv(ustring_view{s.data(), s.size()}),
+                        detail::to_span<char>(s.data(), s.size()),
                         direction_string);
                 allowed_alpns.emplace_back(
                         gnutls_datum_t{const_cast<unsigned char*>(s.data()), static_cast<unsigned int>(s.size())});
@@ -454,7 +462,7 @@ namespace oxen::quic
             // provided a certificate and is only called by the server, we can assume the following returns:
             //      true: the certificate was verified, and the connection is marked as validated
             //      false: the certificate was not verified, and the connection is rejected
-            success = (creds.key_verify) ? creds.key_verify(_remote_key.view(), selected_alpn()) : true;
+            success = (creds.key_verify) ? creds.key_verify(_remote_key.span(), selected_alpn()) : true;
 
             return success;
         }
