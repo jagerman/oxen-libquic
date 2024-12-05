@@ -526,7 +526,7 @@ namespace oxen::quic
 
     int Endpoint::validate_anti_replay(gtls_ticket_ptr ticket, time_t current)
     {
-        return _validate_0rtt_ticket(std::move(ticket), current) ? 0 : GNUTLS_E_DB_ENTRY_EXISTS;
+        return _validate_0rtt_ticket(std::move(ticket), current) == 0 ? 0 : GNUTLS_E_DB_ENTRY_EXISTS;
     }
 
     void Endpoint::store_session_ticket(gtls_ticket_ptr ticket)
@@ -576,6 +576,28 @@ namespace oxen::quic
         log::debug(log_cat, "Connection (RID:{}) completed initial CID association", conn.reference_id());
     }
 
+    void Endpoint::expire_reset_tokens(time_point now)
+    {
+        assert(in_event_loop());
+        size_t count{};
+
+        for (auto it = reset_token_map.begin(); it != reset_token_map.end();)
+        {
+            if (it->first->is_expired(now))
+            {
+                count += 1;
+                log::trace(log_cat, "Pruning expired reset token (quic_cid:{})", it->second);
+                reset_token_lookup.erase(it->second);
+                it = reset_token_map.erase(it);
+            }
+            else
+                ++it;
+        }
+
+        if (count)
+            log::debug(log_cat, "{} expired reset tokens pruned!", count);
+    }
+
     void Endpoint::activate_cid(const ngtcp2_cid* cid, const uint8_t* token, Connection& conn)
     {
         assert(in_event_loop());
@@ -590,7 +612,9 @@ namespace oxen::quic
 
         // We only hold one reset token per connection at a time!
         auto [it, _] = reset_token_map.emplace(gtls_reset_token::make_copy(token), qcid);
-        reset_token_lookup[qcid] = it->first;
+        reset_token_lookup.emplace(qcid, it->first);
+
+        expire_reset_tokens();
     }
 
     void Endpoint::deactivate_cid(const ngtcp2_cid* cid, Connection& conn)
@@ -609,10 +633,13 @@ namespace oxen::quic
         {
             reset_token_map.erase(it->second);
             reset_token_lookup.erase(it);
+
             log::debug(log_cat, "Successfully deleted token for deactivated CID:{}", qcid);
         }
         else
             log::debug(log_cat, "Could not find token corresponding to deactivated CID:{}", qcid);
+
+        expire_reset_tokens();
     }
 
     void Endpoint::associate_cid(quic_cid qcid, Connection& conn)
@@ -869,11 +896,11 @@ namespace oxen::quic
             if (cptr = get_conn(rit->second); cptr)
             {
                 log::info(log_cat, "Matched stateless reset token in unknown packet to connection {}", cptr->reference_id());
-                reset_token_lookup.erase(rit->second);
             }
             else
                 log::debug(log_cat, "Received good stateless reset token but no connection exists for it; deleting entry");
 
+            reset_token_lookup.erase(rit->second);
             reset_token_map.erase(rit);
         }
         else

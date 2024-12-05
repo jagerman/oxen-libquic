@@ -27,7 +27,7 @@ namespace oxen::quic
         }
     }
 
-    std::chrono::steady_clock::time_point get_time()
+    time_point get_time()
     {
         return std::chrono::steady_clock::now();
     }

@@ -204,7 +204,7 @@ namespace oxen::quic
         };
     }  // namespace opt
 
-    using gtls_db_validate_cb = std::function<bool(gtls_ticket_ptr, time_t)>;
+    using gtls_db_validate_cb = std::function<int(gtls_ticket_ptr, time_t)>;
     using gtls_db_get_cb = std::function<gtls_ticket_ptr(ustring_view)>;
     using gtls_db_put_cb = std::function<void(gtls_ticket_ptr, time_t)>;
 
@@ -228,10 +228,10 @@ namespace oxen::quic
             - `gtls_db_validate_cb` : The invocation of this cb provides the session ticket and the current ticket time given
                 by ngtcp2. All tickets should be held through the application chosen expiry window. The server must return
                 true/false in the following circumstances:
-                    - Ticket not found -> store ticket, return true
+                    - Ticket not found -> store ticket, return 0
                     - Ticket found...
-                        - ...and is expired -> store ticket, return true
-                        - ...and is NOT expired -> KEEP TICKET, return false
+                        - ...and is expired -> store ticket, return non-zero
+                        - ...and is NOT expired -> KEEP TICKET, return 0
             see:
             https://www.gnutls.org/manual/html_node/Core-TLS-API.html#gnutls_005fanti_005freplay_005fset_005fadd_005ffunction
 

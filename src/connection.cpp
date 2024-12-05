@@ -298,6 +298,11 @@ namespace oxen::quic
                     "Received stateless reset for connection ({}) on path: {}; closing immediately!",
                     _ref_id,
                     _path);
+
+            // delete reset token after use
+            _endpoint.reset_token_lookup.erase(it->second);
+            _endpoint.reset_token_map.erase(it);
+
             _endpoint.drop_connection(*this, io_error{CONN_STATELESS_RESET});
         }
         else

@@ -359,16 +359,22 @@ namespace oxen::quic
         static constexpr size_t TOKENSIZE{NGTCP2_STATELESS_RESET_TOKENLEN};
         static constexpr size_t RANDSIZE{NGTCP2_MIN_STATELESS_RESET_RANDLEN};
 
+        static constexpr std::chrono::milliseconds LIFETIME{10min};
+
       private:
         gtls_reset_token(const uint8_t* _tok, const uint8_t* _rand = nullptr);
         gtls_reset_token(uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
 
       public:
+        std::chrono::steady_clock::time_point expiry{get_time() + LIFETIME};
+
         std::array<uint8_t, TOKENSIZE> _tok{};
         std::array<uint8_t, RANDSIZE> _rand{};
 
         const uint8_t* token() { return _tok.data(); }
         const uint8_t* rand() { return _rand.data(); }
+
+        bool is_expired(time_point now) const { return expiry < now; }
 
         static void generate_token(uint8_t* buffer, uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
         static void generate_rand(uint8_t* buffer);

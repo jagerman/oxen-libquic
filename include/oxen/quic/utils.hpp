@@ -43,6 +43,8 @@ namespace oxen::quic
 {
     class connection_interface;
 
+    using time_point = std::chrono::steady_clock::time_point;
+
     // called when a connection's handshake completes
     // the server will call this when it sends the final handshake packet
     // the client will call this when it receives that final handshake packet
@@ -208,7 +210,7 @@ namespace oxen::quic
         return {reinterpret_cast<const char*>(x.data()), x.size()};
     }
 
-    std::chrono::steady_clock::time_point get_time();
+    time_point get_time();
     std::chrono::nanoseconds get_timestamp();
 
     template <typename unit_t>

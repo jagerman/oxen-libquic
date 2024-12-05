@@ -359,6 +359,8 @@ namespace oxen::quic
 
         std::unordered_map<quic_cid, ConnectionID> conn_lookup;
 
+        void expire_reset_tokens(time_point now = get_time());
+
         // only used if stateless reset enabled
         std::unordered_map<quic_cid, std::shared_ptr<gtls_reset_token>> reset_token_lookup;
         std::unordered_map<std::shared_ptr<gtls_reset_token>, quic_cid> reset_token_map;

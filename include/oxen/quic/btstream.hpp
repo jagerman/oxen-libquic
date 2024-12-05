@@ -6,8 +6,6 @@
 
 namespace oxen::quic
 {
-    using time_point = std::chrono::steady_clock::time_point;
-
     // timeout is used for sent requests awaiting responses
     inline constexpr std::chrono::seconds DEFAULT_TIMEOUT{10s};
 
