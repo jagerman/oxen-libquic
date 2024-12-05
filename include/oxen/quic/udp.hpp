@@ -43,9 +43,9 @@ namespace oxen::quic
 
         // Return a string_view type, starting from index `pos`
         template <oxenc::basic_char Char = std::byte>
-        std::basic_string_view<Char> data(size_t pos = 0) const
+        const_span<Char> data(size_t pos = 0) const
         {
-            return std::basic_string_view<Char>{reinterpret_cast<const Char*>(data_sp.data() + pos), data_sp.size() - pos};
+            return const_span<Char>{reinterpret_cast<const Char*>(data_sp.data() + pos), data_sp.size() - pos};
         }
 
         /// Constructs a packet from a path and data view:

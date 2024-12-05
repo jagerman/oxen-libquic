@@ -332,14 +332,14 @@ namespace oxen::quic::test
             std::this_thread::sleep_for(5ms);
             auto max_size = conn_interface->get_max_datagram_size();
 
-            std::basic_string<uint8_t> good_msg{};
+            std::vector<uint8_t> good_msg{};
             uint8_t v{0};
 
             while (good_msg.size() < max_size)
-                good_msg += v++;
+                good_msg.emplace_back(v++);
 
             for (int i = 0; i < n; ++i)
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{good_msg});
+                conn_interface->send_datagram(bspan{reinterpret_cast<const std::byte*>(good_msg.data()), good_msg.size()});
 
             for (auto& f : data_futures)
                 require_future(f);
@@ -416,20 +416,20 @@ namespace oxen::quic::test
             std::this_thread::sleep_for(5ms);
             auto max_size = conn_interface->get_max_datagram_size();
 
-            std::basic_string<uint8_t> big_msg{}, small_msg{};
+            std::vector<uint8_t> big_msg{}, small_msg{};
             uint8_t v{0};
 
             while (big_msg.size() < max_size)
-                big_msg += v++;
+                big_msg.emplace_back(v++);
 
             while (small_msg.size() < 500)
-                small_msg += v++;
+                small_msg.emplace_back(v++);
 
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{small_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{small_msg});
+            conn_interface->send_datagram(uspan{big_msg});
+            conn_interface->send_datagram(uspan{big_msg});
+            conn_interface->send_datagram(uspan{small_msg});
+            conn_interface->send_datagram(uspan{big_msg});
+            conn_interface->send_datagram(uspan{small_msg});
 
             for (auto& f : data_futures)
                 require_future(f);
@@ -585,17 +585,17 @@ namespace oxen::quic::test
             std::this_thread::sleep_for(5ms);
             auto max_size = conn_interface->get_max_datagram_size();
 
-            std::basic_string<uint8_t> big{}, medium{}, small{};
+            std::vector<uint8_t> big{}, medium{}, small{};
             uint8_t v{0};
 
             while (big.size() < max_size * 2 / 3)
-                big += v++;
+                big.emplace_back(v++);
 
             while (medium.size() < max_size / 2 - 100)
-                medium += v++;
+                medium.emplace_back(v++);
 
             while (small.size() < 50)
-                small += v++;
+                small.emplace_back(v++);
 
             TestHelper::enable_dgram_flip_flop(*conn_interface);
 
@@ -603,19 +603,19 @@ namespace oxen::quic::test
             std::future<void> ftr = pr.get_future();
 
             client->call([&]() {
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{medium});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
+                conn_interface->send_datagram(uspan{big});
+                conn_interface->send_datagram(uspan{small});
+                conn_interface->send_datagram(uspan{small});
+                conn_interface->send_datagram(uspan{big});
+                conn_interface->send_datagram(uspan{big});
+                conn_interface->send_datagram(uspan{small});
+                conn_interface->send_datagram(uspan{medium});
+                conn_interface->send_datagram(uspan{big});
+                conn_interface->send_datagram(uspan{small});
+                conn_interface->send_datagram(uspan{small});
+                conn_interface->send_datagram(uspan{small});
+                conn_interface->send_datagram(uspan{small});
+                conn_interface->send_datagram(uspan{small});
 
                 pr.set_value();
             });

@@ -79,7 +79,7 @@ namespace oxen::quic
         explicit operator bool() const { return !timed_out && !is_error(); }
 
         template <oxenc::basic_char Char = char>
-        std::basic_string_view<Char> view() const
+        const_span<Char> span() const
         {
             return {reinterpret_cast<const Char*>(data.data()), data.size()};
         }

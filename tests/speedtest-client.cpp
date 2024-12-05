@@ -4,12 +4,6 @@
 
 #include "utils.hpp"
 
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <oxenc/endian.h>
-
-#include <CLI/Validators.hpp>
-
 #include <chrono>
 #include <future>
 #include <random>
@@ -111,7 +105,7 @@ int main(int argc, char* argv[])
         std::atomic<bool> failed = false;
         size_t next_buf = 0;
 
-        std::basic_string<std::byte> hash;
+        std::vector<std::byte> hash;
         uint8_t checksum = 0;
         gnutls_hash_hd_t sent_hasher, recv_hasher;
 

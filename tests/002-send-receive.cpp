@@ -242,7 +242,7 @@ namespace oxen::quic::test
         {
             auto server_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
-                    log::info(test_cat, "Server bparser received: {}", msg.view());
+                    log::info(test_cat, "Server bparser received: {}", msg.span());
             }};
 
             stream_constructor_callback server_constructor = [&](Connection& c, Endpoint& e, std::optional<int64_t>) {
@@ -271,7 +271,7 @@ namespace oxen::quic::test
             auto server_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Server bparser received: {}", msg.view());
+                    log::info(test_cat, "Server bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -279,7 +279,7 @@ namespace oxen::quic::test
             auto client_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Client bparser received: {}", msg.view());
+                    log::info(test_cat, "Client bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -315,7 +315,7 @@ namespace oxen::quic::test
             auto server_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Server bparser received: {}", msg.view());
+                    log::info(test_cat, "Server bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -323,7 +323,7 @@ namespace oxen::quic::test
             auto client_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Client bparser received: {}", msg.view());
+                    log::info(test_cat, "Client bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -443,7 +443,7 @@ namespace oxen::quic::test
         auto server_handler = [&](message msg) {
             if (msg)
             {
-                log::info(test_cat, "Server bparser received: {}", msg.view());
+                log::info(test_cat, "Server bparser received: {}", msg.span());
                 if (msg.body() == req_msg)
                     msg.respond(res_msg);
                 else
@@ -456,7 +456,7 @@ namespace oxen::quic::test
             {
                 std::lock_guard lock{mut};
                 responses++;
-                log::debug(test_cat, "Client bparser received response {}: {}", responses, msg.view());
+                log::debug(test_cat, "Client bparser received response {}: {}", responses, msg.span());
                 if (msg.body() == res_msg)
                     good_responses++;
                 if (responses == num_requests)
@@ -534,7 +534,7 @@ namespace oxen::quic::test
                 if (msg)
                 {
                     ++responses;
-                    log::debug(test_cat, "Client bparser received response {}: {}", responses.load(), msg.view());
+                    log::debug(test_cat, "Client bparser received response {}: {}", responses.load(), msg.span());
                     if (msg.body() == res_msg)
                         ++good_responses;
                     if (responses == num_requests)
@@ -582,7 +582,7 @@ namespace oxen::quic::test
 
             auto client_reply_handler = [&](message msg) mutable {
                 if (msg)
-                    log::debug(test_cat, "Client bparser received response: {}", msg.view());
+                    log::debug(test_cat, "Client bparser received response: {}", msg.span());
                 else
                     log::debug(test_cat, "got back a failed message response");
             };

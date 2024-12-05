@@ -345,7 +345,7 @@ namespace oxen::quic
 
         if (auto rv = gnutls_alpn_get_selected_protocol(session, &_alpn); rv < 0)
         {
-            auto err = fmt::format("{} called, but ALPN negotiation incomplete.", __PRETTY_FUNCTION__);
+            auto err = "{} called, but ALPN negotiation incomplete."_format(__PRETTY_FUNCTION__);
             log::error(log_cat, "{}", err);
             throw std::logic_error(err);
         }

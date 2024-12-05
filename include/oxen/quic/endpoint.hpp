@@ -223,7 +223,10 @@ namespace oxen::quic
         std::shared_ptr<Connection> _connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid);
 
         std::shared_ptr<Connection> _connect(
-                Address remote, quic_cid qcid, ConnectionID rid, std::optional<std::vector<unsigned char>> pk = std::nullopt);
+                Address remote,
+                quic_cid qcid,
+                ConnectionID rid,
+                std::optional<std::vector<unsigned char>> pk = std::nullopt);
 
         void handle_ep_opt(opt::enable_datagrams dc);
         void handle_ep_opt(opt::alpns alpns);

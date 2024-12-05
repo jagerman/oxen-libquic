@@ -609,7 +609,7 @@ namespace oxen::quic::test
         stream_data_callback server_data_cb = [&](Stream& s, bspan) {
             std::lock_guard lock{mut};
             server_seen[s.stream_id()]++;
-            s.send("🤔 {}"_format(s.stream_id()));
+            s.send("stupid emojis {}"_format(s.stream_id()));
         };
 
         Address server_local{};
@@ -662,7 +662,7 @@ namespace oxen::quic::test
 
         auto s3 = client_ci->open_stream();
         CHECK(client_stream_ctor_count.load() == 2);
-        REQUIRE(std::dynamic_pointer_cast<CustomStreamA>(s1));
+        REQUIRE(std::dynamic_pointer_cast<CustomStreamC>(s3));
 
         auto s4 = client_ci->open_stream();
         CHECK(client_stream_ctor_count.load() == 3);
@@ -678,10 +678,10 @@ namespace oxen::quic::test
         require_future(cf2);
         require_future(cf3);
         require_future(cf4);
-        CHECK(cf1.get() == "🤔 0"_bsp);
-        CHECK(cf2.get() == "🤔 4"_bsp);
-        CHECK(cf3.get() == "🤔 8"_bsp);
-        CHECK(cf4.get() == "🤔 12"_bsp);
+        CHECK(cf1.get() == "stupid emojis 0"_bsp);
+        CHECK(cf2.get() == "stupid emojis 4"_bsp);
+        CHECK(cf3.get() == "stupid emojis 8"_bsp);
+        CHECK(cf4.get() == "stupid emojis 12"_bsp);
 
         {
             std::lock_guard lock{mut};
@@ -915,7 +915,7 @@ namespace oxen::quic::test
         auto server_endpoint = test_net.endpoint(server_local);
         server_endpoint->listen(server_tls, [&](Stream& s, bspan data) {
             count += data.size();
-            log::debug(test_cat, "Got some data {}, replying with '{}'", data, count);
+            log::debug(test_cat, "Got some data {}, replying with '{}'", buffer_printer{data}, count);
             s.send("{}"_format(count));
         });
 

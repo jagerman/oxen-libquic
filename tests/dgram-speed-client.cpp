@@ -4,11 +4,6 @@
 
 #include "utils.hpp"
 
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <oxenc/endian.h>
-#include <oxenc/hex.h>
-
 #include <chrono>
 #include <random>
 

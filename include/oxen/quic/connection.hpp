@@ -126,8 +126,8 @@ namespace oxen::quic
         void send_datagram(std::vector<Char>&& buf)
         {
             auto keep_alive = std::make_shared<std::vector<Char>>(std::move(buf));
-            std::basic_string_view<Char> view{keep_alive->data(), keep_alive->size()};
-            send_datagram(str_to_bspan(view), std::move(keep_alive));
+            auto bsp = vec_to_span<std::byte>(*keep_alive);
+            send_datagram(bsp, std::move(keep_alive));
         }
 
         template <oxenc::basic_char CharType>
@@ -136,6 +136,12 @@ namespace oxen::quic
             auto keep_alive = std::make_shared<std::basic_string<CharType>>(std::move(data));
             std::basic_string_view<CharType> view{*keep_alive};
             send_datagram(str_to_bspan(view), std::move(keep_alive));
+        }
+
+        template <oxenc::basic_char CharType>
+        void send_datagram(const_span<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        {
+            send_datagram(span_to_span<std::byte>(data), std::move(keep_alive));
         }
 
         virtual void send_datagram(bspan data, std::shared_ptr<void> keep_alive = nullptr) = 0;

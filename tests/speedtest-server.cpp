@@ -4,13 +4,6 @@
 
 #include "utils.hpp"
 
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <oxenc/endian.h>
-#include <oxenc/hex.h>
-
-#include <CLI/Validators.hpp>
-
 #include <gnutls/gnutls.h>
 
 #include <future>
@@ -128,8 +121,7 @@ int main(int argc, char* argv[])
 
         if (info.received >= info.expected)
         {
-            std::basic_string<unsigned char> final_hash;
-            final_hash.resize(33);
+            std::vector<unsigned char> final_hash(33);
             gnutls_hash_output(info.hasher, final_hash.data());
             final_hash[32] = info.checksum;
 

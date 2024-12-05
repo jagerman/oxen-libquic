@@ -1,7 +1,9 @@
 #pragma once
 
 #include <oxenc/base64.h>
+#include <oxenc/endian.h>
 #include <oxenc/hex.h>
+#include <oxenc/span.h>
 
 // keep above Catch2 macros to get comparators and other oxenc utils
 using namespace oxenc;
@@ -9,9 +11,11 @@ using namespace oxenc;
 #include <oxen/log.hpp>
 #include <oxen/log/format.hpp>
 #include <oxen/quic.hpp>
+#include <oxen/quic/format.hpp>
 
 #include <CLI/CLI.hpp>
 #include <CLI/Error.hpp>
+#include <CLI/Validators.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>

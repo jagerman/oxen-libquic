@@ -46,7 +46,7 @@ if(LIBQUIC_BUILD_TESTS)
         main.cpp
         case_logger.cpp
     )
-    target_link_libraries(alltests PRIVATE tests_common Catch2::Catch2)
+    target_link_libraries(alltests PRIVATE tests_common)
     extra_linking(alltests)
 
 endif()

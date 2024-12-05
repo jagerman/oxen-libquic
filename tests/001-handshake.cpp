@@ -443,9 +443,8 @@ namespace oxen::quic::test
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-        server_tls->set_key_verify_callback([](const uspan& key, const uspan&) {
-            return key == convert_sv<unsigned char>(std::string_view{defaults::CLIENT_PUBKEY});
-        });
+        server_tls->set_key_verify_callback(
+                [](const uspan& key, const uspan&) { return key == str_to_uspan(defaults::CLIENT_PUBKEY); });
 
         Address server_local{};
         Address client_local{};

@@ -6,19 +6,21 @@
 // library).
 
 #include "formattable.hpp"
+#include "utils.hpp"
 
 #include <oxenc/span.h>
 
 #include <fmt/format.h>
 
 #include <iostream>
+#include <version>
 
 namespace oxen::quic
 {
     struct buffer_printer
     {
       private:
-        std::basic_string_view<std::byte> buf;
+        bspan buf;
 
       public:
         template <oxenc::basic_char T>
@@ -64,14 +66,13 @@ namespace fmt
         }
     };
 
-    template <oxenc::const_span_type T>
-    struct formatter<T, char> : formatter<std::string_view>
+    template <>
+    struct formatter<oxen::quic::cspan, char> : formatter<std::string_view>
     {
         template <typename FormatContext>
-        auto format(const T& val, FormatContext& ctx) const
+        auto format(const oxen::quic::cspan& val, FormatContext& ctx) const
         {
-            return formatter<std::string_view>::format(
-                    std::string_view{reinterpret_cast<const char*>(val.data()), val.size()}, ctx);
+            return formatter<std::string_view>::format({val.data(), val.size()}, ctx);
         }
     };
 }  // namespace fmt
