@@ -191,19 +191,14 @@ namespace oxen::quic
         log::debug(log_cat, "Inbound context ready for incoming connections");
     }
 
-    void Endpoint::_connect(
-            RemoteAddress remote, quic_cid qcid, ConnectionID rid, std::promise<std::shared_ptr<Connection>>& p)
+    std::shared_ptr<Connection> Endpoint::_connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid)
     {
         Address addr{remote};
-        return _connect(std::move(addr), std::move(qcid), std::move(rid), p, std::move(remote).get_remote_key());
+        return _connect(std::move(addr), std::move(qcid), std::move(rid), std::move(remote).get_remote_key());
     }
 
-    void Endpoint::_connect(
-            Address remote,
-            quic_cid qcid,
-            ConnectionID rid,
-            std::promise<std::shared_ptr<Connection>>& p,
-            std::optional<ustring> pk)
+    std::shared_ptr<Connection> Endpoint::_connect(
+            Address remote, quic_cid qcid, ConnectionID rid, std::optional<ustring> pk)
     {
         Path path = Path{_local, std::move(remote)};
 
@@ -227,8 +222,7 @@ namespace oxen::quic
                             handshake_timeout,
                             pk);
 
-                    p.set_value(it_b->second);
-                    return;
+                    return it_b->second;
                 }
             }
         }

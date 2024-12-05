@@ -90,7 +90,7 @@ namespace oxen::quic
                     // initialize client context and client tls context simultaneously
                     outbound_ctx = std::make_shared<IOContext>(Direction::OUTBOUND, std::forward<Opt>(opts)...);
                     _set_context_globals(outbound_ctx);
-                    _connect(std::move(remote), qcid, next_rid, p);
+                    p.set_value(_connect(std::move(remote), qcid, next_rid));
                 }
                 catch (...)
                 {
@@ -220,14 +220,10 @@ namespace oxen::quic
         // Does the non-templated bit of `listen()`
         void _listen();
 
-        void _connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid, std::promise<std::shared_ptr<Connection>>& p);
+        std::shared_ptr<Connection> _connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid);
 
-        void _connect(
-                Address remote,
-                quic_cid qcid,
-                ConnectionID rid,
-                std::promise<std::shared_ptr<Connection>>& p,
-                std::optional<ustring> pk = std::nullopt);
+        std::shared_ptr<Connection> _connect(
+                Address remote, quic_cid qcid, ConnectionID rid, std::optional<ustring> pk = std::nullopt);
 
         void handle_ep_opt(opt::enable_datagrams dc);
         void handle_ep_opt(opt::outbound_alpns alpns);
