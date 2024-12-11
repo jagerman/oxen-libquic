@@ -226,7 +226,7 @@ local clang(version) = debian_pipeline(
   cmake_extra='-DCMAKE_C_COMPILER=clang-' + version + ' -DCMAKE_CXX_COMPILER=clang++-' + version + ' '
 );
 
-local full_llvm(version) = debian_pipeline(
+local full_llvm(version, _allow_fail=false) = debian_pipeline(
   'Debian sid/llvm-' + version,
   docker_base + 'debian-sid-clang',
   deps=['clang-' + version, ' lld-' + version, ' libc++-' + version + '-dev', 'libc++abi-' + version + '-dev']
@@ -238,7 +238,8 @@ local full_llvm(version) = debian_pipeline(
                 '-DCMAKE_' + type + '_LINKER_FLAGS=-fuse-ld=lld-' + version
                 for type in ['EXE', 'MODULE', 'SHARED']
               ]) +
-              ' -DOXEN_LOGGING_FORCE_SUBMODULES=ON'
+              ' -DOXEN_LOGGING_FORCE_SUBMODULES=ON',
+  allow_fail=_allow_fail
 );
 
 // Macos build
@@ -288,7 +289,7 @@ local mac_builder(name,
         'echo "Building on ${DRONE_STAGE_MACHINE}"',
         apt_get_quiet + ' update',
         apt_get_quiet + ' install -y eatmydata',
-        'eatmydata ' + apt_get_quiet + ' install --no-install-recommends -y git clang-format-15 jsonnet',
+        'eatmydata ' + apt_get_quiet + ' install --no-install-recommends -y git clang-format-16 jsonnet',
         './utils/ci/lint-check.sh',
       ],
     }],
@@ -297,8 +298,10 @@ local mac_builder(name,
   // Various debian builds
   debian_pipeline('Debian sid', docker_base + 'debian-sid'),
   debian_pipeline('Debian sid/Debug', docker_base + 'debian-sid', build_type='Debug'),
-  clang(16),
-  full_llvm(16),
+  clang(17),
+  full_llvm(17),
+  clang(18),
+  full_llvm(18, true),  // will fail on warning RE: libc++-19 char_traits
   debian_pipeline('Debian sid -GSO', docker_base + 'debian-sid', cmake_extra='-DLIBQUIC_SEND=sendmmsg'),
   debian_pipeline('Debian sid -mmsg', docker_base + 'debian-sid', cmake_extra='-DLIBQUIC_SEND=sendmsg -DLIBQUIC_RECVMMSG=OFF'),
   debian_pipeline('Debian sid -GSO/Debug', docker_base + 'debian-sid', build_type='Debug', cmake_extra='-DLIBQUIC_SEND=sendmmsg'),
