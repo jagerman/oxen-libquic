@@ -4,18 +4,6 @@
 
 #include "utils.hpp"
 
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <oxenc/endian.h>
-#include <oxenc/hex.h>
-
-#include <CLI/Validators.hpp>
-
-#include <gnutls/gnutls.h>
-
-#include <future>
-#include <thread>
-
 using namespace oxen::quic;
 
 int main(int argc, char* argv[])

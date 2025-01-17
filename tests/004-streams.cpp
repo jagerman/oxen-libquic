@@ -338,14 +338,17 @@ namespace oxen::quic::test
 
     struct CustomStream : public Stream
     {
+        std::vector<std::byte> data;
         std::promise<bspan> p;
 
         CustomStream(Connection& _c, Endpoint& _e, std::promise<bspan> _p) : Stream{_c, _e}, p{std::move(_p)} {}
 
         void receive(bspan m) override
         {
+            data.resize(m.size());
+            std::memcpy(data.data(), m.data(), m.size());
             log::info(test_cat, "Custom stream received data:\n{}", buffer_printer{m});
-            p.set_value(m);
+            p.set_value(data);
         }
     };
 
@@ -607,7 +610,6 @@ namespace oxen::quic::test
         auto server_closed = callback_waiter{[](connection_interface&, uint64_t) {}};
 
         stream_data_callback server_data_cb = [&](Stream& s, bspan) {
-            std::lock_guard lock{mut};
             server_seen[s.stream_id()]++;
             s.send("stupid emojis {}"_format(s.stream_id()));
         };
@@ -640,9 +642,13 @@ namespace oxen::quic::test
             return nullptr;
         };
 
+        std::vector<std::byte> cp4data;
+
         auto client_generic_data_cb = [&](Stream&, bspan data) {
             log::debug(test_cat, "Client generic data callback called");
-            cp4.set_value(data);
+            cp4data.resize(data.size());
+            std::memcpy(cp4data.data(), data.data(), data.size());
+            cp4.set_value(cp4data);
         };
 
         RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
@@ -655,33 +661,31 @@ namespace oxen::quic::test
         auto s1 = client_ci->open_stream();
         CHECK(client_stream_ctor_count.load() == 1);
         REQUIRE(std::dynamic_pointer_cast<CustomStreamA>(s1));
+        s1->send("Stream A!"_bsp);
+        require_future(cf1);
+        CHECK(sp_to_sv(cf1.get()) == "stupid emojis 0"sv);
 
         auto s2 = client_ci->open_stream<CustomStreamB>(std::move(cp2));
         CHECK(client_stream_ctor_count.load() == 1);  // should *not* have hit the stream constructor
         static_assert(std::is_same_v<decltype(s2), std::shared_ptr<CustomStreamB>>);
+        s2->send("Stream B!"_bsp);
+        require_future(cf2);
+        CHECK(sp_to_sv(cf2.get()) == "stupid emojis 4"sv);
 
         auto s3 = client_ci->open_stream();
         CHECK(client_stream_ctor_count.load() == 2);
         REQUIRE(std::dynamic_pointer_cast<CustomStreamC>(s3));
+        s3->send("Stream C!"_bsp);
+        require_future(cf3);
+        CHECK(sp_to_sv(cf3.get()) == "stupid emojis 8"sv);
 
         auto s4 = client_ci->open_stream();
         CHECK(client_stream_ctor_count.load() == 3);
         // This should be a generic Stream, not a CustomStreamA/B/C:
         REQUIRE_FALSE(std::dynamic_pointer_cast<CustomStream>(s4));
-
-        s1->send("Stream A!"_bsp);
-        s2->send("Stream B!"_bsp);
-        s3->send("Stream C!"_bsp);
         s4->send("Stream D!"_bsp);
-
-        require_future(cf1);
-        require_future(cf2);
-        require_future(cf3);
         require_future(cf4);
-        CHECK(cf1.get() == "stupid emojis 0"_bsp);
-        CHECK(cf2.get() == "stupid emojis 4"_bsp);
-        CHECK(cf3.get() == "stupid emojis 8"_bsp);
-        CHECK(cf4.get() == "stupid emojis 12"_bsp);
+        CHECK(sp_to_sv(cf4.get()) == "stupid emojis 12"sv);
 
         {
             std::lock_guard lock{mut};

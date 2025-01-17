@@ -4,11 +4,6 @@
 
 #include "utils.hpp"
 
-#include <chrono>
-#include <future>
-#include <random>
-#include <thread>
-
 using namespace oxen::quic;
 
 int main(int argc, char* argv[])

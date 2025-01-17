@@ -49,14 +49,10 @@ namespace oxen::quic
         }
 
         /// Constructs a packet from a path and data view:
-        Packet(Path p, bspan d) : path{std::move(p)}, data_sp{d.begin(), d.end()} {}
+        Packet(Path p, bspan d) : path{std::move(p)}, data_sp{d} {}
 
         /// Constructs a packet from a path and transferred data:
-        Packet(Path p, std::vector<std::byte>&& d) :
-                path{std::move(p)}, pkt_data(d.size()), data_sp{pkt_data.data(), d.size()}
-        {
-            std::memmove(pkt_data.data(), d.data(), d.size());
-        }
+        Packet(Path p, std::vector<std::byte>&& d) : path{std::move(p)}, pkt_data{std::move(d)}, data_sp{pkt_data} {}
 
         /// Constructs a packet from a local address, data, and the IP header; remote addr and ECN
         /// data are extracted from the header.

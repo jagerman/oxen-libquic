@@ -1,7 +1,5 @@
 #include "utils.hpp"
 
-#include <thread>
-
 namespace oxen::quic::test
 {
     using namespace std::literals;

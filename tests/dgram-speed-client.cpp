@@ -4,9 +4,6 @@
 
 #include "utils.hpp"
 
-#include <chrono>
-#include <random>
-
 using namespace oxen::quic;
 
 int main(int argc, char* argv[])

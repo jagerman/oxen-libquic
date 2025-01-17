@@ -4,11 +4,6 @@
 
 #include "utils.hpp"
 
-#include <gnutls/gnutls.h>
-
-#include <future>
-#include <thread>
-
 using namespace oxen::quic;
 
 constexpr auto client_msg = "good morning"_bsp;

@@ -4,11 +4,6 @@
 
 #include "utils.hpp"
 
-#include <gnutls/gnutls.h>
-
-#include <future>
-#include <thread>
-
 using namespace oxen::quic;
 
 int main(int argc, char* argv[])
@@ -59,7 +54,7 @@ int main(int argc, char* argv[])
 
     std::shared_ptr<Endpoint> server;
 
-    dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, bspan data) {
+    dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, std::vector<std::byte> data) {
         if (dgram_data.n_expected == 0)
         {
             // The very first packet should be 8 bytes containing the uint64_t count of total
