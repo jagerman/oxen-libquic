@@ -14,7 +14,7 @@ namespace oxen::quic::test
 
         stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promise.set_value(true);
         };
 
@@ -54,7 +54,7 @@ namespace oxen::quic::test
 
         stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promises.at(index).set_value();
             index += 1;
         };
@@ -106,7 +106,7 @@ namespace oxen::quic::test
 
         stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promises.at(index).set_value();
             index += 1;
         };
@@ -164,7 +164,11 @@ namespace oxen::quic::test
                 return;
 
             std::lock_guard lock{received_mut};
-            if (bspan{partial.data(), good_msg.size()} == good_msg)
+
+            std::string_view partial_sv{reinterpret_cast<const char*>(partial.data()), good_msg.size()},
+                    msg_sv{reinterpret_cast<const char*>(good_msg.data()), good_msg.size()};
+
+            if (partial_sv == msg_sv)
                 good++;
             else
                 bad++;

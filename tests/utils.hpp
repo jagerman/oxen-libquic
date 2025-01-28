@@ -20,6 +20,7 @@ using namespace oxenc;
 #include <catch2/catch_test_case_info.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
+#include <catch2/matchers/catch_matchers_templated.hpp>
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
 
@@ -141,6 +142,26 @@ namespace oxen::quic
                 log_level_override{std::min(l, log::get_level(category)), category}
         {}
     };
+
+    template <oxenc::const_span_type SpanT>
+    struct SpanEqualsMatcher : Catch::Matchers::MatcherGenericBase
+    {
+      private:
+        const SpanT& s;
+
+      public:
+        SpanEqualsMatcher(const SpanT& _s) : s{_s} {}
+
+        bool match(const SpanT& other) const { return std::ranges::equal(s, other); }
+
+        std::string describe() const override { return "Equals: {}"_format(sp_to_sv(s)); }
+    };
+
+    template <oxenc::const_span_type SpanT>
+    auto EqualsSpan(const SpanT& T) -> SpanEqualsMatcher<SpanT>
+    {
+        return SpanEqualsMatcher<SpanT>{T};
+    }
 
 #define _require_future2(f, timeout) REQUIRE(f.wait_for(timeout) == std::future_status::ready)
 #define _require_future1(f) _require_future2(f, 1s)

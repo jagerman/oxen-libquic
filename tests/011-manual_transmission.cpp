@@ -14,7 +14,7 @@ namespace oxen::quic::test
         std::future<bool> d_future = d_promise.get_future();
 
         stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promise.set_value(true);
         };
 

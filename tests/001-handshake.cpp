@@ -442,7 +442,7 @@ namespace oxen::quic::test
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
         server_tls->set_key_verify_callback(
-                [](const uspan& key, const uspan&) { return key == str_to_uspan(defaults::CLIENT_PUBKEY); });
+                [](const uspan& key, const uspan&) { return sp_to_sv(key) == defaults::CLIENT_PUBKEY; });
 
         Address server_local{};
         Address client_local{};
@@ -464,7 +464,7 @@ namespace oxen::quic::test
         CHECK(client_ci->is_validated());
         CHECK(server_ci->is_validated());
 
-        CHECK(server_ci->remote_key() == str_to_uspan(defaults::CLIENT_PUBKEY));
+        CHECK(sp_to_sv(server_ci->remote_key()) == defaults::CLIENT_PUBKEY);
     }
 
     TEST_CASE("001 - Handshaking: Types - IPv6", "[001][ipv6]")

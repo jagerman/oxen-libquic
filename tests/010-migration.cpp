@@ -27,7 +27,7 @@ namespace oxen::quic::test
 
         stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promise.set_value();
         };
 

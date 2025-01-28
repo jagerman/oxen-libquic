@@ -31,7 +31,7 @@ namespace oxen::quic::test
 
             auto conn = client_endpoint->connect(client_remote, client_tls);
             REQUIRE(client_established.wait());
-            REQUIRE(conn->selected_alpn() == "default"_usp);
+            REQUIRE_THAT(conn->selected_alpn(), EqualsSpan("default"_usp));
         }
 
         SECTION("No Server ALPNs specified (defaulted)")
@@ -52,7 +52,8 @@ namespace oxen::quic::test
 
         SECTION("No Client ALPNs specified (defaulted)")
         {
-            opt::alpns server_alpns{opt::alpns::DIR::I, "client"_usp, "relay"_usp};
+            auto client_alpn = "client"_usp, relay_alpn = "relay"_usp;
+            opt::alpns server_alpns{opt::alpns::DIR::I, {client_alpn, relay_alpn}};
 
             auto server_endpoint = test_net.endpoint(server_local, server_alpns, timeout);
             REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
@@ -98,13 +99,13 @@ namespace oxen::quic::test
 
             auto conn = client_endpoint->connect(client_remote, client_tls);
             REQUIRE(client_established.wait());
-            REQUIRE(conn->selected_alpn() == "client"_usp);
+            REQUIRE_THAT(conn->selected_alpn(), EqualsSpan("client"_usp));
 
             auto client_endpoint2 = test_net.endpoint(client_local, client_established2, client_alpns2, timeout);
 
             auto conn2 = client_endpoint2->connect(client_remote, client_tls);
             REQUIRE(client_established2.wait());
-            REQUIRE(conn2->selected_alpn() == "relay"_usp);
+            REQUIRE_THAT(conn2->selected_alpn(), EqualsSpan("relay"_usp));
         }
 
         SECTION("Bidirectional ALPN incoming")
@@ -138,7 +139,7 @@ namespace oxen::quic::test
 
             auto conn = client_endpoint->connect(client_remote, client_tls);
             REQUIRE(client_established.wait());
-            REQUIRE(conn->selected_alpn() == "special-alpn"_usp);
+            REQUIRE_THAT(conn->selected_alpn(), EqualsSpan("special-alpn"_usp));
         }
     }
 

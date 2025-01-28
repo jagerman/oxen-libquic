@@ -259,14 +259,14 @@ namespace oxen::quic::test
 
         stream_data_callback standard_server_cb = [&](Stream& s, bspan dat) {
             log::debug(test_cat, "Calling standard stream data callback... data received...");
-            REQUIRE(msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(msg));
             ss_p.set_value();
             s.send(msg);
         };
 
         stream_data_callback standard_client_cb = [&](Stream& s, bspan dat) {
             log::debug(test_cat, "Calling standard stream data callback... data received...");
-            REQUIRE(msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(msg));
             cs_p.set_value();
             s.send(msg);
         };
@@ -383,9 +383,13 @@ namespace oxen::quic::test
         auto client_established = callback_waiter{[](connection_interface&) {}};
         auto server_closed = callback_waiter{[](connection_interface&, uint64_t) {}};
 
+        std::vector<std::byte> sp4_buf{};
+
         stream_data_callback server_generic_data_cb = [&](Stream&, bspan m) {
             log::debug(test_cat, "Server generic data callback called");
-            sp4.set_value(m);
+            sp4_buf.resize(m.size());
+            std::memcpy(sp4_buf.data(), m.data(), m.size());
+            sp4.set_value(sp4_buf);
         };
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
@@ -513,24 +517,24 @@ namespace oxen::quic::test
         client_a = client_ci->open_stream<CustomStreamA>(std::move(cp1));
         REQUIRE_NOTHROW(client_a->send("Stream A!"_bsp));
         require_future(sf1);
-        CHECK(sf1.get() == "Stream A!"_bsp);
+        CHECK_THAT(sf1.get(), EqualsSpan("Stream A!"_bsp));
 
         log::info(test_cat, "Client opening Custom Stream B!");
         client_b = client_ci->open_stream<CustomStreamB>(std::move(cp2));
         REQUIRE_NOTHROW(client_b->send("Stream B!"_bsp));
         require_future(sf2);
-        CHECK(sf2.get() == "Stream B!"_bsp);
+        CHECK_THAT(sf2.get(), EqualsSpan("Stream B!"_bsp));
 
         log::info(test_cat, "Client opening Custom Stream C!");
         client_c = client_ci->open_stream<CustomStreamC>(std::move(cp3));
         REQUIRE_NOTHROW(client_c->send("Stream C!"_bsp));
         require_future(sf3);
-        CHECK(sf3.get() == "Stream C!"_bsp);
+        CHECK_THAT(sf3.get(), EqualsSpan("Stream C!"_bsp));
 
         client_d = client_ci->open_stream();
-        client_d->send("Stream d!"_bsp);
+        client_d->send("Stream D!"_bsp);
         require_future(sf4);
-        CHECK(sf4.get() == "Stream d!"_bsp);
+        CHECK_THAT(sf4.get(), EqualsSpan("Stream D!"_bsp));
 
         client_ci->close_connection();
         REQUIRE(server_closed.wait());
@@ -938,7 +942,7 @@ namespace oxen::quic::test
 
             auto conn = client_endpoint->connect(client_remote, client_tls, conn_closed);
             auto stream_data_cb = [&](Stream&, bspan data) {
-                REQUIRE(data == "11"_bsp);
+                REQUIRE_THAT(data, EqualsSpan("11"_bsp));
                 got_reply.set_value();
             };
             auto stream_close_cb = [&](Stream&, uint64_t) { got_closed.set_value(); };

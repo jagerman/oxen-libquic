@@ -35,13 +35,14 @@ namespace oxen::quic
             const DIR direction;
             std::vector<std::vector<unsigned char>> protos;
 
-            // constexpr alpns(DIR d, std::vector<std::vector<unsigned char>>&& alpns) : direction{d},
-            // protos{std::move(alpns)}
-            // {}
+            alpns(DIR d, std::initializer_list<uspan> alpns) : direction{d}
+            {
+                std::for_each(alpns.begin(), alpns.end(), [this](auto a) { _emplace(a); });
+            }
 
             template <typename... arg>
                 requires(std::same_as<uspan, arg> && ...)
-            constexpr alpns(DIR d, arg&&... args) : direction{d}
+            alpns(DIR d, arg&&... args) : direction{d}
             {
                 ((void)_emplace(std::forward<arg>(args)), ...);
             }
