@@ -58,9 +58,9 @@ namespace oxen::quic
     using namespace std::literals;
     using namespace oxenc;
 
-    using cspan = oxenc::const_span<char>;
-    using uspan = oxenc::const_span<unsigned char>;
-    using bspan = oxenc::const_span<std::byte>;
+    using cspan = std::span<const char>;
+    using uspan = std::span<const unsigned char>;
+    using bspan = std::span<const std::byte>;
 
     using stream_buffer = std::deque<std::pair<bspan, std::shared_ptr<void>>>;
 
@@ -168,7 +168,7 @@ namespace oxen::quic
         };
 
         template <oxenc::basic_char Out, oxenc::basic_char In>
-        inline const_span<Out> to_span(const In* data, size_t datalen)
+        inline std::span<const Out> to_span(const In* data, size_t datalen)
         {
             return {reinterpret_cast<const Out*>(data), datalen};
         }
@@ -187,13 +187,13 @@ namespace oxen::quic
     }
 
     template <oxenc::basic_char Out, oxenc::basic_char In>
-    inline const_span<Out> vec_to_span(const std::vector<In>& v)
+    inline std::span<const Out> vec_to_span(const std::vector<In>& v)
     {
         return detail::to_span<Out>(v.data(), v.size());
     }
 
     template <oxenc::basic_char Out, oxenc::basic_char In>
-    inline const_span<Out> span_to_span(const const_span<In>& sp)
+    inline std::span<const Out> span_to_span(const std::span<const In>& sp)
     {
         return detail::to_span<Out>(sp.data(), sp.size());
     }

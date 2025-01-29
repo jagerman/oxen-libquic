@@ -139,7 +139,7 @@ namespace oxen::quic
         }
 
         template <oxenc::basic_char CharType>
-        void send_datagram(const_span<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        void send_datagram(std::span<const CharType> data, std::shared_ptr<void> keep_alive = nullptr)
         {
             send_datagram(span_to_span<std::byte>(data), std::move(keep_alive));
         }

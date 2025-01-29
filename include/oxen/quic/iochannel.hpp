@@ -51,7 +51,7 @@ namespace oxen::quic
         void send(bspan data, std::shared_ptr<void> keep_alive = nullptr) { send_impl(data, std::move(keep_alive)); }
 
         template <oxenc::basic_char CharType>
-        void send(const_span<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        void send(std::span<const CharType> data, std::shared_ptr<void> keep_alive = nullptr)
         {
             send_impl(span_to_span<std::byte>(data), std::move(keep_alive));
         }
