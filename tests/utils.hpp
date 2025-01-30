@@ -69,9 +69,15 @@ namespace oxen::quic
         std::pair<std::shared_ptr<GNUTLSCreds>, std::shared_ptr<GNUTLSCreds>> tls_creds_from_ed_keys();
     }  // namespace test::defaults
 
-    // Generates a random Ed25519 keypair for testing purposes.  Returned values are the 32-byte
-    // seed and 32-byte pubkey.
-    std::pair<std::string, std::string> generate_ed25519();
+    void sha3_256(uint8_t* out, std::span<const uint8_t> value, std::string_view domain = "");
+    void sha3_256(uint8_t* out, std::span<const char> value, std::string_view domain = "");
+
+    // Generates an Ed25519 keypair for testing purposes.  Returned values are the 32-byte seed and
+    // 32-byte pubkey.  If you provide a seed_string, then that string is hashed to produce the
+    // Ed25519 seed instead of generating a secure random one.  (Note that this generation mode is
+    // not secure and is only to allow reproducible quasi-random test suite keys but should not
+    // otherwise be used).
+    std::pair<std::string, std::string> generate_ed25519(std::string_view seed_string = ""sv);
 
     // Takes a hex- or base64-encoded byte value of the given byte size and returns the bytes.
     // Returns nullopt if the encoded value is not a valid byte encoding of the given size.
@@ -196,5 +202,8 @@ namespace oxen::quic
             };
         }
     };
+
+    // Returns a human-readable duration, auto-scaling the unit based on the duration given.
+    std::string friendly_duration(std::chrono::nanoseconds dur);
 
 }  // namespace oxen::quic

@@ -1,6 +1,7 @@
 #include "utils.hpp"
 
 #include <nettle/eddsa.h>
+#include <nettle/sha3.h>
 
 namespace oxen::quic
 {
@@ -120,14 +121,39 @@ namespace oxen::quic
         return std::make_pair(std::move(client), std::move(server));
     }
 
-    std::pair<std::string, std::string> generate_ed25519()
+    void sha3_256(uint8_t* out, std::span<const uint8_t> value, std::string_view domain)
     {
+        sha3_256_ctx ctx;
+        sha3_256_init(&ctx);
+        if (!domain.empty())
+            sha3_256_update(&ctx, domain.size(), reinterpret_cast<const uint8_t*>(domain.data()));
+
+        sha3_256_update(&ctx, value.size(), value.data());
+        sha3_256_digest(&ctx, 32, out);
+    }
+    void sha3_256(uint8_t* out, std::span<const char> value, std::string_view domain)
+    {
+        return sha3_256(out, {reinterpret_cast<const uint8_t*>(value.data()), value.size()}, domain);
+    }
+
+    std::pair<std::string, std::string> generate_ed25519(std::string_view seed_string)
+    {
+
         std::pair<std::string, std::string> result;
         auto& [seed, pubkey] = result;
         seed.resize(32);
-        pubkey.resize(32);
 
-        gnutls_rnd(gnutls_rnd_level_t::GNUTLS_RND_KEY, seed.data(), sizeof(seed.size()));
+        if (!seed_string.empty())
+        {
+            log::info(test_cat, "Generating insecure but reproducible keys from seed string '{}'", seed_string);
+            sha3_256(reinterpret_cast<uint8_t*>(seed.data()), seed_string, "libquic-test-ed25519-generator");
+        }
+        else
+        {
+            gnutls_rnd(gnutls_rnd_level_t::GNUTLS_RND_KEY, seed.data(), sizeof(seed.size()));
+        }
+
+        pubkey.resize(32);
         ed25519_sha512_public_key(
                 reinterpret_cast<unsigned char*>(pubkey.data()), reinterpret_cast<const unsigned char*>(seed.data()));
 
@@ -163,6 +189,50 @@ namespace oxen::quic
             type = log::Type::File;
 
         logger_config(out, type, lvl);
+    }
+
+    std::string friendly_duration(std::chrono::nanoseconds dur)
+    {
+        std::string friendly;
+        auto append = std::back_inserter(friendly);
+        bool some = false;
+        if (dur >= 24h)
+        {
+            fmt::format_to(append, "{}d", dur / 24h);
+            dur %= 24h;
+            some = true;
+        }
+        if (dur >= 1h || some)
+        {
+            fmt::format_to(append, "{}h", dur / 1h);
+            dur %= 1h;
+            some = true;
+        }
+        if (dur >= 1min || some)
+        {
+            fmt::format_to(append, "{}m", dur / 1min);
+            dur %= 1min;
+            some = true;
+        }
+        if (some || dur % 1s == 0ns)
+        {
+            // If we have >= minutes or its an integer number of seconds then don't bother with
+            // fractional seconds
+            fmt::format_to(append, "{}s", dur / 1s);
+        }
+        else
+        {
+            double seconds = std::chrono::duration<double>(dur).count();
+            if (dur >= 1s)
+                fmt::format_to(append, "{:.3f}s", seconds);
+            else if (dur >= 1ms)
+                fmt::format_to(append, "{:.3f}ms", seconds * 1000);
+            else if (dur >= 1us)
+                fmt::format_to(append, "{:.3f}µs", seconds * 1'000'000);
+            else
+                fmt::format_to(append, "{:.0f}ns", seconds * 1'000'000'000);
+        }
+        return friendly;
     }
 
 }  // namespace oxen::quic

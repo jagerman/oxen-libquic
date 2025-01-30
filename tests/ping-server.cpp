@@ -10,6 +10,7 @@
 #include <future>
 #include <oxen/quic.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
+#include <random>
 #include <thread>
 
 #include "utils.hpp"
@@ -37,12 +38,24 @@ int main(int argc, char* argv[])
             enable_0rtt,
             "Enable 0-RTT and early data for this endpoint (cannot be used without key verification)");
 
+    std::string seed_string = "";
+    cli.add_option(
+            "-s,--seed",
+            seed_string,
+            "If non-empty then the server key and endpoint private data will be generated from a hash of the given seed, "
+            "for reproducible keys and operation.  If omitted/empty a random seed is used.");
+
+    double flakiness = 0.0;
+    cli.add_option("-f,--flakiness", flakiness, "Fail to respond to pings this proportion of the time.")
+            ->capture_default_str()
+            ->expected(0.0, 1.0);
+
     try
     {
         cli.parse(argc, argv);
 
         if (no_verify and enable_0rtt)
-            throw std::invalid_argument{"0-RTT must be used with key verification!"};
+            throw CLI::ValidationError{"0-RTT must be used with key verification!"};
     }
     catch (const CLI::ParseError& e)
     {
@@ -51,7 +64,13 @@ int main(int argc, char* argv[])
 
     setup_logging(log_file, log_level);
 
-    auto [seed, pubkey] = generate_ed25519();
+    if (seed_string.empty())
+    {
+        seed_string.resize(32);
+        gnutls_rnd(GNUTLS_RND_KEY, seed_string.data(), seed_string.size());
+    }
+
+    auto [seed, pubkey] = generate_ed25519(seed_string);
     auto server_tls = GNUTLSCreds::make_from_ed_keys(seed, pubkey);
 
     Network server_net{};
@@ -61,57 +80,52 @@ int main(int argc, char* argv[])
 
     std::shared_ptr<Endpoint> server;
 
-    std::atomic<bool> first_data{false};
-
-    /**     0: connection established
-            1: stream opened
-            2: recv (first) stream data / close conn
-            3: connection closed
-     */
-    std::array<uint64_t, 4> timing;
-
     auto conn_established = [&](connection_interface& ci) {
-        timing[0] = get_timestamp<std::chrono::milliseconds>().count();
-        log::critical(test_cat, "Connection established to {}", ci.remote());
+        log::info(test_cat, "Incoming connection established from {}", ci.remote());
     };
 
     auto conn_closed = [&](connection_interface& ci, uint64_t) {
-        timing[3] = get_timestamp<std::chrono::milliseconds>().count();
-        log::critical(test_cat, "Connection closed to {}", ci.remote());
-
-        log::critical(test_cat, "\n\tConnection established: {}.{}ms", timing[0] / 1'000'000, timing[0] % 1000);
-        log::critical(test_cat, "\n\tFirst stream opened: {}.{}ms", timing[1] / 1'000'000, timing[1] % 1000);
-        log::critical(
-                test_cat, "\n\tFirst stream data received/close sent: {}.{}ms", timing[2] / 1'000'000, timing[2] % 1000);
-        log::critical(test_cat, "\n\tConnection closed: {}.{}ms", timing[3] / 1'000'000, timing[3] % 1000);
-
-        first_data = false;
+        log::info(test_cat, "Connection from {} closed", ci.remote());
     };
 
-    auto stream_opened = [&](Stream& s) {
-        timing[1] = get_timestamp<std::chrono::milliseconds>().count();
-        log::critical(test_cat, "Stream {} opened!", s.stream_id());
-        return 0;
-    };
-
-    auto stream_recv = [&](Stream& s, bstring_view) {
-        // get the time first, then do ops
-        auto t = get_timestamp<std::chrono::milliseconds>().count();
-        if (not first_data.exchange(true))
+    auto flake = [rng = std::mt19937_64{std::random_device{}()},
+                  flake = std::bernoulli_distribution{flakiness},
+                  &flakiness]() mutable -> bool { return flakiness > 0 ? flake(rng) : false; };
+    auto dgram_recv = [&](dgram_interface& d, bstring_view in) {
+        if (in.size() != 4)
         {
-            timing[2] = t;
-            log::critical(test_cat, "Received first data on connection to {}", s.remote());
-            s.send("good afternoon"_bsv);
-            server->get_conn(s.reference_id)->close_connection();
+            log::error(test_cat, "Received invalid ping datagram of size {} (expected 4 bytes); ignoring", in.size());
+            return;
+        }
+        auto ping_num = oxenc::load_little_to_host<uint32_t>(in.data());
+        if (flake())
+            log::debug(test_cat, "received ping {} but simulating flakiness and not replying", ping_num);
+        else
+        {
+            log::debug(test_cat, "received ping {}, reflecting it", ping_num);
+            d.reply(bstring{in});
         }
     };
 
+    ustring ep_secret;
+    ep_secret.resize(32);
+    sha3_256(ep_secret.data(), seed_string, "libquic-test-static-secret");
+
     try
     {
-        log::info(test_cat, "Starting up endpoint...");
-        server = server_net.endpoint(server_local, conn_established, conn_closed);
-        server->listen(server_tls, stream_opened, stream_recv);
-        log::critical(
+        log::info(test_cat, "Starting endpoint...");
+        std::optional<opt::enable_0rtt_ticketing> zerortt;
+        if (enable_0rtt)
+            zerortt.emplace();
+        server = server_net.endpoint(
+                server_local,
+                conn_established,
+                conn_closed,
+                zerortt,
+                opt::enable_datagrams{},
+                opt::static_secret{std::move(ep_secret)});
+        server->listen(server_tls, dgram_recv);
+        log::info(
                 test_cat,
                 "Server listening on: {}{}awaiting connections...",
                 server_local,

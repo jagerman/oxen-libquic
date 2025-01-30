@@ -6,15 +6,21 @@ add_library(tests_common STATIC utils.cpp)
 target_link_libraries(tests_common PUBLIC
     quic CLI11::CLI11 libquic_internal-warnings gnutls::gnutls)
 
-# We need hogweed for generating Ed25519 keys (this is already a gnutls dependency, so we shouldn't
-# be adding any new dep by requiring it)
-if(TARGET hogweed::hogweed)
-    target_link_libraries(tests_common INTERFACE hogweed::hogweed)
-else()
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(HOGWEED hogweed REQUIRED IMPORTED_TARGET)
-    target_link_libraries(tests_common INTERFACE PkgConfig::HOGWEED)
-endif()
+macro(link_test_dep x)
+    string(TOUPPER "${x}" BIG_X)
+    if(TARGET ${x}::${x})
+        target_link_libraries(tests_common INTERFACE ${x}::${x})
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(${BIG_X} ${x} REQUIRED IMPORTED_TARGET)
+        target_link_libraries(tests_common INTERFACE PkgConfig::${BIG_X})
+    endif()
+endmacro()
+
+# We need hogweed and nettle for generating Ed25519 keys (this is already a gnutls dependency, so we
+# shouldn't be adding any new dep by requiring it)
+link_test_dep(hogweed)
+link_test_dep(nettle)
 
 function(extra_linking target)
     if(WIN32 AND NOT BUILD_SHARED_LIBS)
