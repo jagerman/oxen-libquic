@@ -35,10 +35,12 @@ namespace oxen::quic
     {
         Path path;
         ngtcp2_pkt_info pkt_info{};
+        // *Optional* storage used only if we need to own the data, in which case data_sp points at this.
         std::vector<std::byte> pkt_data;
+        // Always points at the packet data, which could be pkt_data or external.
         std::span<const std::byte> data_sp;
 
-        size_t size() const { return pkt_data.size(); }
+        size_t size() const { return data_sp.size(); }
 
         // Return a string_view type, starting from index `pos`
         template <oxenc::basic_char Char = std::byte>
