@@ -1099,7 +1099,7 @@ namespace oxen::quic
     void Endpoint::send_version_negotiation(const ngtcp2_version_cid& vid, Path p)
     {
         uint8_t rint;
-        gnutls_rnd(GNUTLS_RND_RANDOM, &rint, 8);
+        gnutls_rnd(GNUTLS_RND_RANDOM, &rint, sizeof(rint));
         std::vector<std::byte> buf;
         buf.resize(MAX_PMTUD_UDP_PAYLOAD);
         std::array<uint32_t, NGTCP2_PROTO_VER_MAX - NGTCP2_PROTO_VER_MIN + 2> versions;
