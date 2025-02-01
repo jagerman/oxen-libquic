@@ -710,9 +710,6 @@ namespace oxen::quic
 
     void Endpoint::send_stateless_reset(const Packet& pkt, quic_cid& cid)
     {
-        auto token = generate_reset_token(cid);
-
-        std::vector<std::byte> buf;
         if (pkt.size() <= MIN_STATELESS_RESET_SIZE)
         {
             log::debug(
@@ -736,11 +733,13 @@ namespace oxen::quic
             reduce = 1 + reduce % max_reduction;
         }
 
+        std::vector<std::byte> buf;
         buf.resize(pkt.size() - reduce);
         std::vector<uint8_t> rand_data;
         rand_data.resize(buf.size() - NGTCP2_STATELESS_RESET_TOKENLEN);
         gnutls_rnd(GNUTLS_RND_RANDOM, rand_data.data(), rand_data.size());
 
+        auto token = generate_reset_token(cid);
         auto nwrite =
                 ngtcp2_pkt_write_stateless_reset(u8data(buf), buf.size(), token.data(), rand_data.data(), rand_data.size());
 
