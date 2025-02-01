@@ -139,6 +139,11 @@ namespace oxen::quic
     // we can overrun up to the next integer multiple of DATAGRAM_BATCH_SIZE.
     inline constexpr size_t MAX_RECEIVE_PER_LOOP = 64;
 
+    // The minimum size stateless reset packet we will send, as proscribed by section 10.3.3 of the
+    // RFC.  Each generated stateless reset packet is smaller than the one that triggered it, down
+    // to this limit, to stop a potential infinite loop.
+    inline constexpr size_t MIN_STATELESS_RESET_SIZE = 41;
+
     // Check if T is an instantiation of templated class `Class`; for example,
     // `is_instantiation<std::basic_string, std::string>` is true.
     template <template <typename...> class Class, typename T>

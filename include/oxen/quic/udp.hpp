@@ -49,6 +49,14 @@ namespace oxen::quic
             return std::basic_string_view<Char>{reinterpret_cast<const Char*>(data_sp.data() + pos), data_sp.size() - pos};
         }
 
+        // Returns a fixed size trailing suffix span of the last Suffix bytes of the packet data.
+        // DOES NOT CHECK size() -- you must do that before calling this!
+        template <size_t Suffix, oxenc::basic_char Char = std::byte>
+        std::span<const Char, Suffix> suffix() const
+        {
+            return std::span<const Char, Suffix>{data<Char>(data_sp.size() - Suffix).data(), Suffix};
+        }
+
         /// Constructs a packet from a path and data view:
         Packet(Path p, bstring_view d) : path{std::move(p)}, data_sp{d.begin(), d.end()} {}
 

@@ -8,8 +8,8 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <set>
 #include <stdexcept>
+#include <unordered_set>
 
 #include "connection_ids.hpp"
 #include "context.hpp"
@@ -21,7 +21,7 @@ namespace oxen::quic
     struct dgram_interface;
     class Network;
 
-    inline constexpr uint64_t MAX_ACTIVE_CIDS{8};
+    inline constexpr uint64_t MAX_ACTIVE_CIDS{4};
     inline constexpr size_t NGTCP2_RETRY_SCIDLEN{18};
 
     class connection_interface : public std::enable_shared_from_this<connection_interface>
@@ -317,8 +317,6 @@ namespace oxen::quic
         bool zero_rtt_enabled() const { return _0rtt_enabled; }
         unsigned int zero_rtt_window() const { return _0rtt_window; }
 
-        bool stateless_reset_enabled() const { return _stateless_reset_enabled; }
-
         std::optional<size_t> max_datagram_size_changed() override;
 
         // public debug functions; to be removed with friend test fixture class
@@ -341,16 +339,18 @@ namespace oxen::quic
         void set_remote_addr(const ngtcp2_addr& new_remote);
 
         void store_associated_cid(const quic_cid& cid);
-
         void delete_associated_cid(const quic_cid& cid);
+        const std::unordered_set<quic_cid>& associated_cids() const { return _associated_cids; }
 
-        std::unordered_set<quic_cid>& associated_cids() { return _associated_cids; }
+        void store_associated_reset(const hashed_reset_token& htoken);
+        void delete_associated_reset(const hashed_reset_token& htoken);
+        const std::unordered_set<hashed_reset_token>& associated_reset_tokens() const { return _associated_resets; }
 
         int client_handshake_completed();
 
         int server_handshake_completed();
 
-        int recv_stateless_reset(std::shared_ptr<gtls_reset_token> tok);
+        int recv_stateless_reset(std::span<const uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token);
 
         int client_path_validation(const ngtcp2_path* path, bool res, uint32_t flags);
 
@@ -396,6 +396,7 @@ namespace oxen::quic
         const ConnectionID _ref_id;
 
         std::unordered_set<quic_cid> _associated_cids;
+        std::unordered_set<hashed_reset_token> _associated_resets;
 
         const quic_cid _source_cid;
         quic_cid _dest_cid;
@@ -404,8 +405,6 @@ namespace oxen::quic
 
         bool _0rtt_enabled{false};
         const unsigned int _0rtt_window{};
-
-        bool _stateless_reset_enabled{false};
 
         const uint64_t _max_streams{DEFAULT_MAX_BIDI_STREAMS};
         const bool _datagrams_enabled{false};

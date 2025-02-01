@@ -123,12 +123,21 @@ namespace oxen::quic
             }
         };
 
-        // Used to provide precalculated static secret data for an endpoint to use for validation
-        // tokens.  If not provided, 32 random bytes are generated during endpoint construction.  The
-        // data provided must be (at least) SECRET_MIN_SIZE long (longer values are ignored).  For a
-        // deterministic value you should not pass sensitive data here (such as a raw private key), but
+        // Used to provide precalculated static secret data for an endpoint to use when keying
+        // material is used for quasi-random values, such as token verification and stateless reset
+        // token generation and handling.  If not provided, 32 random bytes are generated during
+        // endpoint construction.  The data provided must be (at least) SECRET_MIN_SIZE long, but 32
+        // or longer is recommended.
+        //
+        // It is recommended to not pass sensitive data here (such as a raw private key), but
         // instead use a cryptographically secure hash (ideally with a unique key or suffix) of such
         // data.
+        //
+        // Providing a secure, deterministic, static secret is recommended for endpoints that could
+        // restart using the same keys and address as this allows stateless reset tokens to remain
+        // valid across a reset of the application.  Without a fixed secret, the stateless reset
+        // tokens generated after a restart would not match the ones a client received prior to the
+        // restart.
         struct static_secret
         {
             inline static constexpr size_t SECRET_MIN_SIZE{16};

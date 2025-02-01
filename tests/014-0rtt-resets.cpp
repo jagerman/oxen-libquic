@@ -34,31 +34,4 @@ namespace oxen::quic::test
         CHECK(client_ci->is_validated());
     }
 
-    TEST_CASE("069 - stateless reset", "[069][reset]")
-    {
-        auto client_established = callback_waiter{[](connection_interface&) {}};
-        auto server_established = callback_waiter{[](connection_interface&) {}};
-
-        Network test_net{};
-
-        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
-
-        Address server_local{};
-        Address client_local{};
-
-        auto server_endpoint = test_net.endpoint(server_local, server_established, opt::disable_stateless_reset{});
-        CHECK_NOTHROW(server_endpoint->listen(server_tls));
-        REQUIRE_FALSE(server_endpoint->stateless_reset_enabled());
-
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
-
-        auto client_endpoint = test_net.endpoint(client_local, client_established, opt::disable_stateless_reset{});
-        REQUIRE_FALSE(client_endpoint->stateless_reset_enabled());
-
-        auto client_ci = client_endpoint->connect(client_remote, client_tls);
-
-        CHECK(client_established.wait());
-        CHECK(server_established.wait());
-        CHECK(client_ci->is_validated());
-    }
 }  //  namespace oxen::quic::test

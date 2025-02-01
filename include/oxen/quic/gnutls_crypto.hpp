@@ -354,36 +354,36 @@ namespace oxen::quic
 
     struct Packet;
 
-    struct gtls_reset_token
+    using stateless_reset_token = std::array<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN>;
+
+    // Generates a stateless reset token for the given cid, using the static_secret for secure but
+    // reproducible reset tokens for a given CID.
+    stateless_reset_token generate_reset_token(std::span<const uint8_t> static_secret, const quic_cid& cid);
+    stateless_reset_token generate_reset_token(std::span<const uint8_t> static_secret, const ngtcp2_cid* cid);
+
+    // Same as above, but writes the token into the given span instead of returning an array.
+    void generate_reset_token(
+            std::span<const uint8_t> static_secret,
+            const quic_cid& cid,
+            std::span<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> out);
+    void generate_reset_token(
+            std::span<const uint8_t> static_secret,
+            const ngtcp2_cid* cid,
+            std::span<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> out);
+
+    // Stores a hash of a stateless reset token; we store and lookup using the hashed version rather
+    // than the raw token, as suggested in 10.3.1 of the RFC.  The hash calculation requires the
+    // endpoint's static secret so that the actual value stored locally is not knowable by the
+    // remote who sent the token.
+    struct hashed_reset_token : std::array<uint8_t, 16>
     {
-        static constexpr size_t TOKENSIZE{NGTCP2_STATELESS_RESET_TOKENLEN};
-        static constexpr size_t RANDSIZE{NGTCP2_MIN_STATELESS_RESET_RANDLEN};
-
-        static constexpr std::chrono::milliseconds LIFETIME{10min};
-
-      private:
-        gtls_reset_token(const uint8_t* _tok, const uint8_t* _rand = nullptr);
-        gtls_reset_token(uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
-
-      public:
-        std::chrono::steady_clock::time_point expiry{get_time() + LIFETIME};
-
-        std::array<uint8_t, TOKENSIZE> _tok{};
-        std::array<uint8_t, RANDSIZE> _rand{};
-
-        const uint8_t* token() { return _tok.data(); }
-        const uint8_t* rand() { return _rand.data(); }
-
-        bool is_expired(time_point now) const { return expiry < now; }
-
-        static void generate_token(uint8_t* buffer, uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
-        static void generate_rand(uint8_t* buffer);
-        static std::shared_ptr<gtls_reset_token> generate(uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid);
-        static std::shared_ptr<gtls_reset_token> make_copy(const uint8_t* tok_buf, const uint8_t* rand_buf = nullptr);
-        static std::shared_ptr<gtls_reset_token> parse_packet(const Packet& pkt);
-
-        auto operator<=>(const gtls_reset_token& t) const { return std::tie(_tok, _rand) <=> std::tie(t._tok, t._rand); }
-        bool operator==(const gtls_reset_token& t) const { return (*this <=> t) == 0; }
+        hashed_reset_token() = default;
+        explicit hashed_reset_token(
+                std::span<const uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token, std::span<const uint8_t> static_secret);
+        hashed_reset_token(const hashed_reset_token&) = default;
+        hashed_reset_token(hashed_reset_token&&) = default;
+        hashed_reset_token& operator=(const hashed_reset_token&) = default;
+        hashed_reset_token& operator=(hashed_reset_token&&) = default;
     };
 
     class GNUTLSCreds : public TLSCreds
@@ -471,3 +471,15 @@ namespace oxen::quic
     Connection* get_connection_from_gnutls(gnutls_session_t g_session);
 
 }  // namespace oxen::quic
+
+// Trivial std::hash implementation for pre-hashed reset tokens
+template <>
+struct std::hash<oxen::quic::hashed_reset_token>
+{
+    size_t operator()(const oxen::quic::hashed_reset_token& token) const
+    {
+        size_t x;
+        std::memcpy(&x, token.data(), sizeof(x));
+        return x;
+    }
+};

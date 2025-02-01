@@ -122,7 +122,7 @@ namespace oxen::quic
 
         void close_conns(std::optional<Direction> d = std::nullopt);
 
-        std::shared_ptr<connection_interface> get_conn(ConnectionID rid);
+        std::shared_ptr<Connection> get_conn(ConnectionID rid);
 
         template <typename... Args>
         void call(Args&&... args)
@@ -163,11 +163,29 @@ namespace oxen::quic
         bool zero_rtt_enabled() const { return _0rtt_enabled; }
         unsigned int zero_rtt_window() const { return _0rtt_window; }
 
-        bool stateless_reset_enabled() const { return _stateless_reset_enabled; }
-
         int validate_anti_replay(gtls_ticket_ptr ticket, time_t exp);
         void store_session_ticket(gtls_ticket_ptr ticket);
         gtls_ticket_ptr get_session_ticket(const ustring_view& remote_pk);
+
+        // Wrapper around oxenc::quic::generate_reset_token that prepends the arguments with the
+        // endpoint's static secret, as needed by the free function version.
+        template <typename... Args>
+        auto generate_reset_token(Args&&... args) const
+        {
+            return quic::generate_reset_token(_static_secret, std::forward<Args>(args)...);
+        }
+
+        // Constructs and returns a hashed_reset_token from the given reset token using
+        // NGTCP2_STATELESS_RESET_TOKENLEN bytes at `token` and this endpoint's static secret data.
+        hashed_reset_token hash_reset_token(std::span<const uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token) const
+        {
+            return hashed_reset_token{token, _static_secret};
+        }
+        hashed_reset_token hash_reset_token(const uint8_t* token) const
+        {
+            return hash_reset_token(
+                    std::span<const uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN>{token, NGTCP2_STATELESS_RESET_TOKENLEN});
+        }
 
       private:
         friend class Network;
@@ -189,8 +207,6 @@ namespace oxen::quic
         opt::manual_routing _manual_routing;
         bool _0rtt_enabled{false};
         unsigned int _0rtt_window{};
-
-        bool _stateless_reset_enabled{true};
 
         gtls_db_validate_cb _validate_0rtt_ticket;
         gtls_db_get_cb _get_session_ticket;
@@ -236,7 +252,6 @@ namespace oxen::quic
         void handle_ep_opt(opt::static_secret ssecret);
         void handle_ep_opt(opt::manual_routing mrouting);
         void handle_ep_opt(opt::enable_0rtt_ticketing rtt);
-        void handle_ep_opt(opt::disable_stateless_reset rst);
 
         // Takes a std::optional-wrapped option that does nothing if the optional is empty,
         // otherwise passes it through to the above.  This is here to allow runtime-dependent
@@ -292,9 +307,9 @@ namespace oxen::quic
 
         void initial_association(Connection& conn);
 
-        void activate_cid(const ngtcp2_cid* cid, const uint8_t* token, Connection& conn);
+        void associate_reset(const uint8_t* token, Connection& conn);
 
-        void deactivate_cid(const ngtcp2_cid* cid, Connection& conn);
+        void dissociate_reset(const uint8_t* token, Connection& conn);
 
         void associate_cid(quic_cid qcid, Connection& conn);
 
@@ -306,7 +321,7 @@ namespace oxen::quic
 
         const ustring& static_secret() const { return _static_secret; }
 
-        Connection* fetch_associated_conn(quic_cid& cid);
+        Connection* fetch_associated_conn(const quic_cid& cid);
 
         ConnectionID next_reference_id();
 
@@ -364,11 +379,7 @@ namespace oxen::quic
 
         std::unordered_map<quic_cid, ConnectionID> conn_lookup;
 
-        void expire_reset_tokens(time_point now = get_time());
-
-        // only used if stateless reset enabled
-        std::unordered_map<quic_cid, std::shared_ptr<gtls_reset_token>> reset_token_lookup;
-        std::unordered_map<std::shared_ptr<gtls_reset_token>, quic_cid> reset_token_map;
+        std::unordered_map<hashed_reset_token, ConnectionID> reset_token_conns;
 
         std::map<std::chrono::steady_clock::time_point, ConnectionID> draining_closing;
 
@@ -386,13 +397,12 @@ namespace oxen::quic
 
         void send_stateless_reset(const Packet& pkt, quic_cid& cid);
 
-        Connection* check_stateless_reset(const Packet& pkt, quic_cid& cid);
-
         void send_version_negotiation(const ngtcp2_version_cid& vid, Path p);
 
         void check_timeouts();
 
-        Connection* accept_initial_connection(const Packet& pkt, quic_cid& cid);
+        Connection* accept_initial_connection(const Packet& pkt);
+        Connection* check_stateless_reset(const Packet& pkt);
 
         template <typename... Opt>
         static constexpr void check_for_tls_creds()

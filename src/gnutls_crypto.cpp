@@ -1,60 +1,49 @@
 #include "gnutls_crypto.hpp"
 
-#include "internal.hpp"
-#include "udp.hpp"
+#include <nettle/sha3.h>
 
 namespace oxen::quic
 {
-    gtls_reset_token::gtls_reset_token(const uint8_t* t, const uint8_t* r)
-    {
-        std::memcpy(_tok.data(), t, gtls_reset_token::TOKENSIZE);
-        if (r)
-            std::memcpy(_rand.data(), r, gtls_reset_token::RANDSIZE);
-        else
-            generate_rand(_rand.data());
-    }
 
-    gtls_reset_token::gtls_reset_token(uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid)
+    void generate_reset_token(
+            std::span<const uint8_t> static_secret,
+            const ngtcp2_cid* cid,
+            std::span<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> out)
     {
-        generate_token(_tok.data(), _static_secret, _secret_len, cid);
-        generate_rand(_rand.data());
-    }
-
-    void gtls_reset_token::generate_token(uint8_t* buffer, uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid)
-    {
-        if (ngtcp2_crypto_generate_stateless_reset_token(buffer, _static_secret, _secret_len, &cid) != 0)
+        if (ngtcp2_crypto_generate_stateless_reset_token(out.data(), static_secret.data(), static_secret.size(), cid) != 0)
             throw std::runtime_error{"Failed to generate stateless reset token!"};
     }
-
-    void gtls_reset_token::generate_rand(uint8_t* buffer)
+    void generate_reset_token(
+            std::span<const uint8_t> static_secret,
+            const quic_cid& cid,
+            std::span<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> out)
     {
-        if (gnutls_rnd(GNUTLS_RND_RANDOM, buffer, RANDSIZE) != 0)
-            throw std::runtime_error{"Failed to generate stateless reset random"};
+        generate_reset_token(static_secret, &cid, out);
+    }
+    std::array<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> generate_reset_token(
+            std::span<const uint8_t> static_secret, const ngtcp2_cid* cid)
+    {
+        std::array<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token;
+        generate_reset_token(static_secret, cid, token);
+        return token;
+    }
+    std::array<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> generate_reset_token(
+            std::span<const uint8_t> static_secret, const quic_cid& cid)
+    {
+        return generate_reset_token(static_secret, &cid);
     }
 
-    std::shared_ptr<gtls_reset_token> gtls_reset_token::generate(
-            uint8_t* _static_secret, size_t _secret_len, const quic_cid& cid)
+    static constexpr auto STATELESS_HASH_PREFIX = "quic stateless reset hash"sv;
+    hashed_reset_token::hashed_reset_token(
+            std::span<const uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token, std::span<const uint8_t> static_secret)
     {
-        std::shared_ptr<gtls_reset_token> ret = nullptr;
-        try
-        {
-            ret = std::shared_ptr<gtls_reset_token>{new gtls_reset_token{_static_secret, _secret_len, cid}};
-        }
-        catch (const std::exception& e)
-        {
-            log::error(log_cat, "gtls_reset_token exception: {}", e.what());
-        }
-
-        return ret;
+        // SHAKE128(STATELESS_HASH_PREFIX || static_secret || token)
+        sha3_128_ctx ctx;
+        sha3_128_init(&ctx);
+        sha3_128_update(&ctx, STATELESS_HASH_PREFIX.size(), reinterpret_cast<const uint8_t*>(STATELESS_HASH_PREFIX.data()));
+        sha3_128_update(&ctx, static_secret.size(), static_secret.data());
+        sha3_128_update(&ctx, token.size(), token.data());
+        sha3_128_shake(&ctx, size(), data());
     }
 
-    std::shared_ptr<gtls_reset_token> gtls_reset_token::make_copy(const uint8_t* t, const uint8_t* r)
-    {
-        return std::shared_ptr<gtls_reset_token>{new gtls_reset_token{t, r}};
-    }
-
-    std::shared_ptr<gtls_reset_token> gtls_reset_token::parse_packet(const Packet& pkt)
-    {
-        return gtls_reset_token::make_copy(pkt.data<uint8_t>(pkt.size() - gtls_reset_token::TOKENSIZE).data());
-    }
 }  //  namespace oxen::quic

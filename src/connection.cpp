@@ -170,33 +170,47 @@ namespace oxen::quic
     int connection_callbacks::on_connection_id_status(
             ngtcp2_conn* /* _conn */,
             ngtcp2_connection_id_status_type type,
-            uint64_t /* seq */,
+            uint64_t seq,
             const ngtcp2_cid* cid,
             const uint8_t* token,
             void* user_data)
     {
+        if (!token)
+            return 0;
+
         auto* conn = static_cast<Connection*>(user_data);
-        assert(conn->stateless_reset_enabled());
 
         auto& ep = conn->endpoint();
 
         // if token is not null, map to cid
-        if (token and type == NGTCP2_CONNECTION_ID_STATUS_TYPE_ACTIVATE)
+        if (type == NGTCP2_CONNECTION_ID_STATUS_TYPE_ACTIVATE)
         {
-            log::debug(log_cat, "Activating stateless reset token for new CID from remote: {}", conn->remote());
-            ep.activate_cid(cid, token, *conn);
+            log::debug(
+                    log_cat,
+                    "Activating stateless reset token {} for CID[{}]:{} from remote: {}",
+                    oxenc::to_hex(token, token + NGTCP2_STATELESS_RESET_TOKENLEN),
+                    seq,
+                    quic_cid{*cid},
+                    conn->remote());
+            ep.associate_reset(token, *conn);
         }
         else if (type == NGTCP2_CONNECTION_ID_STATUS_TYPE_DEACTIVATE)
         {
-            log::debug(log_cat, "Deactivating stateless reset token for CID from remote: {}", conn->remote());
-            ep.deactivate_cid(cid, *conn);
+            log::debug(
+                    log_cat,
+                    "Deactivating stateless reset token {} for CID[{}]:{} from remote: {}",
+                    oxenc::to_hex(token, token + NGTCP2_STATELESS_RESET_TOKENLEN),
+                    seq,
+                    quic_cid{*cid},
+                    conn->remote());
+            ep.dissociate_reset(token, *conn);
         }
 
         return 0;
     }
 
     int connection_callbacks::get_new_connection_id(
-            ngtcp2_conn* /* _conn */, ngtcp2_cid* cid, uint8_t* token, size_t cidlen, void* user_data)
+            ngtcp2_conn* /* _conn */, ngtcp2_cid* cid, uint8_t* tokenptr, size_t cidlen, void* user_data)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -207,11 +221,23 @@ namespace oxen::quic
         auto* conn = static_cast<Connection*>(user_data);
         auto& ep = conn->endpoint();
 
-        if (ngtcp2_crypto_generate_stateless_reset_token(token, ep._static_secret.data(), ep._static_secret.size(), cid) !=
-            0)
+        std::span<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token{tokenptr, NGTCP2_STATELESS_RESET_TOKENLEN};
+        try
+        {
+            ep.generate_reset_token(cid, token);
+        }
+        catch (const std::exception& e)
+        {
+            log::warning(log_cat, "{}", e.what());
             return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
 
-        log::trace(log_cat, "{} generated new CID for {}", conn->is_outbound() ? "CLIENT" : "SERVER", conn->reference_id());
+        log::trace(
+                log_cat,
+                "{} generated new CID for {} with reset token {}",
+                conn->is_outbound() ? "CLIENT" : "SERVER",
+                conn->reference_id(),
+                oxenc::to_hex(token.begin(), token.end()));
         ep.associate_cid(cid, *conn);
 
         return 0;
@@ -222,8 +248,7 @@ namespace oxen::quic
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
         auto* conn = static_cast<Connection*>(user_data);
-        auto dir_str = conn->is_outbound() ? "CLIENT"s : "SERVER"s;
-        log::trace(log_cat, "{} dissociating CID for {}", dir_str, conn->reference_id());
+        log::trace(log_cat, "{} dissociating CID for {}", conn->is_outbound() ? "CLIENT" : "SERVER", conn->reference_id());
         conn->endpoint().dissociate_cid(cid, *conn);
 
         return 0;
@@ -284,14 +309,16 @@ namespace oxen::quic
         auto& conn = *static_cast<Connection*>(user_data);
         assert(_conn == conn);
 
-        return conn.recv_stateless_reset(gtls_reset_token::make_copy(sr->stateless_reset_token, sr->rand));
+        return conn.recv_stateless_reset(sr->stateless_reset_token);
     }
 
-    int Connection::recv_stateless_reset(std::shared_ptr<gtls_reset_token> tok)
+    int Connection::recv_stateless_reset(std::span<const uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token)
     {
         log::trace(log_cat, "Client recv_stateless_reset cb called...");
 
-        if (auto it = _endpoint.reset_token_map.find(tok); it != _endpoint.reset_token_map.end())
+        hashed_reset_token htok{token, _endpoint.static_secret()};
+
+        if (auto it = _endpoint.reset_token_conns.find(htok); it != _endpoint.reset_token_conns.end())
         {
             log::warning(
                     log_cat,
@@ -299,10 +326,7 @@ namespace oxen::quic
                     _ref_id,
                     _path);
 
-            // delete reset token after use
-            _endpoint.reset_token_lookup.erase(it->second);
-            _endpoint.reset_token_map.erase(it);
-
+            // dropping the connection will drop the reset token we just matched
             _endpoint.drop_connection(*this, io_error{CONN_STATELESS_RESET});
         }
         else
@@ -491,6 +515,16 @@ namespace oxen::quic
     {
         log::debug(log_cat, "Connection (RID:{}) deleting associated cid:{}", _ref_id, cid);
         _associated_cids.erase(cid);
+    }
+
+    void Connection::store_associated_reset(const hashed_reset_token& htoken)
+    {
+        _associated_resets.insert(htoken);
+    }
+
+    void Connection::delete_associated_reset(const hashed_reset_token& htoken)
+    {
+        _associated_resets.erase(htoken);
     }
 
     ustring_view Connection::remote_key() const
@@ -1542,12 +1576,8 @@ namespace oxen::quic
         callbacks.stream_open = connection_callbacks::on_stream_open;
         callbacks.handshake_completed = connection_callbacks::on_handshake_completed;
 
-        if (_stateless_reset_enabled)
-        {
-            callbacks.recv_stateless_reset = connection_callbacks::recv_stateless_reset;
-            callbacks.dcid_status = connection_callbacks::on_connection_id_status;
-            log::debug(log_cat, "Connection configured to monitor active dcids and stateless reset packets");
-        }
+        callbacks.recv_stateless_reset = connection_callbacks::recv_stateless_reset;
+        callbacks.dcid_status = connection_callbacks::on_connection_id_status;
 
         ngtcp2_settings_default(&settings);
 
@@ -1626,7 +1656,6 @@ namespace oxen::quic
             _path{path},
             _0rtt_enabled{_endpoint._0rtt_enabled},
             _0rtt_window{_endpoint._0rtt_window},
-            _stateless_reset_enabled{_endpoint._stateless_reset_enabled},
             _max_streams{context->config.max_streams ? context->config.max_streams : DEFAULT_MAX_BIDI_STREAMS},
             _datagrams_enabled{context->config.datagram_support},
             _packet_splitting{context->config.split_packet},
@@ -1751,16 +1780,16 @@ namespace oxen::quic
             settings.token = hdr->token;
             settings.tokenlen = hdr->tokenlen;
 
-            if (_stateless_reset_enabled)
-            {
-                params.stateless_reset_token_present = 1;
-                // generate stateless reset token using scid chosen by server
-                gtls_reset_token::generate_token(
-                        params.stateless_reset_token,
-                        _endpoint._static_secret.data(),
-                        _endpoint._static_secret.size(),
-                        _source_cid);
-            }
+            // For a server the reset token for the initial (sequence 0) cid that we give back to
+            // the client to use has its associated reset token carried in the transport parameters
+            // sent back to the client:
+            params.stateless_reset_token_present = 1;
+            _endpoint.generate_reset_token(_source_cid, params.stateless_reset_token);
+            log::trace(
+                    log_cat,
+                    "Generated transport parameter reset token {} for initial scid {}",
+                    oxenc::to_hex(std::begin(params.stateless_reset_token), std::end(params.stateless_reset_token)),
+                    _source_cid);
 
             if (token_type)
                 settings.token_type = *token_type;
