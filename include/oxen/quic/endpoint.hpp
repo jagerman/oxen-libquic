@@ -268,6 +268,11 @@ namespace oxen::quic
         /// `.blocked()` false).
         io_result send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t ecn, size_t& n_pkts);
 
+        // Drops a connection from the endpoint.  This is dangerous to call from *within* methods on
+        // a connection itself, and generally should be deferred via a call_soon.
+        void _drop_connection(Connection& conn, io_error err);
+        // Schedules the connection to be dropped from the endpoint via call_soon; safe to use from
+        // within Connection calls.
         void drop_connection(Connection& conn, io_error err);
 
         dgram_data_callback dgram_recv_cb;

@@ -361,13 +361,19 @@ namespace oxen::quic
         cptr->handle_conn_packet(std::move(pkt));
     }
 
-    void Endpoint::drop_connection(Connection& conn, io_error err)
+    void Endpoint::_drop_connection(Connection& conn, io_error err)
     {
         log::debug(log_cat, "Dropping connection ({}) with errcode {}", conn.reference_id(), err.code());
 
         _execute_close_hooks(conn, std::move(err));
 
         delete_connection(conn);
+    }
+
+    void Endpoint::drop_connection(Connection& conn, io_error err)
+    {
+        log::debug(log_cat, "Scheduling drop connection ({}) with errcode {}", conn.reference_id(), err.code());
+        call_soon([this, &conn, err] { _drop_connection(conn, err); });
     }
 
     void Endpoint::close_connection(Connection& conn, io_error ec, std::optional<std::string> msg)
@@ -419,7 +425,7 @@ namespace oxen::quic
                     log_cat,
                     "Connection ({}) passed idle expiry timer; closing now without close packet",
                     conn.reference_id());
-            drop_connection(conn, io_error{CONN_IDLE_CLOSED});
+            _drop_connection(conn, io_error{CONN_IDLE_CLOSED});
             return;
         }
 
@@ -486,6 +492,7 @@ namespace oxen::quic
         const auto& rid = conn.reference_id();
 
         conn.halt_events();
+        conn.set_closing();
 
         log::debug(log_cat, "Deleting associated CIDs for connection {}", rid);
 

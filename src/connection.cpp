@@ -595,7 +595,7 @@ namespace oxen::quic
                 break;
             case NGTCP2_ERR_DRAINING:
                 log::trace(log_cat, "Note: {} is draining; signaling endpoint to drain connection", reference_id());
-                _endpoint.call([this]() {
+                _endpoint.call_soon([this]() {
                     log::debug(log_cat, "Endpoint draining connection {}", reference_id());
                     _endpoint.drain_connection(*this);
                 });
@@ -616,10 +616,7 @@ namespace oxen::quic
                         "Note: {} encountered ngtcp2 error {}; signaling endpoint to delete connection",
                         reference_id(),
                         ngtcp2_strerror(rv));
-                _endpoint.call([this, rv]() {
-                    log::debug(log_cat, "Endpoint deleting {}", reference_id());
-                    _endpoint.drop_connection(*this, io_error{rv});
-                });
+                _endpoint.drop_connection(*this, io_error{rv});
                 break;
             case NGTCP2_ERR_CRYPTO:
                 // drop conn without calling ngtcp2_conn_write_connection_close()
@@ -631,10 +628,7 @@ namespace oxen::quic
                         reference_id(),
                         ngtcp2_conn_get_tls_alert(*this),
                         ngtcp2_strerror(rv));
-                _endpoint.call([this, rv]() {
-                    log::debug(log_cat, "Endpoint deleting {}", reference_id());
-                    _endpoint.drop_connection(*this, io_error{rv});
-                });
+                _endpoint.drop_connection(*this, io_error{rv});
                 break;
             default:
                 log::trace(
