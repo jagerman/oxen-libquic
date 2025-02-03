@@ -284,17 +284,5 @@ namespace oxen::quic
          */
         struct disable_key_verification
         {};
-
-        /** Stateless Reset Tokens:
-            This can be passed on endpoint creation to turn OFF stateless reset tokens. This will result in few main
-            functional differences:
-                - When processing incoming packets, if both the dcid cannot be matched to an active connection and calls to
-                    `ngtcp2_accept` are unsuccessful, then a stateless reset packet will NOT be sent
-                - When connection id's are generated, a corresponding stateless reset token will NOT be created
-
-            Note: DO NOT ENABLE STATELESS RESET AMONGST ENDPOINTS SHARING THE SAME STATIC KEY
-         */
-        struct disable_stateless_reset
-        {};
     }  //  namespace opt
 }  // namespace oxen::quic
