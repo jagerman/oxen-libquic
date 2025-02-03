@@ -184,8 +184,8 @@ namespace oxen::quic
         using Func_t = functional_helper_t<T>;
 
         Func_t func;
-        std::promise<void> p;
-        std::future<void> f{p.get_future()};
+        std::shared_ptr<std::promise<void>> p{std::make_shared<std::promise<void>>()};
+        std::future<void> f{p->get_future()};
 
         explicit callback_waiter(T f) : func{std::move(f)} {}
 
@@ -196,8 +196,8 @@ namespace oxen::quic
         // Deliberate implicit conversion to the std::function<...>
         operator Func_t()
         {
-            return [this](auto&&... args) {
-                set_on_exit prom_setter{p};
+            return [p=p, func=func](auto&&... args) {
+                set_on_exit prom_setter{*p};
                 return func(std::forward<decltype(args)>(args)...);
             };
         }
