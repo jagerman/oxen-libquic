@@ -56,6 +56,8 @@ namespace oxen::quic
         static void increment_ref_id(Endpoint& ep, uint64_t by = 1);
 
         static Connection* get_conn(std::shared_ptr<Endpoint>& ep, std::shared_ptr<connection_interface>& conn);
+
+        static UDPSocket::socket_t get_sock(Endpoint& ep);
     };
 
     namespace test::defaults

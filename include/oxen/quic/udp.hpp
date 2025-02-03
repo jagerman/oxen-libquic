@@ -152,6 +152,8 @@ namespace oxen::quic
         receive_callback_t receive_callback_;
         event_ptr wev_ = nullptr;
         std::vector<std::function<void()>> writeable_callbacks_;
+
+        friend class TestHelper;
     };
 
 }  // namespace oxen::quic

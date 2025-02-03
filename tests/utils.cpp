@@ -64,6 +64,11 @@ namespace oxen::quic
         return ep->get_conn(conn->_source_cid);
     }
 
+    UDPSocket::socket_t TestHelper::get_sock(Endpoint& ep)
+    {
+        return ep.get_socket()->sock_;
+    }
+
     void TestHelper::enable_dgram_drop(connection_interface& ci)
     {
         auto& conn = static_cast<Connection&>(ci);
