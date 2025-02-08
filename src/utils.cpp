@@ -22,7 +22,7 @@ namespace oxen::quic
 
         if (not run_once.exchange(true))
         {
-            oxen::log::add_sink(type, out);
+            oxen::log::add_sink(type, out, "[%T.%f] [%*] [\x1b[1m%n\x1b[0m:%^%l%$|\x1b[3m%g:%#\x1b[0m] %v");
             oxen::log::reset_level(reset);
         }
     }
