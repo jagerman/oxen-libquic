@@ -140,6 +140,20 @@ namespace oxen::quic
     {
         return sha3_256(out, {reinterpret_cast<const uint8_t*>(value.data()), value.size()}, domain);
     }
+    void sha3_512(uint8_t* out, std::span<const uint8_t> value, std::string_view domain)
+    {
+        sha3_512_ctx ctx;
+        sha3_512_init(&ctx);
+        if (!domain.empty())
+            sha3_512_update(&ctx, domain.size(), reinterpret_cast<const uint8_t*>(domain.data()));
+
+        sha3_512_update(&ctx, value.size(), value.data());
+        sha3_512_digest(&ctx, 32, out);
+    }
+    void sha3_512(uint8_t* out, std::span<const char> value, std::string_view domain)
+    {
+        return sha3_512(out, {reinterpret_cast<const uint8_t*>(value.data()), value.size()}, domain);
+    }
 
     std::pair<std::string, std::string> generate_ed25519(std::string_view seed_string)
     {
@@ -193,7 +207,11 @@ namespace oxen::quic
         else
             type = log::Type::File;
 
-        logger_config(out, type, lvl);
+        oxen::log::add_sink(type, out, "[%T.%f] [%*] [\x1b[1m%n\x1b[0m:%^%l%$|\x1b[3m%g:%#\x1b[0m] %v");
+        oxen::log::reset_level(lvl);
+
+        if (lvl <= oxen::log::Level::trace)
+            enable_gnutls_logging();
     }
 
     std::string friendly_duration(std::chrono::nanoseconds dur)

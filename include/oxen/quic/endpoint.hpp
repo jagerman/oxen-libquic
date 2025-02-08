@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oxen/quic/opt.hpp"
 extern "C"
 {
 #ifdef _WIN32
@@ -12,10 +13,7 @@ extern "C"
 #include <cstddef>
 #include <list>
 #include <memory>
-#include <numeric>
 #include <optional>
-#include <queue>
-#include <random>
 #include <string>
 #include <unordered_map>
 
@@ -53,7 +51,6 @@ namespace oxen::quic
         void listen(Opt&&... opts)
         {
             check_for_tls_creds<Opt...>();
-            check_verification_scheme<Opt...>(this);
 
             net.call_get([&opts..., this]() mutable {
                 if (inbound_ctx)
@@ -66,14 +63,10 @@ namespace oxen::quic
             });
         }
 
-        template <concepts::quic_address_type T, typename... Opt>
-        std::shared_ptr<connection_interface> connect(T remote, Opt&&... opts)
+        template <typename... Opt>
+        std::shared_ptr<connection_interface> connect(RemoteAddress remote, Opt&&... opts)
         {
             check_for_tls_creds<Opt...>();
-            check_address_scheme<T, Opt...>();
-
-            std::promise<std::shared_ptr<Connection>> p;
-            auto f = p.get_future();
 
             if (not _manual_routing and !remote.is_addressable())
                 throw std::invalid_argument("Address must be addressible to connect");
@@ -81,26 +74,22 @@ namespace oxen::quic
             if (_local.is_ipv6() && !remote.is_ipv6())
                 remote.map_ipv4_as_ipv6();
 
-            net.call([this, &opts..., &p, remote = std::move(remote)]() mutable {
-                quic_cid qcid{};
-                auto next_rid = next_reference_id();
-
+            std::promise<std::shared_ptr<Connection>> conn_prom;
+            net.call([this, &opts..., &conn_prom, remote = std::move(remote)]() mutable {
                 try
                 {
                     // initialize client context and client tls context simultaneously
                     outbound_ctx = std::make_shared<IOContext>(Direction::OUTBOUND, std::forward<Opt>(opts)...);
                     _set_context_globals(outbound_ctx);
-                    p.set_value(_connect(std::move(remote), qcid, next_rid));
+                    conn_prom.set_value(_connect(std::move(remote)));
                 }
                 catch (...)
                 {
-                    conn_lookup.erase(qcid);
-                    conns.erase(next_rid);
-                    p.set_exception(std::current_exception());
+                    conn_prom.set_exception(std::current_exception());
                 }
             });
 
-            return f.get();
+            return conn_prom.get_future().get();
         }
 
         // query a list of all active inbound and outbound connections paired with a conn_interface
@@ -160,13 +149,6 @@ namespace oxen::quic
 
         void manually_receive_packet(Packet&& pkt);
 
-        bool zero_rtt_enabled() const { return _0rtt_enabled; }
-        unsigned int zero_rtt_window() const { return _0rtt_window; }
-
-        int validate_anti_replay(gtls_ticket_ptr ticket, time_t exp);
-        void store_session_ticket(gtls_ticket_ptr ticket);
-        gtls_ticket_ptr get_session_ticket(const ustring_view& remote_pk);
-
         // Wrapper around oxenc::quic::generate_reset_token that prepends the arguments with the
         // endpoint's static secret, as needed by the free function version.
         template <typename... Args>
@@ -205,12 +187,6 @@ namespace oxen::quic
         int _rbufsize{4096};
 
         opt::manual_routing _manual_routing;
-        bool _0rtt_enabled{false};
-        unsigned int _0rtt_window{};
-
-        gtls_db_validate_cb _validate_0rtt_ticket;
-        gtls_db_get_cb _get_session_ticket;
-        gtls_db_put_cb _put_session_ticket;
 
         uint64_t _next_rid{0};
 
@@ -225,8 +201,6 @@ namespace oxen::quic
 
         std::unordered_map<ustring_view, gtls_ticket_ptr, detail::ustring_hasher> session_tickets;
 
-        std::unordered_map<Address, ustring> encoded_transport_params;
-
         std::unordered_map<Address, ustring> path_validation_tokens;
 
         const std::shared_ptr<event_base>& get_loop() { return net._loop->loop(); }
@@ -236,10 +210,7 @@ namespace oxen::quic
         // Does the non-templated bit of `listen()`
         void _listen();
 
-        std::shared_ptr<Connection> _connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid);
-
-        std::shared_ptr<Connection> _connect(
-                Address remote, quic_cid qcid, ConnectionID rid, std::optional<ustring> pk = std::nullopt);
+        std::shared_ptr<Connection> _connect(RemoteAddress remote);
 
         void handle_ep_opt(opt::enable_datagrams dc);
         void handle_ep_opt(opt::outbound_alpns alpns);
@@ -251,7 +222,6 @@ namespace oxen::quic
         void handle_ep_opt(connection_closed_callback conn_closed_cb);
         void handle_ep_opt(opt::static_secret ssecret);
         void handle_ep_opt(opt::manual_routing mrouting);
-        void handle_ep_opt(opt::enable_0rtt_ticketing rtt);
 
         // Takes a std::optional-wrapped option that does nothing if the optional is empty,
         // otherwise passes it through to the above.  This is here to allow runtime-dependent
@@ -297,10 +267,6 @@ namespace oxen::quic
 
         void connection_established(connection_interface& conn);
 
-        void store_0rtt_transport_params(Address remote, ustring encoded_params);
-
-        std::optional<ustring> get_0rtt_transport_params(const Address& remote);
-
         void store_path_validation_token(Address remote, ustring token);
 
         std::optional<ustring> get_path_validation_token(const Address& remote);
@@ -311,7 +277,7 @@ namespace oxen::quic
 
         void dissociate_reset(const uint8_t* token, Connection& conn);
 
-        void associate_cid(quic_cid qcid, Connection& conn);
+        void associate_cid(quic_cid qcid, Connection& conn, bool weakly = false);
 
         void associate_cid(const ngtcp2_cid* cid, Connection& conn);
 
@@ -353,12 +319,15 @@ namespace oxen::quic
         ///     When establishing a new connection, the quic client provides its own source CID (scid)
         /// and destination CID (dcid), which it sends to the server. The QUIC standard allows for an
         /// endpoint to be reached at any of `n` (where n >= 2) connection ID's -- this value is currently
-        /// hard-coded to 8 active CID's at once. Specifically, the dcid is entirely random string of <=160 bits
-        /// while the scid can be random or store information.
+        /// hard-coded to 8 active CID's at once.
         ///
         /// When responding, the server will include in its response:
         ///     - dcid equal to client's source CID
-        ///     - New random scid; the client's dcid is not used. This can also store data like the client's scid
+        ///     - New scid generated by the server; the client's dcid is not used beyond the handshake.
+        ///
+        /// Before that response is ACKed by the client (which completes the handshake on the
+        /// server) a client using 0-RTT might still send 0-RTT frames, still using the initial dcid
+        /// that the client generated.
         ///
         /// As a result, we end up with:
         ///     client.scid == server.dcid
@@ -410,25 +379,6 @@ namespace oxen::quic
             static_assert(
                     (0 + ... + std::is_convertible_v<std::remove_cvref_t<Opt>, std::shared_ptr<TLSCreds>>) == 1,
                     "Endpoint listen/connect require exactly one std::shared_ptr<TLSCreds> argument");
-        }
-
-        template <typename... Opt>
-        static void check_verification_scheme(Endpoint* e)
-        {
-            if constexpr ((std::is_same_v<opt::disable_key_verification, std::remove_cvref_t<Opt>> || ...))
-            {
-                if (e->zero_rtt_enabled())
-                    throw std::invalid_argument{"Disabling key verification is incompatible with 0rtt ticketing!"};
-            }
-        }
-
-        template <concepts::quic_address_type T, typename... Opt>
-        static constexpr void check_address_scheme()
-        {
-            if constexpr ((std::is_same_v<opt::disable_key_verification, std::remove_cvref_t<Opt>> || ...))
-                static_assert(std::is_same_v<T, Address>, "Disabling key verification requires keyless address!");
-            else
-                static_assert(std::is_same_v<T, RemoteAddress>, "Key verification requires keyed address!");
         }
     };
 

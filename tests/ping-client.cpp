@@ -3,12 +3,16 @@
 */
 
 #include <gnutls/gnutls.h>
+#include <oxenc/bt_serialize.h>
 #include <oxenc/endian.h>
 #include <oxenc/hex.h>
 
 #include <CLI/Validators.hpp>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <future>
+#include <iterator>
 #include <limits>
 #include <oxen/quic.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
@@ -23,7 +27,6 @@ struct ping_stats
     uint32_t sent, received;
     double rtt_sum, rtt_sumsq, rtt_min = std::numeric_limits<double>::infinity(),
                                rtt_max = -std::numeric_limits<double>::infinity();
-    std::chrono::nanoseconds connect_time, established_time;
 };
 
 ping_stats run_client(
@@ -31,11 +34,12 @@ ping_stats run_client(
         std::string_view remote_pubkey,
         std::string_view local_addr,
         std::string_view seed_string,
-        bool no_verify,
         bool enable_0rtt,
+        std::filesystem::path store_0rtt,
         uint32_t ping_count,
         double ping_interval,
-        double ping_timeout);
+        double ping_timeout,
+        bool reconnect);
 
 int main(int argc, char* argv[])
 {
@@ -48,14 +52,15 @@ int main(int argc, char* argv[])
     cli.add_option("--remote", remote_addr, "Remove address to connect to")->type_name("IP:PORT")->capture_default_str();
 
     std::string remote_pubkey;
-    cli.add_option("-p,--remote-pubkey", remote_pubkey, "Remote server pubkey (not needed with verification disabled)")
+    cli.add_option("-p,--remote-pubkey", remote_pubkey, "Remote server pubkey")
             ->type_name("PUBKEY_HEX_OR_B64")
             ->transform([](const std::string& val) -> std::string {
                 if (auto pk = decode_bytes(val))
                     return std::move(*pk);
                 throw CLI::ValidationError{
                         "Invalid value passed to --remote-pubkey: expected value encoded as hex or base64"};
-            });
+            })
+            ->required();
 
     std::string local_addr = "";
     cli.add_option("--local", local_addr, "Local bind address (optional)")->type_name("IP:PORT")->capture_default_str();
@@ -74,15 +79,14 @@ int main(int argc, char* argv[])
                "How long to wait for the final ping reply (when using -c) before giving up and disconnecting without it.")
             ->capture_default_str();
 
-    bool no_verify = false;
-    cli.add_flag(
-            "-V,--no-verify", no_verify, "Disable key verification on incoming connections (cannot be disabled with 0-RTT)");
-
     bool enable_0rtt = false;
     cli.add_flag(
             "-Z,--enable-0rtt",
             enable_0rtt,
             "Enable 0-RTT and early data for this endpoint (cannot be used without key verification)");
+
+    std::filesystem::path store_zerortt{"./ping-client-0rtt-cache.bin"};
+    cli.add_option("-z,--zerortt-storage", store_zerortt, "Path to load and store 0rtt information from.");
 
     uint32_t ping_count = 0;
     double ping_interval = 1.0;
@@ -90,18 +94,15 @@ int main(int argc, char* argv[])
             ->capture_default_str();
     cli.add_option("-i,--interval", ping_interval, "Interval (in seconds) between subsequent pings.")->capture_default_str();
 
+    bool reconnect = false;
+    cli.add_flag(
+            "-r,--reconnect",
+            reconnect,
+            "Automatically reconnect upon connection closing (such as from interruption).  Without this option a connection "
+            "close for any reason terminates the ping.");
     try
     {
         cli.parse(argc, argv);
-
-        if (no_verify and enable_0rtt)
-            throw CLI::ValidationError{"0-RTT must be used with key verification!"};
-
-        if (enable_0rtt and remote_pubkey.empty())
-            throw CLI::ValidationError{"0-RTT must be used with remote key!"};
-
-        if (not no_verify and remote_pubkey.empty())
-            throw CLI::ValidationError{"A remote pubkey is required when not disabling key verification"};
     }
     catch (const CLI::ParseError& e)
     {
@@ -110,23 +111,26 @@ int main(int argc, char* argv[])
 
     setup_logging(log_file, log_level);
 
+    auto startup = std::chrono::steady_clock::now();
+
     auto stats = run_client(
             remote_addr,
             remote_pubkey,
             local_addr,
             seed_string,
-            no_verify,
             enable_0rtt,
+            store_zerortt,
             ping_count,
             ping_interval,
-            ping_timeout);
+            ping_timeout,
+            reconnect);
 
     fmt::print(
             "\n\n\n\nPing results: {} sent, {} received ({:.3f}%) in {}\n",
             stats.sent,
             stats.received,
             100.0 * stats.received / stats.sent,
-            friendly_duration(stats.established_time));
+            friendly_duration(std::chrono::steady_clock::now() - startup));
 
     if (stats.received > 0)
     {
@@ -153,13 +157,13 @@ ping_stats run_client(
         std::string_view remote_pubkey,
         std::string_view local_addr,
         std::string_view seed_string,
-        bool no_verify,
         bool enable_0rtt,
+        std::filesystem::path store_0rtt,
         uint32_t ping_count,
         double ping_interval_d,
-        double ping_timeout)
+        double ping_timeout,
+        bool reconn)
 {
-
     // Block signals in this thread (and new threads we create); we set up a dedicated thread for
     // signal handling below.
     sigset_t sigset;
@@ -173,6 +177,8 @@ ping_stats run_client(
 
     Network client_net{};
 
+    std::atomic<bool> reconnect{reconn};
+
     auto [seed, pubkey] = generate_ed25519(seed_string);
     auto client_tls = GNUTLSCreds::make_from_ed_keys(seed, pubkey);
 
@@ -183,23 +189,19 @@ ping_stats run_client(
         client_local = Address{a, p};
     }
 
-    std::promise<void> all_done;
-
+    std::optional<std::promise<void>> all_done;
+    std::shared_ptr<Ticker> ticker;
     std::chrono::steady_clock::time_point started, established;
 
-    std::function<void()> start_pings;
     auto conn_established = [&](connection_interface& ci) {
         established = get_time();
         log::info(test_cat, "Connection established to {} in {}", ci.remote(), friendly_duration(established - started));
-
-        start_pings();
     };
 
     auto conn_closed = [&](connection_interface& ci, uint64_t) {
-        stats.established_time = get_time() - established;
         log::info(test_cat, "Disconnected from {}", ci.remote());
 
-        all_done.set_value();
+        all_done->set_value();
     };
 
     auto [server_a, server_p] = parse_addr(remote_addr);
@@ -211,25 +213,104 @@ ping_stats run_client(
     ep_secret.resize(32);
     sha3_256(ep_secret.data(), seed_string, "libquic-test-static-secret");
 
-    std::optional<opt::enable_0rtt_ticketing> zerortt;
-    if (enable_0rtt)
-        zerortt.emplace();
-    auto client = client_net.endpoint(
-            client_local,
-            conn_established,
-            conn_closed,
-            zerortt,
-            opt::enable_datagrams{},
-            opt::static_secret{std::move(ep_secret)});
+    std::unordered_map<std::string, std::list<std::pair<std::string, int64_t>>> zrtt_store;
+    auto dump_zrtt = [&zrtt_store, &store_0rtt] {
+        std::ofstream out;
+        out.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+        out.open(store_0rtt, std::ios::binary | std::ios::out | std::ios::trunc);
+        auto contents = oxenc::bt_serialize(zrtt_store);
+        out.write(contents.data(), contents.size());
+    };
 
-    auto sig_handler = std::async(std::launch::async, [wclient = std::weak_ptr{client}, &sigset]() {
+    if (enable_0rtt)
+    {
+        if (std::filesystem::exists(store_0rtt))
+        {
+            std::ifstream in;
+            in.exceptions(std::ios::failbit);
+            in.open(store_0rtt, std::ios::binary);
+            in.seekg(0, std::ios::end);
+            std::string data;
+            data.resize(in.tellg());
+            in.seekg(0, std::ios::beg);
+            in.read(data.data(), data.size());
+
+            oxenc::bt_deserialize(data, zrtt_store);
+        }
+
+        auto store = [&zrtt_store, &dump_zrtt](
+                             const RemoteAddress& remote,
+                             std::vector<unsigned char> vdata,
+                             std::chrono::system_clock::time_point expiry) {
+            // FIXME, change to debug
+            log::critical(log_cat, "Storing 0-RTT session data for remote {}", remote);
+
+            auto ukey = remote.view_remote_key();
+            std::string key{reinterpret_cast<const char*>(ukey.data()), ukey.size()};
+            std::string data{reinterpret_cast<const char*>(vdata.data()), vdata.size()};
+            zrtt_store[key].emplace_back(std::move(data), std::chrono::system_clock::to_time_t(expiry));
+            dump_zrtt();
+        };
+
+        auto extract = [&zrtt_store, &dump_zrtt](const RemoteAddress& remote) -> std::optional<std::vector<unsigned char>> {
+            log::critical(log_cat, "Looking up 0-RTT session data for remote {}", remote);
+            auto ukey = remote.view_remote_key();
+            std::string key{reinterpret_cast<const char*>(ukey.data()), ukey.size()};
+            std::optional<std::vector<unsigned char>> result;
+            auto it = zrtt_store.find(key);
+            if (it == zrtt_store.end())
+            {
+                log::debug(log_cat, "No 0-RTT session data found");
+                return result;
+            }
+
+            auto& mine = it->second;
+            auto now = std::chrono::system_clock::now();
+            // We track these in order, but it's possible that earlier tickets have a longer
+            // expiry, so try the tail first but then work back towards the head until we find
+            // something (or run out of tickets).
+            while (!mine.empty() && std::chrono::system_clock::from_time_t(mine.back().second) <= now)
+            {
+                log::trace(log_cat, "Dropping expired 0-RTT session data");
+                mine.pop_back();
+            }
+            if (!mine.empty())
+            {
+                result.emplace(mine.back().first.size());
+                std::memcpy(result->data(), mine.back().first.data(), result->size());
+                log::debug(
+                        log_cat,
+                        "Found 0-RTT session data with expiry +{}s; {} session data remaining",
+                        std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::from_time_t(mine.back().second) - now)
+                                .count(),
+                        mine.size() - 1);
+                mine.pop_back();
+            }
+            if (mine.empty())
+                zrtt_store.erase(it);
+
+            dump_zrtt();
+
+            return result;
+        };
+
+        client_tls->enable_outbound_0rtt(std::move(store), std::move(extract));
+    }
+
+    auto client = client_net.endpoint(
+            client_local, conn_established, conn_closed, opt::enable_datagrams{}, opt::static_secret{std::move(ep_secret)});
+
+    auto sig_handler = std::async(std::launch::async, [wclient = std::weak_ptr{client}, &sigset, &reconnect]() {
         int signum = 0;
         sigwait(&sigset, &signum);
-        if (signum != SIGUSR2)  // USR2 is how we gracefully signal this thread on normal exit
+        while (signum != SIGUSR2)  // USR2 is how we gracefully signal this thread on normal exit
         {
             log::warning(test_cat, "Caught signal, disconnecting");
+            reconnect = false;
             if (auto client = wclient.lock())
                 client->close_conns();
+            sigwait(&sigset, &signum);
         }
         return signum;
     });
@@ -263,8 +344,6 @@ ping_stats run_client(
 
     log::info(test_cat, "Connecting to {}...", server_addr);
 
-    started = std::chrono::steady_clock::now();
-
     std::shared_ptr<connection_interface> client_conn;
 
     bool multiping = false;
@@ -280,7 +359,6 @@ ping_stats run_client(
         multiping = true;
     }
 
-    std::shared_ptr<Ticker> ticker;
     std::optional<std::chrono::steady_clock::time_point> timeout;
     auto send_ping = [&] {
         auto now = get_time();
@@ -291,7 +369,8 @@ ping_stats run_client(
             if (now >= *timeout)
             {
                 log::warning(test_cat, "Timeout waiting for final ping response; disconnecting");
-                ticker->stop();
+                if (ticker)
+                    ticker->stop();
                 client_conn->close_connection();
             }
             return;
@@ -301,8 +380,11 @@ ping_stats run_client(
         {
             uint32_t ping_num = stats.sent++;
             if (ping_count && stats.sent == ping_count)
+            {
                 // This is our last ping, so switch into wait-for-timeout mode after this one
                 timeout = get_time() + std::chrono::nanoseconds{static_cast<int64_t>(ping_timeout * 1e9)};
+                reconnect = false;
+            }
 
             std::string counter;
             counter.resize(sizeof(ping_num));
@@ -312,15 +394,27 @@ ping_stats run_client(
         }
     };
 
-    start_pings = [&] {  // Called upon connection established
+    auto last_start = std::chrono::steady_clock::now() - 2s;
+    do
+    {
+        started = std::chrono::steady_clock::now();
+        if (started < last_start + 1s)
+        {
+            // Cool down connection attempts to 1/s after a disconnect
+            std::this_thread::sleep_for(25ms);
+            continue;
+        }
+        last_start = started;
+        all_done.emplace();
+        client_conn = client->connect(RemoteAddress{remote_pubkey, server_addr}, dgram_recv, client_tls);
+
         send_ping();
+        if (ticker)
+            ticker->stop();
         ticker = client_net.call_every(ping_wait, send_ping);
-    };
 
-    client_conn = no_verify ? client->connect(server_addr, client_tls, dgram_recv, opt::disable_key_verification{})
-                            : client->connect(RemoteAddress{remote_pubkey, server_addr}, dgram_recv, client_tls);
-
-    all_done.get_future().wait();
+        all_done->get_future().wait();
+    } while (reconnect);
 
     kill(0, SIGUSR2);  // Wake up the signal handling thread to exit cleanly
 

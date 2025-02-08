@@ -1,7 +1,5 @@
 #include "endpoint.hpp"
 
-#include "opt.hpp"
-
 extern "C"
 {
 #include <ngtcp2/ngtcp2.h>
@@ -11,6 +9,10 @@ extern "C"
 #endif
 }
 
+#include <oxenc/bt_producer.h>
+#include <oxenc/bt_serialize.h>
+
+#include <chrono>
 #include <cstddef>
 #include <list>
 #include <optional>
@@ -18,6 +20,7 @@ extern "C"
 #include "connection.hpp"
 #include "gnutls_crypto.hpp"
 #include "internal.hpp"
+#include "opt.hpp"
 #include "types.hpp"
 #include "utils.hpp"
 
@@ -86,52 +89,6 @@ namespace oxen::quic
         _manual_routing = std::move(mrouting);
     }
 
-    void Endpoint::handle_ep_opt(opt::enable_0rtt_ticketing rtt)
-    {
-        _0rtt_enabled = true;
-        _0rtt_window = rtt.window.count();
-
-        _validate_0rtt_ticket = rtt.check ? std::move(rtt.check) : [this](gtls_ticket_ptr ticket, time_t current) -> bool {
-            auto key = ticket->key();
-
-            if (auto it = session_tickets.find(key); it != session_tickets.end())
-            {
-                if (auto exp = gnutls_db_check_entry_expire_time(it->second->datum()); current < exp)
-                {
-                    log::debug(log_cat, "Found existing anti-replay ticket for incoming connection; rejecting...");
-                    return GNUTLS_E_DB_ENTRY_EXISTS;
-                }
-
-                log::debug(log_cat, "Found expired anti-replay ticket for incoming connection");
-            }
-
-            session_tickets[key] = std::move(ticket);
-            return 0;
-        };
-
-        _get_session_ticket = rtt.fetch ? std::move(rtt.fetch) : [this](ustring_view key) -> gtls_ticket_ptr {
-            gtls_ticket_ptr ret = nullptr;
-            if (auto it = session_tickets.find(key); it != session_tickets.end())
-            {
-                ret = std::move(it->second);
-                session_tickets.erase(it);
-                log::debug(log_cat, "Found session ticket for remote; entry extracted and returned...");
-            }
-            else
-                log::debug(log_cat, "Could not find session ticket for remote!");
-
-            return ret;
-        };
-
-        _put_session_ticket = rtt.put ? std::move(rtt.put) : [this](gtls_ticket_ptr ticket, time_t /* exp */) {
-            auto key = ticket->key();
-            auto [_, b] = session_tickets.insert_or_assign(std::move(key), std::move(ticket));
-
-            log::debug(
-                    log_cat, "Stored anti-replay ticket for connection to remote{}!", b ? "" : "; old ticket overwritten");
-        };
-    }
-
     ConnectionID Endpoint::next_reference_id()
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
@@ -185,25 +142,20 @@ namespace oxen::quic
         log::debug(log_cat, "Inbound context ready for incoming connections");
     }
 
-    std::shared_ptr<Connection> Endpoint::_connect(RemoteAddress remote, quic_cid qcid, ConnectionID rid)
-    {
-        Address addr{remote};
-        return _connect(std::move(addr), std::move(qcid), std::move(rid), std::move(remote).get_remote_key());
-    }
-
-    std::shared_ptr<Connection> Endpoint::_connect(
-            Address remote, quic_cid qcid, ConnectionID rid, std::optional<ustring> pk)
+    std::shared_ptr<Connection> Endpoint::_connect(RemoteAddress remote)
     {
         Path path = Path{_local, std::move(remote)};
+
+        auto rid = next_reference_id();
 
         for (;;)
         {
             // emplace random CID into lookup keyed to unique reference ID
-            if (auto [it_a, res_a] = conn_lookup.emplace(quic_cid::random(), rid); res_a)
+            if (auto [it_a, ins_a] = conn_lookup.emplace(quic_cid::random(), rid); ins_a) [[likely]]
             {
-                qcid = it_a->first;
-
-                if (auto [it_b, res_b] = conns.emplace(rid, nullptr); res_b)
+                auto [it_b, ins_b] = conns.emplace(rid, nullptr);
+                assert(ins_b);
+                try
                 {
                     it_b->second = Connection::make_conn(
                             *this,
@@ -214,9 +166,14 @@ namespace oxen::quic
                             outbound_ctx,
                             outbound_alpns,
                             handshake_timeout,
-                            pk);
-
+                            remote.get_remote_key());
                     return it_b->second;
+                }
+                catch (...)
+                {
+                    conns.erase(it_b);
+                    conn_lookup.erase(it_a);
+                    throw;
                 }
             }
         }
@@ -507,38 +464,6 @@ namespace oxen::quic
         }
     }
 
-    int Endpoint::validate_anti_replay(gtls_ticket_ptr ticket, time_t current)
-    {
-        return _validate_0rtt_ticket(std::move(ticket), current) == 0 ? 0 : GNUTLS_E_DB_ENTRY_EXISTS;
-    }
-
-    void Endpoint::store_session_ticket(gtls_ticket_ptr ticket)
-    {
-        log::trace(log_cat, "Storing session ticket...");
-        return _put_session_ticket(std::move(ticket), 0);
-    }
-
-    gtls_ticket_ptr Endpoint::get_session_ticket(const ustring_view& remote_pk)
-    {
-        log::trace(log_cat, "Fetching session ticket (remote key: {})...", buffer_printer{remote_pk});
-        return _get_session_ticket(remote_pk);
-    }
-
-    void Endpoint::store_0rtt_transport_params(Address remote, ustring encoded_params)
-    {
-        log::trace(log_cat, "Storing 0rtt tranpsport params...");
-        encoded_transport_params.insert_or_assign(std::move(remote), std::move(encoded_params));
-    }
-
-    std::optional<ustring> Endpoint::get_0rtt_transport_params(const Address& remote)
-    {
-        log::trace(log_cat, "Fetching 0rtt transport params...");
-        if (auto itr = encoded_transport_params.find(remote); itr != encoded_transport_params.end())
-            return itr->second;
-
-        return std::nullopt;
-    }
-
     void Endpoint::initial_association(Connection& conn)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
@@ -610,14 +535,15 @@ namespace oxen::quic
         }
     }
 
-    void Endpoint::associate_cid(quic_cid qcid, Connection& conn)
+    void Endpoint::associate_cid(quic_cid qcid, Connection& conn, bool weakly)
     {
         assert(in_event_loop());
         log::trace(
                 log_cat, "{} associating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
 
-        conn_lookup.emplace(qcid, conn.reference_id());
-        conn.store_associated_cid(qcid);
+        auto inserted = conn_lookup.emplace(qcid, conn.reference_id()).second;
+        if (inserted || !weakly)
+            conn.store_associated_cid(qcid);
     }
 
     void Endpoint::associate_cid(const ngtcp2_cid* cid, Connection& conn)
@@ -922,16 +848,8 @@ namespace oxen::quic
         auto data = pkt.data<uint8_t>();
         auto rv = ngtcp2_accept(&hdr, data.data(), data.size());
 
-        if (rv < 0)
+        if (rv < 0 || hdr.type != NGTCP2_PKT_INITIAL)
             return nullptr;
-
-        if (not _0rtt_enabled and hdr.type == NGTCP2_PKT_0RTT)
-        {
-            log::warning(log_cat, "0-RTT is disabled for this endpoint; dropping 0-RTT packet");
-            return nullptr;
-        }
-
-        assert(hdr.type == NGTCP2_PKT_INITIAL);
 
         ngtcp2_cid original_cid;
         ngtcp2_cid* pkt_original_cid = nullptr;

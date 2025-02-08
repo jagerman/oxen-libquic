@@ -2,8 +2,28 @@
 
 #include <nettle/sha3.h>
 
+#include "internal.hpp"
+
 namespace oxen::quic
 {
+#ifdef NDEBUG
+    void enable_gnutls_logging(int) {}
+#else
+    extern "C" void gnutls_log(int level, const char* str)
+    {
+        static auto cat = log::Cat("gnutls");
+        std::string_view msg{str};
+        if (msg.ends_with('\n'))
+            msg.remove_suffix(1);
+        cat->log(spdlog::source_loc{"LEVEL", level, "gnutls"}, log::Level::debug, "{}", msg);
+    }
+
+    void enable_gnutls_logging(int level)
+    {
+        gnutls_global_set_log_level(level);
+        gnutls_global_set_log_function(gnutls_log);
+    }
+#endif
 
     void generate_reset_token(
             std::span<const uint8_t> static_secret,

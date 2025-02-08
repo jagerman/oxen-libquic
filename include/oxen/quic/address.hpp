@@ -310,14 +310,19 @@ namespace oxen::quic
         const ustring& get_remote_key() const& { return remote_pubkey; }
         ustring&& get_remote_key() && { return std::move(remote_pubkey); }
 
-        RemoteAddress(const RemoteAddress& obj) : Address{obj}, remote_pubkey{obj.remote_pubkey} {}
-        RemoteAddress& operator=(const RemoteAddress& obj)
+        RemoteAddress(const RemoteAddress& obj) = default;
+        RemoteAddress& operator=(const RemoteAddress& obj) = default;
+        RemoteAddress(RemoteAddress&& other) = default;
+        RemoteAddress& operator=(RemoteAddress&& other) = default;
+
+        auto operator<=>(const RemoteAddress& other) const
         {
-            remote_pubkey = obj.remote_pubkey;
-            Address::operator=(obj);
-            _copy_internals(obj);
-            return *this;
+            auto ret = remote_pubkey <=> other.remote_pubkey;
+            if (ret == 0)
+                ret = Address::operator<=>(other);
+            return ret;
         }
+        auto operator==(const RemoteAddress& other) const { return (*this <=> other) == 0; }
     };
 
     // Wrapper for ngtcp2_path with remote/local components. Implicitly convertible
@@ -398,6 +403,18 @@ namespace std
 
             auto h = hash<string_view>{}(addr_data);
             h ^= hash<decltype(port)>{}(port) + oxen::quic::inverse_golden_ratio + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    template <>
+    struct hash<oxen::quic::RemoteAddress>
+    {
+        size_t operator()(const oxen::quic::RemoteAddress& addr) const noexcept
+        {
+            auto vrk = addr.view_remote_key();
+            size_t h = hash<std::string_view>{}(std::string_view{reinterpret_cast<const char*>(vrk.data()), vrk.size()});
+            h ^= hash<oxen::quic::Address>{}(addr) + oxen::quic::inverse_golden_ratio + (h << 6) + (h >> 2);
             return h;
         }
     };

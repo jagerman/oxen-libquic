@@ -16,17 +16,6 @@
 
 namespace oxen::quic
 {
-    void logger_config(std::string out, log::Type type, log::Level reset)
-    {
-        static std::atomic<bool> run_once{false};
-
-        if (not run_once.exchange(true))
-        {
-            oxen::log::add_sink(type, out, "[%T.%f] [%*] [\x1b[1m%n\x1b[0m:%^%l%$|\x1b[3m%g:%#\x1b[0m] %v");
-            oxen::log::reset_level(reset);
-        }
-    }
-
     time_point get_time()
     {
         return std::chrono::steady_clock::now();

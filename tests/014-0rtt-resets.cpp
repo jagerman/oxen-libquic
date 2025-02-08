@@ -1,13 +1,42 @@
 #include <catch2/catch_test_macros.hpp>
 #include <oxen/quic.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
 
 #include "utils.hpp"
 
 namespace oxen::quic::test
 {
     using namespace std::literals;
+
+    // Kills the Network held in `net` with endpoint `ep` without allowing it to send closes and
+    // whatnot, by removing its socket it from under it.  After the call, `net`, `ep`, and any
+    // ancillary `other...` shared points will all be empty.  Does nothing if `net` is already
+    // empty.
+    template <typename... SP_T>
+    static void kill_network(std::unique_ptr<Network>& net, std::shared_ptr<Endpoint>& ep, std::shared_ptr<SP_T>&... other)
+    {
+        if (!net)
+            return;
+
+        assert(ep);
+        auto sock = TestHelper::get_sock(*ep);
+        log::debug(test_cat, "dirty-closing endpoint socket");
+#ifdef _WIN32
+        ::closesocket(sock);
+#else
+        ::close(sock);
+#endif
+
+        log::debug(test_cat, "releasing endpoint and {} other objects", sizeof...(other));
+        ep.reset();
+        (other.reset(), ...);
+
+        log::debug(test_cat, "dirty-closing Network");
+        net->set_shutdown_immediate();
+        net.reset();
+
+        log::debug(test_cat, "Network killed!");
+    }
 
     TEST_CASE("014 - 0rtt", "[014][0rtt]")
     {
@@ -17,21 +46,22 @@ namespace oxen::quic::test
         Network test_net{};
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+        server_tls->enable_inbound_0rtt();
+        client_tls->enable_outbound_0rtt();
 
         Address server_local{};
         Address client_local{};
 
-        auto server_endpoint = test_net.endpoint(server_local, server_established, opt::enable_0rtt_ticketing{});
+        auto server_endpoint = test_net.endpoint(server_local, server_established);
         CHECK_NOTHROW(server_endpoint->listen(server_tls));
 
         RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-        auto client_endpoint = test_net.endpoint(client_local, client_established, opt::enable_0rtt_ticketing{});
+        auto client_endpoint = test_net.endpoint(client_local, client_established);
         auto client_ci = client_endpoint->connect(client_remote, client_tls);
 
         CHECK(client_established.wait());
         CHECK(server_established.wait());
-        CHECK(client_ci->is_validated());
     }
 
     TEST_CASE("014 - stateless reset", "[014][stateless_reset]")
@@ -86,18 +116,8 @@ namespace oxen::quic::test
         // graceful close packets to the client, then restart a fresh one using the same key and
         // secret that won't have any existing connection state and so should send a stateless
         // reset.
-        auto sock = TestHelper::get_sock(*server_endpoint);
-        log::info(test_cat, "Dirty-closing server socket");
-#ifdef _WIN32
-        ::closesocket(sock);
-#else
-        ::close(sock);
-#endif
-
         log::info(test_cat, "Shutting down server endpoint & server");
-        server_endpoint.reset();
-        net_server->set_shutdown_immediate();
-        net_server.reset();
+        kill_network(net_server, server_endpoint);
         log::info(test_cat, "Initial server shutdown complete");
 
         REQUIRE_FALSE(client_closed.is_ready());

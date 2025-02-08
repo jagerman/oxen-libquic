@@ -7,7 +7,6 @@
 #include <oxenc/hex.h>
 
 #include <CLI/Validators.hpp>
-#include <future>
 #include <oxen/quic.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
 #include <random>
@@ -16,6 +15,11 @@
 #include "utils.hpp"
 
 using namespace oxen::quic;
+
+namespace oxen::quic
+{
+    GNUTLSCreds::anti_replay_add_cb default_anti_replay_add();
+}
 
 int main(int argc, char* argv[])
 {
@@ -28,15 +32,8 @@ int main(int argc, char* argv[])
 
     cli.add_option("--listen", server_addr, "Server address to listen on")->type_name("IP:PORT")->capture_default_str();
 
-    bool no_verify = false;
-    cli.add_flag(
-            "-V,--no-verify", no_verify, "Disable key verification on incoming connections (cannot be disabled with 0-RTT)");
-
     bool enable_0rtt = false;
-    cli.add_flag(
-            "-Z,--enable-0rtt",
-            enable_0rtt,
-            "Enable 0-RTT and early data for this endpoint (cannot be used without key verification)");
+    cli.add_flag("-Z,--enable-0rtt", enable_0rtt, "Enable 0-RTT and early data for this endpoint");
 
     std::string seed_string = "";
     cli.add_option(
@@ -53,9 +50,6 @@ int main(int argc, char* argv[])
     try
     {
         cli.parse(argc, argv);
-
-        if (no_verify and enable_0rtt)
-            throw CLI::ValidationError{"0-RTT must be used with key verification!"};
     }
     catch (const CLI::ParseError& e)
     {
@@ -114,22 +108,21 @@ int main(int argc, char* argv[])
     try
     {
         log::info(test_cat, "Starting endpoint...");
-        std::optional<opt::enable_0rtt_ticketing> zerortt;
         if (enable_0rtt)
-            zerortt.emplace();
+            server_tls->enable_inbound_0rtt();
+
         server = server_net.endpoint(
                 server_local,
                 conn_established,
                 conn_closed,
-                zerortt,
                 opt::enable_datagrams{},
                 opt::static_secret{std::move(ep_secret)});
         server->listen(server_tls, dgram_recv);
         log::info(
                 test_cat,
-                "Server listening on: {}{}awaiting connections...",
+                "Server listening on: {} with pubkey:\n\n\t{}\n\nawaiting connections...",
                 server_local,
-                no_verify ? ", " : " with pubkey: \n\n\t{}\n\n"_format(oxenc::to_base64(pubkey)));
+                oxenc::to_base64(pubkey));
     }
     catch (const std::exception& e)
     {
