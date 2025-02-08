@@ -1077,11 +1077,17 @@ namespace oxen::quic
             // congested
             if (nwrite == 0)
             {
-                log::trace(log_cat, "Done writing: connection is congested");
-                if (source->is_stream() && stream_id != -1)
+                bool congested = source->is_stream() && stream_id != -1;
+                log::trace(
+                        log_cat,
+                        "Done writing: {}",
+                        congested ? "connection is congested" : "nothing else to write right now");
+                if (congested)
+                {
                     // we are congested, so clear all pending streams (aside from the -1
                     // pseudo-stream at the end) so that our next call hits the -1 to finish off.
                     channels.erase(channels.begin(), streams_end_it);
+                }
                 continue;
             }
 
