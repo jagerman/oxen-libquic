@@ -34,7 +34,7 @@ namespace oxen::quic
         }
 
         template <oxenc::basic_char Char>
-        void send_datagram(std::vector<Char>&& buf)
+        void reply(std::vector<Char>&& buf)
         {
             reply(std::basic_string_view<Char>{buf.data(), buf.size()}, std::make_shared<std::vector<Char>>(std::move(buf)));
         }
