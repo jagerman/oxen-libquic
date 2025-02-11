@@ -56,6 +56,7 @@ if(NOT NGTCP2_FOUND OR NOT NGTCP2_GNUTLS_FOUND)
     set(ENABLE_STATIC_LIB ON CACHE BOOL "")
     set(ENABLE_SHARED_LIB OFF CACHE BOOL "")
     set(ENABLE_LIB_ONLY OFF CACHE BOOL "")
+    set(BUILD_TESTING OFF CACHE BOOL "")
 
     add_subdirectory(ngtcp2 EXCLUDE_FROM_ALL)
     add_library(ngtcp2::ngtcp2 ALIAS ngtcp2_static)  # Base ngtcp2 (no crypto)
