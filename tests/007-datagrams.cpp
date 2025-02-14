@@ -7,7 +7,6 @@
 #include <oxen/quic/opt.hpp>
 #include <oxen/quic/types.hpp>
 #include <oxen/quic/utils.hpp>
-#include <stdexcept>
 #include <thread>
 
 #include "utils.hpp"
@@ -208,7 +207,6 @@ namespace oxen::quic::test
         std::atomic<int> data_counter{0};
 
         std::promise<void> data_promise;
-        std::future<void> data_future = data_promise.get_future();
 
         dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
             log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
@@ -270,7 +268,7 @@ namespace oxen::quic::test
         conn_interface->send_datagram(std::move(oversize_msg));
         conn_interface->send_datagram("final"s);
 
-        require_future(data_future);
+        require_future(data_promise.get_future());
         CHECK(data_counter == 2);
     }
 
@@ -285,29 +283,16 @@ namespace oxen::quic::test
 
         Network test_net{};
 
-        std::atomic<int> index{0};
-        std::atomic<int> data_counter{0};
+        int data_counter = 0;
         int bufsize = 64, n = (bufsize / 2) + 1;
 
-        std::vector<std::promise<void>> data_promises{(size_t)n};
-        std::vector<std::future<void>> data_futures{(size_t)n};
-
-        for (int i = 0; i < n; ++i)
-            data_futures[i] = data_promises[i].get_future();
+        std::promise<void> data_promise;
 
         dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
             log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
-            try
-            {
-                data_counter += 1;
-                data_promises.at(index).set_value();
-                index += 1;
-            }
-            catch (std::exception& e)
-            {
-                throw std::runtime_error(e.what());
-            }
+            if (++data_counter == n)
+                data_promise.set_value();
         };
 
         opt::enable_datagrams split_dgram{Splitting::ACTIVE, bufsize};
@@ -345,10 +330,9 @@ namespace oxen::quic::test
         for (int i = 0; i < n; ++i)
             conn_interface->send_datagram(std::basic_string_view<uint8_t>{good_msg});
 
-        for (auto& f : data_futures)
-            require_future(f);
+        require_future(data_promise.get_future());
 
-        REQUIRE(data_counter == int(n));
+        REQUIRE(data_counter == n);
 
         auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
 
@@ -366,29 +350,16 @@ namespace oxen::quic::test
 
         Network test_net{};
 
-        std::atomic<int> index{0};
-        std::atomic<int> data_counter{0};
-        size_t n = 5;
+        int data_counter = 0;
+        int n = 5;
 
-        std::vector<std::promise<void>> data_promises{n};
-        std::vector<std::future<void>> data_futures{n};
-
-        for (size_t i = 0; i < n; ++i)
-            data_futures[i] = data_promises[i].get_future();
+        std::promise<void> data_promise;
 
         dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
             log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
-            try
-            {
-                data_counter += 1;
-                data_promises.at(index).set_value();
-                index += 1;
-            }
-            catch (std::exception& e)
-            {
-                throw std::runtime_error(e.what());
-            }
+            if (++data_counter == n)
+                data_promise.set_value();
         };
 
         opt::enable_datagrams split_dgram{Splitting::ACTIVE};
@@ -432,10 +403,9 @@ namespace oxen::quic::test
         conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
         conn_interface->send_datagram(std::basic_string_view<uint8_t>{small_msg});
 
-        for (auto& f : data_futures)
-            require_future(f);
+        require_future(data_promise.get_future());
 
-        REQUIRE(data_counter == int(n));
+        REQUIRE(data_counter == n);
     }
 
     TEST_CASE("007 - Datagram support: Rotating Buffer, Induced Loss", "[007][datagrams][execute][split][rotating][loss]")
@@ -450,31 +420,19 @@ namespace oxen::quic::test
 
         int bufsize = 64, quarter = bufsize / 4;
 
-        std::atomic<int> index{0}, counter{0};
+        int counter = 0;
 
-        std::vector<std::promise<void>> data_promises{(size_t)bufsize};
-        std::vector<std::future<void>> data_futures{(size_t)bufsize};
-
-        for (int i = 0; i < bufsize; ++i)
-            data_futures[i] = data_promises[i].get_future();
+        std::promise<void> data_promise;
 
         bstring received{};
 
         dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
             log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
-            counter += 1;
             received.swap(data);
 
-            try
-            {
-                data_promises.at(index).set_value();
-                index += 1;
-            }
-            catch (std::exception& e)
-            {
-                throw std::runtime_error(e.what());
-            }
+            if (++counter == bufsize)
+                data_promise.set_value();
         };
 
         opt::enable_datagrams split_dgram{Splitting::ACTIVE, (int)bufsize};
@@ -512,8 +470,7 @@ namespace oxen::quic::test
         for (int i = 0; i < bufsize; ++i)
             conn_interface->send_datagram(bstring_view{successful_msg});
 
-        for (auto& f : data_futures)
-            require_future(f);
+        require_future(data_promise.get_future());
 
         REQUIRE(counter == bufsize);
         REQUIRE(received == successful_msg);
