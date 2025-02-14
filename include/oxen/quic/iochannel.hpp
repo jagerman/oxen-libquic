@@ -2,6 +2,7 @@
 
 #include <concepts>
 
+#include "address.hpp"
 #include "connection_ids.hpp"
 #include "messages.hpp"
 #include "utils.hpp"
@@ -79,7 +80,7 @@ namespace oxen::quic
         virtual void send_impl(bstring_view, std::shared_ptr<void> keep_alive) = 0;
 
         virtual std::vector<ngtcp2_vec> pending() = 0;
-        virtual prepared_datagram pending_datagram(bool) = 0;
+        virtual std::optional<prepared_datagram> pending_datagram(bool) = 0;
         virtual bool sent_fin() const = 0;
         virtual void set_fin(bool) = 0;
         virtual void wrote(size_t) = 0;

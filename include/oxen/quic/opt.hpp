@@ -90,9 +90,14 @@ namespace oxen::quic
         /// to Network::Endpoint(...) will enable datagrams without packet-splitting. From there, pass
         /// `Splitting::ACTIVE` to the constructor to enable packet-splitting.
         ///
-        /// The size of the rotating datagram buffer can also be specified as a second parameter to the
-        /// constructor. Buffer size is subdivided amongst 4 equally sized buffer rows, so the bufsize
-        /// must be perfectly divisible by 4
+        /// The size of the rotating datagram buffer can also be specified as a second parameter to
+        /// the constructor. Buffer size is subdivided amongst 4 equally sized buffer rows, so the
+        /// bufsize must be perfectly divisible by 4, and must be at least 32 (but significantly
+        /// larger is recommended), and can be at most 16384.  The default size is 4096.
+        ///
+        /// It must also be, at bare minimum, at least double the datagram lookahead plus 2 (8+2 by
+        /// default) that the other side of the connection is using, but it is up to the application
+        /// to ensure it uses a compatible value on each side as this is not enforced.
         ///
         /// The max size of a transmittable datagram can be queried directly from connection_interface::
         /// get_max_datagram_size(). At connection initialization, ngtcp2 will default this value to 1200.
@@ -114,8 +119,11 @@ namespace oxen::quic
             explicit enable_datagrams(Splitting m) : split_packets{true}, mode{m} {}
             explicit enable_datagrams(Splitting m, int b) : split_packets{true}, mode{m}, bufsize{b}
             {
-                if (b <= 0)
-                    throw std::out_of_range{"Bufsize must be positive"};
+                if (b < 64)
+                    // This 64 cutoff is somewhat arbitrary, but going much smaller than this will
+                    // start to cause problems with the default packet coalescing lookahead (which,
+                    // by default, can deliver pieces of packets up to 9 datagram packets apart).
+                    throw std::out_of_range{"Bufsize must be >= 64"};
                 if (b > 1 << 14)
                     throw std::out_of_range{"Bufsize too large"};
                 if (b % 4 != 0)

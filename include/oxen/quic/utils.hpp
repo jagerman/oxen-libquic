@@ -122,12 +122,38 @@ namespace oxen::quic
     // pmtud size. In 'greedy' mode, we take in up to double the current pmtud size to split amongst
     // two datagrams. (Note: NGTCP2_MAX_UDP_PAYLOAD_SIZE is badly named, so we're using more accurate
     // ones)
-    inline constexpr size_t DATAGRAM_OVERHEAD = 44;
+
     inline constexpr size_t MIN_UDP_PAYLOAD = NGTCP2_MAX_UDP_PAYLOAD_SIZE;                // 1200
     inline constexpr size_t MIN_LAZY_UDP_PAYLOAD = MIN_UDP_PAYLOAD;                       // 1200
     inline constexpr size_t MIN_GREEDY_UDP_PAYLOAD = (MIN_LAZY_UDP_PAYLOAD << 1);         // 2400
     inline constexpr size_t MAX_PMTUD_UDP_PAYLOAD = NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE;    // 1452
     inline constexpr size_t MAX_GREEDY_PMTUD_UDP_PAYLOAD = (MAX_PMTUD_UDP_PAYLOAD << 1);  // 2904
+                                                                                          //
+    // This is the maximum overhead in the UDP packet of sending a packet containing only one single
+    // datagram, and is used to determine the maximum datagram size we can send.
+    //
+    // Specifically this is:
+    // + 1 byte for various short packet flags
+    // + 20 bytes dcid
+    // + 4 bytes (max) packet number
+    // + 16 bytes AEAD tag
+    // + 1 byte datagram frame type
+    // + 2 bytes datagram length.  (This should be optional for the final datagram, but currently ngtcp2 always includes it).
+    inline constexpr size_t DATAGRAM_OVERHEAD_1RTT = 1 + 20 + 4 + 16 + 1 + 2;
+
+    // This is the same as DATAGRAM_OVERHEAD_1RTT, but applied in early data (0-RTT) mode.  This is:
+    //
+    // + 1 byte for various long packet flags
+    // + 4 byte version
+    // + 1 byte dcid length
+    // + 20 bytes dcid
+    // + 1 byte dcid length
+    // + 20 bytes scid
+    // + 2 bytes (max) length
+    // + 4 bytes (max) packet number
+    // + 1 byte datagram frame type
+    // + 2 bytes datagram length.  (As above, should be optional but isn't with current ngtcp2).
+    inline constexpr size_t DATAGRAM_OVERHEAD_0RTT = 1 + 4 + 1 + 20 + 1 + 20 + 2 + 4 + 1 + 2;
 
     // Maximum number of packets we can send in one batch when using sendmmsg/GSO, and maximum we
     // receive in one batch when using recvmmsg.

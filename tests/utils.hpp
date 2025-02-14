@@ -47,8 +47,8 @@ namespace oxen::quic
 
         static void enable_dgram_drop(connection_interface& conn);
         static int disable_dgram_drop(connection_interface& conn);
-        static void enable_dgram_flip_flop(connection_interface& conn);
-        static int disable_dgram_flip_flop(connection_interface& conn);
+        static void enable_dgram_counter(connection_interface& conn);
+        static int disable_dgram_counter(connection_interface& conn);
         static int get_dgram_debug_counter(connection_interface& conn);
 
         // Bumps the connection's next reference id to make it easier to tell which connection is

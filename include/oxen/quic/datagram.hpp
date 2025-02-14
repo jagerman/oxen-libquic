@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include "connection_ids.hpp"
 #include "iochannel.hpp"
 #include "messages.hpp"
@@ -13,6 +15,9 @@ namespace oxen::quic
     class Stream;
     class connection_interface;
     struct quic_cid;
+
+    // The pseudo "stream id" we use to indicate the datagram channel:
+    inline constexpr int64_t DATAGRAM_PSEUDO_STREAM_ID = std::numeric_limits<int64_t>::min();
 
     struct dgram_interface : public std::enable_shared_from_this<dgram_interface>
     {
@@ -138,10 +143,9 @@ namespace oxen::quic
         ///         3               1         3
         ///
         rotating_buffer recv_buffer;
-        // dgram_buffer send_buffer;
-        buffer_que send_buffer;
 
-        prepared_datagram pending_datagram(bool r) override;
+        std::optional<prepared_datagram> pending_datagram(bool prefer_small) override;
+        void confirm_datagram_sent();
 
         bool is_stream() const override { return false; }
 
@@ -149,15 +153,49 @@ namespace oxen::quic
 
         int datagrams_stored() const { return recv_buffer.datagrams_stored(); }
 
-        int64_t stream_id() const override;
+        int64_t stream_id() const override { return DATAGRAM_PSEUDO_STREAM_ID; }
 
         std::shared_ptr<Stream> get_stream() override;
 
+        // These methods are called during the constructor of the owning Connection to signal if
+        // 0-RTT is enabled on the connection, to signal that queued datagrams might not make it and
+        // should be stored and retransmitted if 0-RTT is rejected by the server.  The call pattern
+        // for any connection is one of:
+        //
+        // 0-RTT attempted, and succeeded:
+        //   - early_data_begin()
+        //   - ... datagram activity
+        //     - e.g. datagrams delivered by application
+        //     - e.g. datagrams consumed by connection for sending out
+        //   - early_data_end(true) during handshake complete.
+        //
+        // 0-RTT not attempted:
+        //   - no call to early_data_begin()
+        //   - datagrams delivered by application which get queued
+        //   - handshake complete (NO call to early_data_end())
+        //   - connection starts consuming datagrams for sending out
+        //
+        // 0-RTT attempted, but rejected:
+        //   - early_data_begin()
+        //   - ... datagram activity
+        //     - e.g. datagrams delivered by application
+        //     - e.g. datagrams consumed by connection for sending out
+        //   - early_data_end(false) during handshake complete.
+        //   - e.g. datagrams consumed by connection for sending out, expecting to start over from
+        //     the beginning.
+        void early_data_begin();
+        void early_data_end(bool accepted);
+
+        // (See methods of same name in connection_interface for details)
+        void set_split_datagram_lookahead(int n);
+        int get_split_datagram_lookahead() const;
+
       private:
         const bool _packet_splitting{false};
+        datagram_queue _send_buffer{_packet_splitting};
 
       protected:
-        bool is_empty_impl() const override { return send_buffer.empty(); }
+        bool is_empty_impl() const override { return _send_buffer.empty(); }
 
         void send_impl(bstring_view data, std::shared_ptr<void> keep_alive) override;
 

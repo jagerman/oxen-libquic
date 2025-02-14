@@ -73,7 +73,7 @@ namespace oxen::quic
     {
         auto& conn = static_cast<Connection&>(ci);
         conn._endpoint.call_get([&conn] {
-            conn.debug_datagram_flip_flop_enabled = false;
+            conn.debug_datagram_counter_enabled = false;
             conn.debug_datagram_drop_enabled = true;
             conn.debug_datagram_counter = 0;
         });
@@ -88,20 +88,20 @@ namespace oxen::quic
             return count;
         });
     }
-    void TestHelper::enable_dgram_flip_flop(connection_interface& ci)
+    void TestHelper::enable_dgram_counter(connection_interface& ci)
     {
         auto& conn = static_cast<Connection&>(ci);
         conn._endpoint.call_get([&conn] {
             conn.debug_datagram_drop_enabled = false;
-            conn.debug_datagram_flip_flop_enabled = true;
+            conn.debug_datagram_counter_enabled = true;
             conn.debug_datagram_counter = 0;
         });
     }
-    int TestHelper::disable_dgram_flip_flop(connection_interface& ci)
+    int TestHelper::disable_dgram_counter(connection_interface& ci)
     {
         auto& conn = static_cast<Connection&>(ci);
         return conn._endpoint.call_get([&conn] {
-            conn.debug_datagram_flip_flop_enabled = false;
+            conn.debug_datagram_counter_enabled = false;
             int count = 0;
             std::swap(count, conn.debug_datagram_counter);
             return count;

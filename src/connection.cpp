@@ -324,8 +324,16 @@ namespace oxen::quic
             auto& conn = *static_cast<Connection*>(user_data);
             assert(_conn == conn);
 
-            log::debug(log_cat, "Client resetting early streams; 0-rtt rejected by server!");
-            conn.revert_early_streams();
+            if (conn._early_data)
+            {
+                conn._early_data = false;
+                log::debug(log_cat, "Server rejected attempt to use 0-RTT; resetting early streams/datagrams");
+                conn.revert_early_streams();
+                if (conn.datagrams)
+                    conn.datagrams->early_data_end(false);
+            }
+            else
+                log::trace(log_cat, "Early data rejected (but this connection was not using early data)");
 
             return 0;
         }
@@ -450,14 +458,22 @@ namespace oxen::quic
         {
             const bool accepted = tls_session->get_early_data_accepted();
             log::debug(log_cat, "Early data was {} by server", accepted ? "ACCEPTED" : "REJECTED");
-            if (!accepted)
+
+            if (accepted)
+            {
+                if (datagrams)
+                    datagrams->early_data_end(true);
+            }
+            else
             {
                 if (auto rv = ngtcp2_conn_tls_early_data_rejected(*this); rv != 0)
                 {
                     log::error(log_cat, "ngtcp2_conn_tls_early_data_rejected failed: {}", ngtcp2_strerror(rv));
+                    _early_data = false;
                     return -1;
                 }
             }
+            _early_data = false;
         }
 
         return 0;
@@ -522,7 +538,7 @@ namespace oxen::quic
 
     int Connection::last_cleared() const
     {
-        return datagrams->recv_buffer.last_cleared;
+        return datagrams ? datagrams->recv_buffer.last_cleared : -1;
     }
 
     void Connection::set_remote_addr(const ngtcp2_addr& new_remote)
@@ -688,10 +704,10 @@ namespace oxen::quic
 
     // note: this does not need to return anything, it is never called except in on_stream_available
     // First, we check the list of pending streams on deck to see if they're ready for broadcast. If
-    // so, we move them to the streams map, where they will get picked up by flush_streams and dump
+    // so, we move them to the streams map, where they will get picked up by flush_packets and dump
     // their buffers. If none are ready, we keep chugging along and make another stream as usual. Though
     // if none of the pending streams are ready, the new stream really shouldn't be ready, but here we are
-    void Connection::check_pending_streams(uint64_t available, bool is_early_stream)
+    void Connection::check_pending_streams(uint64_t available)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         uint64_t popped = 0;
@@ -879,7 +895,7 @@ namespace oxen::quic
     // immediately (i.e. because either an error occured or the socket is blocked).
     //
     // In the case where the socket is blocked, this sets up an event to wait for it to become
-    // unblocked, at which point we'll re-enter flush_streams (which will finish off the pending
+    // unblocked, at which point we'll re-enter flush_packets (which will finish off the pending
     // packets before continuing).
     //
     // If pkt_updater is provided then we cancel it when an error (other than a block) occurs.
@@ -888,10 +904,10 @@ namespace oxen::quic
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         assert(n_packets > 0 && n_packets <= MAX_BATCH);
 
-        if (debug_datagram_flip_flop_enabled)
+        if (debug_datagram_counter_enabled)
         {
             debug_datagram_counter += n_packets;
-            log::debug(log_cat, "enable_datagram_flip_flop_test is true; sent packet count: {}", debug_datagram_counter);
+            log::debug(log_cat, "enable_datagram_counter_test is true; sent packet count: {}", debug_datagram_counter);
         }
 
         auto rv = endpoint().send_packets(_path, send_buffer.data(), send_buffer_size.data(), send_ecn, n_packets);
@@ -947,7 +963,7 @@ namespace oxen::quic
             // We're blocked from a previous call, and haven't finished sending all our packets yet
             // so there's nothing to do for now (once the packets are fully sent we'll get called
             // again so that we can keep working on sending).
-            log::debug(log_cat, "Skipping this flush_streams call; we still have {} queued packets", n_packets);
+            log::debug(log_cat, "Skipping this flush_packets call; we still have {} queued packets", n_packets);
             return;
         }
 
@@ -967,7 +983,7 @@ namespace oxen::quic
             }
 
             // if we have datagrams to send, then mix them into the streams
-            if (not datagrams->is_empty())
+            if (datagrams && !datagrams->is_empty())
             {
                 log::trace(log_cat, "Datagram channel has things to send");
                 channels.push_back(datagrams.get());
@@ -980,7 +996,7 @@ namespace oxen::quic
                     channels.push_back(stream_ptr.get());
             }
         }
-        else if (not datagrams->is_empty())
+        else if (datagrams && !datagrams->is_empty())
         {
             // if we have only datagrams to send, then we should probably do that
             log::trace(log_cat, "Datagram channel has things to send");
@@ -1000,12 +1016,12 @@ namespace oxen::quic
         pkt_tx_timer_updater pkt_updater{*this, ts};
         size_t stream_packets = 0;
 
-        bool prefer_big_first{true};
+        bool partially_filled = false;
 
         while (!channels.empty())
         {
             log::trace(log_cat, "Creating packet {} of max {} batch stream packets", n_packets, MAX_BATCH);
-            int datagram_accepted = std::numeric_limits<int>::min();
+            bool datagram_waiting = false;
             ngtcp2_ssize nwrite = 0;
             ngtcp2_ssize ndatalen;
             uint32_t flags = 0;
@@ -1055,27 +1071,49 @@ namespace oxen::quic
             }
             else  // datagram block
             {
-                auto dgram = source->pending_datagram(prefer_big_first);
+                // We try to pack in as many datagrams as we can into the packet in one shot (just like the
+                // streams try to add as much stream data as they can).  We don't have to do this
+                // (we could fall back to the outer loop), but that would somewhat starve datagram
+                // throughput if there is a lot of contention with streams when there are lots of
+                // relatively small datagrams.
 
-                nwrite = ngtcp2_conn_writev_datagram(
-                        *this,
-                        _path,
-                        &pkt_info,
-                        buf_pos,
-                        MAX_PMTUD_UDP_PAYLOAD,
-                        &datagram_accepted,
-                        flags |= NGTCP2_WRITE_DATAGRAM_FLAG_MORE,
-                        dgram.id,
-                        dgram.data(),
-                        dgram.size(),
-                        ts);
-
-                log::debug(log_cat, "ngtcp2_conn_writev_datagram returned a value of {}", nwrite);
-
-                if (datagram_accepted != 0)
+                datagram_waiting = true;  // This will remain true only if we have datagrams pending
+                                          // but accept none of them into the packet.
+                for (;;)
                 {
-                    log::trace(log_cat, "ngtcp2 accepted datagram ID: {} for transmission", dgram.id);
-                    datagrams->send_buffer.drop_front(prefer_big_first);
+                    auto dgram = datagrams->pending_datagram(partially_filled);
+                    if (!dgram)
+                    {
+                        datagram_waiting = false;
+                        break;
+                    }
+
+                    int accepted = 0;
+                    nwrite = ngtcp2_conn_writev_datagram(
+                            *this,
+                            _path,
+                            &pkt_info,
+                            buf_pos,
+                            MAX_PMTUD_UDP_PAYLOAD,
+                            &accepted,
+                            flags |= NGTCP2_WRITE_DATAGRAM_FLAG_MORE,
+                            dgram->id,
+                            dgram->data(),
+                            dgram->size(),
+                            ts);
+
+                    log::debug(log_cat, "ngtcp2_conn_writev_datagram returned a value of {}", nwrite);
+
+                    if (accepted != 0)
+                    {
+                        log::trace(log_cat, "ngtcp2 accepted datagram ID: {} for transmission", dgram->id);
+                        datagrams->confirm_datagram_sent();
+                        datagram_waiting = false;
+                    }
+                    if (nwrite != NGTCP2_ERR_WRITE_MORE)
+                        break;
+
+                    partially_filled = true;
                 }
             }
 
@@ -1109,8 +1147,7 @@ namespace oxen::quic
                 }
                 if (nwrite == NGTCP2_ERR_WRITE_MORE)
                 {
-                    // lets try fitting a small end of a split datagram in
-                    prefer_big_first = false;
+                    partially_filled = true;
 
                     if (source->is_stream())
                     {
@@ -1133,7 +1170,7 @@ namespace oxen::quic
                 continue;
             }
 
-            prefer_big_first = true;
+            partially_filled = false;
 
             if (stream_id > -1 && ndatalen > 0)
             {
@@ -1163,8 +1200,11 @@ namespace oxen::quic
                 break;
             }
 
-            // packet is full and the datagram was NOT included, so it must be written to the next packet
-            if (datagram_accepted == 0 && nwrite > 0)
+            // If the packet is full and we couldn't include any datagrams (despite having pending
+            // ones) then we want to restart the next loop starting on datagrams to include that
+            // datagram (so that big datagrams don't get starved out by small amounts of stream
+            // data).
+            if (datagram_waiting && nwrite > 0)
             {
                 channels.push_front(datagrams.get());
                 continue;
@@ -1190,7 +1230,7 @@ namespace oxen::quic
             log::trace(log_cat, "Sending final packet batch of {} packets", n_packets);
             send(&pkt_updater);
         }
-        log::debug(log_cat, "Exiting flush_streams()");
+        log::debug(log_cat, "Exiting flush_packets()");
     }
 
     void Connection::schedule_packet_retransmit(std::chrono::steady_clock::time_point ts)
@@ -1433,6 +1473,9 @@ namespace oxen::quic
     {
         log::trace(log_cat, "Connection (CID: {}) received datagram: {}", _source_cid, buffer_printer{data});
 
+        if (!datagrams)
+            log::warning(log_cat, "Received a datagram but this connection was not configured with datagram support");
+
         std::optional<bstring> maybe_data;
 
         if (_packet_splitting)
@@ -1516,8 +1559,8 @@ namespace oxen::quic
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
-        if (!_datagrams_enabled)
-            throw std::runtime_error{"Endpoint not configured for datagram IO"};
+        if (!datagrams)
+            throw std::runtime_error{"Connection not configured for datagram IO"};
 
         datagrams->send(data, std::move(keep_alive));
     }
@@ -1528,24 +1571,27 @@ namespace oxen::quic
         return ngtcp2_conn_get_streams_bidi_left(*this);
     }
 
-    size_t Connection::get_max_datagram_size_impl()
+    size_t Connection::get_max_datagram_piece()
     {
-        if (!_datagrams_enabled)
+        if (!datagrams)
             return 0;
 
-        // If packet splitting, we can take in double the datagram size
-        size_t multiple = (_packet_splitting) ? 2 : 1;
-        // Minus packet splitting overhead that adds 2 bytes of overhead per full or half datagram:
-        size_t adjustment = DATAGRAM_OVERHEAD + (_packet_splitting ? 2 : 0);
+        // We have general quic packet overhead, plus packet splitting adds another 2 bytes of
+        // overhead per datagram piece:
+        size_t adjustment = (_early_data ? DATAGRAM_OVERHEAD_0RTT : DATAGRAM_OVERHEAD_1RTT) + (_packet_splitting ? 2 : 0);
 
-        size_t max_dgram_size = multiple * (ngtcp2_conn_get_path_max_tx_udp_payload_size(*this) - adjustment);
-        if (max_dgram_size != _last_max_dgram_size)
+        size_t max_dgram_piece = ngtcp2_conn_get_path_max_tx_udp_payload_size(*this) - adjustment;
+        if (max_dgram_piece != _last_max_dgram_piece)
         {
             _max_dgram_size_changed = true;
-            _last_max_dgram_size = max_dgram_size;
+            _last_max_dgram_piece = max_dgram_piece;
         }
 
-        return max_dgram_size;
+        return max_dgram_piece;
+    }
+    size_t Connection::get_max_datagram_size_impl()
+    {
+        return get_max_datagram_piece() * (_packet_splitting ? 2 : 1);
     }
 
     std::optional<size_t> Connection::max_datagram_size_changed()
@@ -1555,7 +1601,7 @@ namespace oxen::quic
         return _endpoint.call_get([this]() -> std::optional<size_t> {
             // Check it again via an exchange, in case someone raced us here
             if (_max_dgram_size_changed.exchange(false))
-                return _last_max_dgram_size;
+                return _last_max_dgram_piece * (_packet_splitting ? 2 : 1);
             return std::nullopt;
         });
     }
@@ -1619,7 +1665,7 @@ namespace oxen::quic
         // config values
         params.initial_max_streams_bidi = _max_streams;
 
-        if (_datagrams_enabled)
+        if (datagrams)
         {
             log::trace(log_cat, "Enabling datagram support for connection");
             // This is effectively an "unlimited" value, which lets us accept any size that fits into a QUIC packet
@@ -1666,7 +1712,6 @@ namespace oxen::quic
             _dest_cid{dcid},
             _path{path},
             _max_streams{context->config.max_streams ? context->config.max_streams : DEFAULT_MAX_BIDI_STREAMS},
-            _datagrams_enabled{context->config.datagram_support},
             _packet_splitting{context->config.split_packet},
             tls_creds{context->tls_creds}
     {
@@ -1682,8 +1727,9 @@ namespace oxen::quic
                                ? is_outbound() ? std::move(context->conn_closed_cb) : context->conn_closed_cb
                                : nullptr;
 
-        datagrams = _endpoint.make_shared<DatagramIO>(
-                *this, _endpoint, context->dgram_data_cb ? context->dgram_data_cb : ep.dgram_recv_cb);
+        if (context->config.datagram_support)
+            datagrams = _endpoint.make_shared<DatagramIO>(
+                    *this, _endpoint, context->dgram_data_cb ? context->dgram_data_cb : ep.dgram_recv_cb);
         pseudo_stream = _endpoint.make_shared<Stream>(*this, _endpoint);
         pseudo_stream->_stream_id = -1;
 
@@ -1821,6 +1867,8 @@ namespace oxen::quic
                 {
                     log::debug(log_cat, "transport parameters successfully loaded for 0-RTT connection support");
                     _early_data = true;
+                    if (datagrams)
+                        datagrams->early_data_begin();
                 }
                 else
                     log::warning(
@@ -1938,7 +1986,7 @@ namespace oxen::quic
     }
     size_t connection_interface::get_max_datagram_size()
     {
-        return endpoint().call_get([this]() -> int { return get_max_datagram_size_impl(); });
+        return endpoint().call_get([this]() { return get_max_datagram_size_impl(); });
     }
 
     connection_interface::~connection_interface()

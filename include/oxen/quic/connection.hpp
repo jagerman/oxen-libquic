@@ -195,6 +195,45 @@ namespace oxen::quic
         /// with datagram splitting enabled.
         size_t get_max_datagram_size();
 
+        /// Sets the maximum split datagram queue lookahead for coalescing split datagrams.  This is
+        /// how far we look ahead in the datagram queue to find "small" pieces of split datagrams
+        /// that we can send ahead of schedule if including those helps fill out a quic packet.
+        ///
+        /// For example, suppose an application is sending packets of size 1500 with a max (unsplit)
+        /// datagram size of 1350, and sends 6 such packets in a row, split into
+        /// [Aa][Bb][Cc][Dd][Ee][Ff], where each "A-F" part of the split will be 1350 bytes and each
+        /// a-f part is the remaining 150 bytes.  With a lookahead of 4 of higher (and assuming no
+        /// conflicting stream and ACK data that might take up some quic packet space) this could
+        /// result in coalescing the a-f values into one single QUIC packet containing 6 small
+        /// datagram pieces, so that we send:
+        ///
+        /// [A] [abcdef] [B] [C] [D] [E] [F]
+        ///
+        /// Whereas when this is set to 0, only the packet at the head of the queue will be
+        /// considered.  Note that even with lookahead set to 0, some coalescing is still possible
+        /// without ever including something that isn't at the head of the queue, e.g.
+        ///
+        /// [A] [ab] [B] [C] [cd] [D] [E] [ef] [F]
+        ///
+        /// Note that this lookahead will never cause *complete* packets to be delivered out of
+        /// order: the remote end will always receive complete (i.e. after recombining) packets in
+        /// the same order the application queued them (assuming no reordering outside our control
+        /// happens along the network path).  Effectively what that means is that this option allows
+        /// us to opportunistically send small pieces of split packets ahead of schedule, if we have
+        /// extra space in a QUIC packet being built.
+        ///
+        /// A value of 0 disables lookahead, and a negative value restores the default (which is
+        /// currently 8, but could change in the future).
+        ///
+        /// If setting this to a higher value, take care that the application at the other end of
+        /// the connection is not using too small of a split datagram receive buffer: packets *will*
+        /// be lost if the remote receive buffer is not large enough to handle the gap in
+        /// out-of-order partial packet delivery.  (The default split receive buffer is more than
+        /// sufficient for any feasible lookahead value, but very small receive buffers with very
+        /// large lookaheads might not be).
+        virtual void set_split_datagram_lookahead(int n) = 0;
+        virtual int get_split_datagram_lookahead() const = 0;
+
         /// Obtains the current max datagram size *if* it has changed since the last time this
         /// method was called (or if this method has never been called), otherwise returns nullopt.
         /// This is designed to allow classes to react to changes in the maximum datagram size, if
@@ -309,11 +348,21 @@ namespace oxen::quic
         ustring_view selected_alpn() const override;
 
         uint64_t get_streams_available_impl() const override;
+        size_t get_max_datagram_piece();
         size_t get_max_datagram_size_impl() override;
         uint64_t get_max_streams_impl() const override { return _max_streams; }
 
-        bool datagrams_enabled() const override { return _datagrams_enabled; }
+        bool datagrams_enabled() const override { return static_cast<bool>(datagrams); }
         bool packet_splitting_enabled() const override { return _packet_splitting; }
+        void set_split_datagram_lookahead(int n) override
+        {
+            if (datagrams)
+                datagrams->set_split_datagram_lookahead(n);
+        }
+        int get_split_datagram_lookahead() const override
+        {
+            return datagrams ? datagrams->get_split_datagram_lookahead() : -1;
+        }
 
         std::optional<size_t> max_datagram_size_changed() override;
 
@@ -401,20 +450,19 @@ namespace oxen::quic
 
         Path _path;
 
+        // True if we are attempting 0-RTT (i.e. enabled it and we found the needed session data)
+        // and are still in the 0-RTT period:
+        bool _early_data{false};
+
         const uint64_t _max_streams{DEFAULT_MAX_BIDI_STREAMS};
-        const bool _datagrams_enabled{false};
         const bool _packet_splitting{false};
-        size_t _last_max_dgram_size{0};
+        size_t _last_max_dgram_piece{0};
         std::atomic<bool> _max_dgram_size_changed{true};
 
         std::atomic<bool> _close_quietly{false};
         std::atomic<bool> _is_validated{false};
 
         ustring remote_pubkey{};
-
-        std::vector<int64_t> _early_streams;
-
-        void make_early_streams(ngtcp2_conn* connptr);
 
         void revert_early_streams();
 
@@ -490,7 +538,7 @@ namespace oxen::quic
         /********* TEST SUITE FUNCTIONALITY *********/
         void set_local_addr(Address new_local);
         bool debug_datagram_drop_enabled{false};
-        bool debug_datagram_flip_flop_enabled{false};
+        bool debug_datagram_counter_enabled{false};
         int debug_datagram_counter{0};  // Used for either of the above (only one at a time)
 
       public:
@@ -503,7 +551,7 @@ namespace oxen::quic
         void stream_execute_close(Stream& s, uint64_t app_code);
         void stream_closed(int64_t id, uint64_t app_code);
         void close_all_streams();
-        void check_pending_streams(uint64_t available, bool is_early_stream = false);
+        void check_pending_streams(uint64_t available);
         int recv_datagram(bstring_view data, bool fin);
         int ack_datagram(uint64_t dgram_id);
         int recv_token(const uint8_t* token, size_t tokenlen);

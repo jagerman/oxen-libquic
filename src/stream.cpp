@@ -381,10 +381,10 @@ namespace oxen::quic
         log::trace(log_cat, "{}:{} -- {}{}", file, lineno, message, val);
     }
 
-    prepared_datagram Stream::pending_datagram(bool)
+    std::optional<prepared_datagram> Stream::pending_datagram(bool)
     {
         log::warning(log_cat, "{} called, but this is a stream object!", __PRETTY_FUNCTION__);
-        throw std::runtime_error{"Stream objects should not be queried for pending datagrams!"};
+        return std::nullopt;
     }
 
 }  // namespace oxen::quic

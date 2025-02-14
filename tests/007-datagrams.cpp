@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <oxen/quic.hpp>
 #include <oxen/quic/connection.hpp>
 #include <oxen/quic/datagram.hpp>
@@ -294,7 +295,7 @@ namespace oxen::quic::test
 
             std::atomic<int> index{0};
             std::atomic<int> data_counter{0};
-            int bufsize = 16, n = (bufsize / 2) + 1;
+            int bufsize = 64, n = (bufsize / 2) + 1;
 
             std::vector<std::promise<void>> data_promises{(size_t)n};
             std::vector<std::future<void>> data_futures{(size_t)n};
@@ -460,7 +461,7 @@ namespace oxen::quic::test
 
             Network test_net{};
 
-            int bufsize = 16, quarter = bufsize / 4;
+            int bufsize = 64, quarter = bufsize / 4;
 
             std::atomic<int> index{0}, counter{0};
 
@@ -533,112 +534,148 @@ namespace oxen::quic::test
     }
 
     /*
-        Test Note:
-            Flip flop packet ordering is hard to exactly quantify the magnitude of its optimization. On premise, it takes
-            big split datagrams queued next and sends their small portion first.
+       Packet coalescing test.  When we send split packets, we have various levels of lookahead as
+       to how much we will coalesce into a single packet.
 
-            For example, with 13 calls to send_datagram, we caan accurately predict that the number of packets sent is
-            less than 13. The extent to which this is optimized depends on the datagram sizes being sent, whether ngtcp2
-            sends acks or other frames, and other protocol level things.
+       E.g. if we have packets [Aa] [Bb] [Cc] ... where the full packet is too big to fit in
+       one quic datagram then a naive half split would result in sending [A] [a] [B] [b] [C] [c] ...
+       in 2 quic packets per datagram.  However by alternating the order in which we send the two
+       parts of the split we can coalesce the small parts together and send:
+           [A] [ab] [B] [C] [cd] [D] ...
+       using 3 quic packets for per 2 split datagrams, rather than 4 per 2 split datagrams.
+
+       But we actually go further, and look ahead to see if there are other small pieces that we can
+       include when trying to fill up an outgoing, partially filled packet, so that we could send:
+
+           [A] [abcdefghij] [B] [C] [D] [E] [F] [G] [H] [I] [J]
+
+       i.e. 10 datagrams in 11 packets.  (This depends, on course, on all the small a-j pieces
+       fitting into one datagram, which will only be the case if the packets being sent are not too
+       much over the splitting limit).
     */
-    TEST_CASE("007 - Datagram support: Rotating Buffer, Flip-Flop Ordering", "[007][datagrams][execute][split][flipflop]")
+    TEST_CASE("007 - Datagram support: Rotating Buffer, packet coalescing", "[007][datagrams][split][coalesce]")
     {
-        SECTION("Simple datagram transmission - flip flop ordering")
+        auto client_established = callback_waiter{[](connection_interface&) {}};
+
+        Network test_net{};
+
+        std::atomic<int> data_counter{0};
+        int n = 60;
+        int target_dgrams;
+
+        std::promise<void> data_promise;
+
+        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
+
+            int count = ++data_counter;
+            log::trace(test_cat, "Data counter: {}", count);
+            if (count == n)
+                data_promise.set_value();
+        };
+
+        opt::enable_datagrams split_dgram{Splitting::ACTIVE};
+
+        Address server_local{};
+        Address client_local{};
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
+
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        auto client = test_net.endpoint(client_local, split_dgram, client_established);
+        auto conn_interface = client->connect(client_remote, client_tls);
+
+        REQUIRE(client_established.wait());
+
+        // Give the connection time to figure out PMTU
+        std::this_thread::sleep_for(10ms);
+        REQUIRE(conn_interface->get_max_datagram_size() == 2796);
+
+        static constexpr size_t max_unsplit = 1398;
+        // If we pack two small datagram pieces together then they get packed as:
+        // QUIC OVERHEAD
+        // DATAGRAM FRAME HEADER (3 bytes for datagrams >= 64B)
+        // DGID (2 bytes)
+        // DATA
+        // DATAGRAM FRAME HEADER (3 bytes for datagrams >= 64B)
+        // DGID (2 bytes)
+        // DATA
+        // and the 1398 is already accounting for the first three overhead lines.
+        //
+        // And so our maximum should be 696 because 1398 - 696 - 5 - 696 = 1 and so any big and we
+        // should run over.  But that's not quite right, because that's a maximum while the actual
+        // quic packet includes a 1-4 byte packet number.  Since this is a new connection, we can
+        // assume the packets we test here will have 1-byte numbers, which gives us another 3 bytes
+        // to work with, and that's where the `+3` comes from in this and later calculations.
+        // (That's only for the first 256 quic packets, but that's enough for this test).
+        static constexpr size_t max_two_packable = (max_unsplit + 3 - 5) / 2;
+        size_t dgram_size = GENERATE(
+                1,
+                100,
+                max_two_packable - 1,
+                max_two_packable,
+                max_two_packable + 1,
+                1000,
+                max_unsplit,
+                max_unsplit + 1,
+                max_unsplit + 50,
+                max_unsplit + 100,
+                max_unsplit + 500,
+                max_unsplit + 1000,
+                max_unsplit * 2);
+        int lookahead = GENERATE(-1 /* should become the default, i.e. 8*/, 0, 1, 5, 10, 100);
+
+        log::warning(log_cat, "DGRAM_SIZE: {}, LOOKAHEAD: {}", dgram_size, lookahead);
+        conn_interface->set_split_datagram_lookahead(lookahead);
+
+        if (dgram_size <= max_unsplit)
         {
-            log::trace(test_cat, "Beginning the unit test from hell");
-            auto client_established = callback_waiter{[](connection_interface&) {}};
-
-            Network test_net{};
-
-            std::atomic<int> index{0};
-            std::atomic<int> data_counter{0};
-            size_t n = 13;
-
-            std::vector<std::promise<void>> data_promises{n};
-            std::vector<std::future<void>> data_futures{n};
-
-            for (size_t i = 0; i < n; ++i)
-                data_futures[i] = data_promises[i].get_future();
-
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
-                log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
-
-                try
-                {
-                    data_counter += 1;
-                    log::trace(test_cat, "Data counter: {}", data_counter.load());
-                    data_promises.at(index).set_value();
-                    index += 1;
-                }
-                catch (std::exception& e)
-                {
-                    throw std::runtime_error(e.what());
-                }
-            };
-
-            opt::enable_datagrams split_dgram{Splitting::ACTIVE};
-
-            Address server_local{};
-            Address client_local{};
-
-            auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
-
-            auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
-            REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
-
-            RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
-
-            auto client = test_net.endpoint(client_local, split_dgram, client_established);
-            auto conn_interface = client->connect(client_remote, client_tls);
-
-            REQUIRE(client_established.wait());
-
-            std::this_thread::sleep_for(5ms);
-            auto max_size = conn_interface->get_max_datagram_size();
-
-            std::basic_string<uint8_t> big{}, medium{}, small{};
-            uint8_t v{0};
-
-            while (big.size() < max_size * 2 / 3)
-                big += v++;
-
-            while (medium.size() < max_size / 2 - 100)
-                medium += v++;
-
-            while (small.size() < 50)
-                small += v++;
-
-            TestHelper::enable_dgram_flip_flop(*conn_interface);
-
-            std::promise<void> pr;
-            std::future<void> ftr = pr.get_future();
-
-            client->call([&]() {
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{medium});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{small});
-
-                pr.set_value();
-            });
-
-            require_future(ftr);
-
-            for (auto& f : data_futures)
-                require_future(f);
-
-            REQUIRE(data_counter == (int)n);
-            auto flip_flop_count = TestHelper::disable_dgram_flip_flop(*conn_interface);
-            REQUIRE(flip_flop_count < (int)n);
+            // max_unsplit already includes a deduction of 3 for the datagram frame and 2 for the
+            // padding, so add those back in, then divide to see how many we can fit where each
+            // include that 5 byte overhead:
+            auto max_coalesced = (max_unsplit + 3 + 5) / (dgram_size + 5);
+            log::warning(log_cat, "max coal: {}", max_coalesced);
+            target_dgrams = n / max_coalesced;
         }
+        else
+        {
+            // Packet splitting.  Every packet requires one full datagram for the big piece, but
+            // then we also want to calculate how many small pieces we can coalesce together (with a
+            // cap at lookahead + 2).
+            auto packable = std::min<size_t>(
+                    2 + (lookahead < 0 ? datagram_queue::DEFAULT_SPLIT_LOOKAHEAD : lookahead),
+                    (max_unsplit + 3 + 5) / (dgram_size - max_unsplit + 5));
+            log::warning(log_cat, "packable: {}", packable);
+            target_dgrams = n + (n + packable - 1) / packable;
+        }
+
+        std::basic_string<uint8_t> big{};
+        uint8_t v{0};
+
+        while (big.size() < dgram_size)
+            big += v++;
+
+        TestHelper::enable_dgram_counter(*conn_interface);
+
+        std::promise<void> pr;
+
+        client->call([&]() {
+            for (int i = 0; i < n; i++)
+                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
+
+            pr.set_value();
+        });
+
+        require_future(pr.get_future());
+        require_future(data_promise.get_future());
+
+        REQUIRE(data_counter.load() == n);
+        auto send_packet_count = TestHelper::disable_dgram_counter(*conn_interface);
+        REQUIRE(send_packet_count >= target_dgrams);
+        REQUIRE(send_packet_count <= target_dgrams + 5 /*fudge factor for other quic packet (ACKs, etc.)*/);
     }
 }  // namespace oxen::quic::test

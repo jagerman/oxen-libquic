@@ -287,7 +287,7 @@ namespace oxen::quic
             }
         };
 
-        prepared_datagram pending_datagram(bool) override;
+        std::optional<prepared_datagram> pending_datagram(bool) override;
 
       public:
         /// Sends data in chunks: `next_chunk` is some callable (e.g. lambda) that will be called
