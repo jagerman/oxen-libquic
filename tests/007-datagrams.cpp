@@ -149,135 +149,129 @@ namespace oxen::quic::test
 
     TEST_CASE("007 - Datagram support: Execute, No Splitting Policy", "[007][datagrams][execute][nosplit]")
     {
-        SECTION("Simple datagram transmission")
-        {
-            auto client_established = callback_waiter{[](connection_interface&) {}};
+        auto client_established = callback_waiter{[](connection_interface&) {}};
 
-            Network test_net{};
-            constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
+        Network test_net{};
+        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
 
-            std::promise<void> data_promise;
-            std::future<void> data_future = data_promise.get_future();
+        std::promise<void> data_promise;
+        std::future<void> data_future = data_promise.get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
-                log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
+        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
-                data_promise.set_value();
-            };
-            std::atomic<bool> bad_call = false;
-            dgram_data_callback overridden_dgram_cb = [&](dgram_interface&, bstring) {
-                log::critical(test_cat, "Wrong dgram callback invoked!");
-                bad_call = true;
-            };
+            data_promise.set_value();
+        };
+        std::atomic<bool> bad_call = false;
+        dgram_data_callback overridden_dgram_cb = [&](dgram_interface&, bstring) {
+            log::critical(test_cat, "Wrong dgram callback invoked!");
+            bad_call = true;
+        };
 
-            opt::enable_datagrams default_gram{};
+        opt::enable_datagrams default_gram{};
 
-            Address server_local{};
-            Address client_local{};
+        Address server_local{};
+        Address client_local{};
 
-            auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-            auto server_endpoint = test_net.endpoint(server_local, default_gram, overridden_dgram_cb);
-            REQUIRE_NOTHROW(server_endpoint->listen(server_tls, recv_dgram_cb));
+        auto server_endpoint = test_net.endpoint(server_local, default_gram, overridden_dgram_cb);
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls, recv_dgram_cb));
 
-            RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, default_gram, client_established);
-            auto conn_interface = client->connect(client_remote, client_tls);
+        auto client = test_net.endpoint(client_local, default_gram, client_established);
+        auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(client_established.wait());
-            REQUIRE(server_endpoint->datagrams_enabled());
-            REQUIRE(client->datagrams_enabled());
+        REQUIRE(client_established.wait());
+        REQUIRE(server_endpoint->datagrams_enabled());
+        REQUIRE(client->datagrams_enabled());
 
-            REQUIRE(conn_interface->datagrams_enabled());
-            REQUIRE_FALSE(conn_interface->packet_splitting_enabled());
+        REQUIRE(conn_interface->datagrams_enabled());
+        REQUIRE_FALSE(conn_interface->packet_splitting_enabled());
 
-            std::this_thread::sleep_for(5ms);
-            REQUIRE(conn_interface->get_max_datagram_size() < MAX_GREEDY_PMTUD_UDP_PAYLOAD);
+        std::this_thread::sleep_for(5ms);
+        REQUIRE(conn_interface->get_max_datagram_size() < MAX_GREEDY_PMTUD_UDP_PAYLOAD);
 
-            conn_interface->send_datagram(msg);
+        conn_interface->send_datagram(msg);
 
-            require_future(data_future);
-            CHECK_FALSE(bad_call);
-        }
+        require_future(data_future);
+        CHECK_FALSE(bad_call);
     }
 
     TEST_CASE("007 - Datagram support: Execute, Packet Splitting Enabled", "[007][datagrams][execute][split][simple]")
     {
-        SECTION("Simple datagram transmission")
-        {
-            auto client_established = callback_waiter{[](connection_interface&) {}};
+        auto client_established = callback_waiter{[](connection_interface&) {}};
 
-            Network test_net{};
+        Network test_net{};
 
-            std::atomic<int> data_counter{0};
+        std::atomic<int> data_counter{0};
 
-            std::promise<void> data_promise;
-            std::future<void> data_future = data_promise.get_future();
+        std::promise<void> data_promise;
+        std::future<void> data_future = data_promise.get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
-                log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
-                ++data_counter;
-                if (data == "final"_bs)
-                    data_promise.set_value();
-            };
+        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
+            log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
+            ++data_counter;
+            if (data == "final"_bs)
+                data_promise.set_value();
+        };
 
-            opt::enable_datagrams split_dgram{Splitting::ACTIVE};
+        opt::enable_datagrams split_dgram{Splitting::ACTIVE};
 
-            Address server_local{};
-            Address client_local{};
+        Address server_local{};
+        Address client_local{};
 
-            auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-            auto server_endpoint = test_net.endpoint(server_local, split_dgram);
-            REQUIRE_NOTHROW(server_endpoint->listen(server_tls, recv_dgram_cb));
+        auto server_endpoint = test_net.endpoint(server_local, split_dgram);
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls, recv_dgram_cb));
 
-            RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram, client_established);
-            auto conn_interface = client->connect(client_remote, client_tls);
+        auto client = test_net.endpoint(client_local, split_dgram, client_established);
+        auto conn_interface = client->connect(client_remote, client_tls);
 
-            auto init_max_size = conn_interface->max_datagram_size_changed();
-            REQUIRE(init_max_size);
-            CHECK(*init_max_size == 0);
-            CHECK_FALSE(conn_interface->max_datagram_size_changed());
+        auto init_max_size = conn_interface->max_datagram_size_changed();
+        REQUIRE(init_max_size);
+        CHECK(*init_max_size == 0);
+        CHECK_FALSE(conn_interface->max_datagram_size_changed());
 
-            REQUIRE(client_established.wait());
-            REQUIRE(server_endpoint->datagrams_enabled());
-            REQUIRE(client->datagrams_enabled());
+        REQUIRE(client_established.wait());
+        REQUIRE(server_endpoint->datagrams_enabled());
+        REQUIRE(client->datagrams_enabled());
 
-            REQUIRE(conn_interface->datagrams_enabled());
-            REQUIRE(conn_interface->packet_splitting_enabled());
+        REQUIRE(conn_interface->datagrams_enabled());
+        REQUIRE(conn_interface->packet_splitting_enabled());
 
-            std::this_thread::sleep_for(5ms);
-            auto max_size = conn_interface->get_max_datagram_size();
+        std::this_thread::sleep_for(5ms);
+        auto max_size = conn_interface->get_max_datagram_size();
 
-            std::string good_msg{}, oversize_msg{};
-            char v = 0;
+        std::string good_msg{}, oversize_msg{};
+        char v = 0;
 
-            while (good_msg.size() < max_size)
-                good_msg += v++;
-            v = 0;
-            while (oversize_msg.size() < max_size * 2)
-                oversize_msg += v++;
+        while (good_msg.size() < max_size)
+            good_msg += v++;
+        v = 0;
+        while (oversize_msg.size() < max_size * 2)
+            oversize_msg += v++;
 
-            auto max_size2 = conn_interface->max_datagram_size_changed();
-            REQUIRE(max_size2);
-            CHECK(*max_size2 == max_size);
-            CHECK(*max_size2 > init_max_size);
+        auto max_size2 = conn_interface->max_datagram_size_changed();
+        REQUIRE(max_size2);
+        CHECK(*max_size2 == max_size);
+        CHECK(*max_size2 > init_max_size);
 
-            CHECK_FALSE(conn_interface->max_datagram_size_changed());
+        CHECK_FALSE(conn_interface->max_datagram_size_changed());
 
-            CHECK(good_msg.size() <= max_size2);
-            CHECK(oversize_msg.size() > max_size2);
+        CHECK(good_msg.size() <= max_size2);
+        CHECK(oversize_msg.size() > max_size2);
 
-            conn_interface->send_datagram(std::move(good_msg));
-            conn_interface->send_datagram(std::move(oversize_msg));
-            conn_interface->send_datagram("final"s);
+        conn_interface->send_datagram(std::move(good_msg));
+        conn_interface->send_datagram(std::move(oversize_msg));
+        conn_interface->send_datagram("final"s);
 
-            require_future(data_future);
-            CHECK(data_counter == 2);
-        }
+        require_future(data_future);
+        CHECK(data_counter == 2);
     }
 
     TEST_CASE(
@@ -286,82 +280,79 @@ namespace oxen::quic::test
         if (disable_rotating_buffer)
             SKIP("Rotating buffer testing not enabled for this test iteration!");
 
-        SECTION("Simple oversized datagram transmission - Clear first row")
-        {
-            log::trace(test_cat, "Beginning the unit test from hell");
-            auto client_established = callback_waiter{[](connection_interface&) {}};
+        log::trace(test_cat, "Beginning the unit test from hell");
+        auto client_established = callback_waiter{[](connection_interface&) {}};
 
-            Network test_net{};
+        Network test_net{};
 
-            std::atomic<int> index{0};
-            std::atomic<int> data_counter{0};
-            int bufsize = 64, n = (bufsize / 2) + 1;
+        std::atomic<int> index{0};
+        std::atomic<int> data_counter{0};
+        int bufsize = 64, n = (bufsize / 2) + 1;
 
-            std::vector<std::promise<void>> data_promises{(size_t)n};
-            std::vector<std::future<void>> data_futures{(size_t)n};
+        std::vector<std::promise<void>> data_promises{(size_t)n};
+        std::vector<std::future<void>> data_futures{(size_t)n};
 
-            for (int i = 0; i < n; ++i)
-                data_futures[i] = data_promises[i].get_future();
+        for (int i = 0; i < n; ++i)
+            data_futures[i] = data_promises[i].get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
-                log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
+        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
-                try
-                {
-                    data_counter += 1;
-                    data_promises.at(index).set_value();
-                    index += 1;
-                }
-                catch (std::exception& e)
-                {
-                    throw std::runtime_error(e.what());
-                }
-            };
+            try
+            {
+                data_counter += 1;
+                data_promises.at(index).set_value();
+                index += 1;
+            }
+            catch (std::exception& e)
+            {
+                throw std::runtime_error(e.what());
+            }
+        };
 
-            opt::enable_datagrams split_dgram{Splitting::ACTIVE, bufsize};
+        opt::enable_datagrams split_dgram{Splitting::ACTIVE, bufsize};
 
-            Address server_local{};
-            Address client_local{};
+        Address server_local{};
+        Address client_local{};
 
-            auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-            auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
-            REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
+        auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
-            RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram, client_established);
-            auto conn_interface = client->connect(client_remote, client_tls);
+        auto client = test_net.endpoint(client_local, split_dgram, client_established);
+        auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(client_established.wait());
+        REQUIRE(client_established.wait());
 
-            REQUIRE(server_endpoint->datagrams_enabled());
-            REQUIRE(client->datagrams_enabled());
+        REQUIRE(server_endpoint->datagrams_enabled());
+        REQUIRE(client->datagrams_enabled());
 
-            REQUIRE(conn_interface->datagrams_enabled());
-            REQUIRE(conn_interface->packet_splitting_enabled());
+        REQUIRE(conn_interface->datagrams_enabled());
+        REQUIRE(conn_interface->packet_splitting_enabled());
 
-            std::this_thread::sleep_for(5ms);
-            auto max_size = conn_interface->get_max_datagram_size();
+        std::this_thread::sleep_for(5ms);
+        auto max_size = conn_interface->get_max_datagram_size();
 
-            std::basic_string<uint8_t> good_msg{};
-            uint8_t v{0};
+        std::basic_string<uint8_t> good_msg{};
+        uint8_t v{0};
 
-            while (good_msg.size() < max_size)
-                good_msg += v++;
+        while (good_msg.size() < max_size)
+            good_msg += v++;
 
-            for (int i = 0; i < n; ++i)
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{good_msg});
+        for (int i = 0; i < n; ++i)
+            conn_interface->send_datagram(std::basic_string_view<uint8_t>{good_msg});
 
-            for (auto& f : data_futures)
-                require_future(f);
+        for (auto& f : data_futures)
+            require_future(f);
 
-            REQUIRE(data_counter == int(n));
+        REQUIRE(data_counter == int(n));
 
-            auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
+        auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
 
-            REQUIRE(server_ci->last_cleared() == 0);
-        }
+        REQUIRE(server_ci->last_cleared() == 0);
     }
 
     TEST_CASE(
@@ -370,167 +361,162 @@ namespace oxen::quic::test
         if (disable_rotating_buffer)
             SKIP("Rotating buffer testing not enabled for this test iteration!");
 
-        SECTION("Simple datagram transmission - mixed sizes")
-        {
-            log::trace(test_cat, "Beginning the unit test from hell");
-            auto client_established = callback_waiter{[](connection_interface&) {}};
+        log::trace(test_cat, "Beginning the unit test from hell");
+        auto client_established = callback_waiter{[](connection_interface&) {}};
 
-            Network test_net{};
+        Network test_net{};
 
-            std::atomic<int> index{0};
-            std::atomic<int> data_counter{0};
-            size_t n = 5;
+        std::atomic<int> index{0};
+        std::atomic<int> data_counter{0};
+        size_t n = 5;
 
-            std::vector<std::promise<void>> data_promises{n};
-            std::vector<std::future<void>> data_futures{n};
+        std::vector<std::promise<void>> data_promises{n};
+        std::vector<std::future<void>> data_futures{n};
 
-            for (size_t i = 0; i < n; ++i)
-                data_futures[i] = data_promises[i].get_future();
+        for (size_t i = 0; i < n; ++i)
+            data_futures[i] = data_promises[i].get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
-                log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
+        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring) {
+            log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
-                try
-                {
-                    data_counter += 1;
-                    data_promises.at(index).set_value();
-                    index += 1;
-                }
-                catch (std::exception& e)
-                {
-                    throw std::runtime_error(e.what());
-                }
-            };
+            try
+            {
+                data_counter += 1;
+                data_promises.at(index).set_value();
+                index += 1;
+            }
+            catch (std::exception& e)
+            {
+                throw std::runtime_error(e.what());
+            }
+        };
 
-            opt::enable_datagrams split_dgram{Splitting::ACTIVE};
+        opt::enable_datagrams split_dgram{Splitting::ACTIVE};
 
-            Address server_local{};
-            Address client_local{};
+        Address server_local{};
+        Address client_local{};
 
-            auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-            auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
-            REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
+        auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
-            RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-            auto client = test_net.endpoint(client_local, split_dgram, client_established);
-            auto conn_interface = client->connect(client_remote, client_tls);
+        auto client = test_net.endpoint(client_local, split_dgram, client_established);
+        auto conn_interface = client->connect(client_remote, client_tls);
 
-            REQUIRE(client_established.wait());
+        REQUIRE(client_established.wait());
 
-            REQUIRE(server_endpoint->datagrams_enabled());
-            REQUIRE(client->datagrams_enabled());
+        REQUIRE(server_endpoint->datagrams_enabled());
+        REQUIRE(client->datagrams_enabled());
 
-            REQUIRE(conn_interface->datagrams_enabled());
-            REQUIRE(conn_interface->packet_splitting_enabled());
+        REQUIRE(conn_interface->datagrams_enabled());
+        REQUIRE(conn_interface->packet_splitting_enabled());
 
-            std::this_thread::sleep_for(5ms);
-            auto max_size = conn_interface->get_max_datagram_size();
+        std::this_thread::sleep_for(5ms);
+        auto max_size = conn_interface->get_max_datagram_size();
 
-            std::basic_string<uint8_t> big_msg{}, small_msg{};
-            uint8_t v{0};
+        std::basic_string<uint8_t> big_msg{}, small_msg{};
+        uint8_t v{0};
 
-            while (big_msg.size() < max_size)
-                big_msg += v++;
+        while (big_msg.size() < max_size)
+            big_msg += v++;
 
-            while (small_msg.size() < 500)
-                small_msg += v++;
+        while (small_msg.size() < 500)
+            small_msg += v++;
 
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{small_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
-            conn_interface->send_datagram(std::basic_string_view<uint8_t>{small_msg});
+        conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
+        conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
+        conn_interface->send_datagram(std::basic_string_view<uint8_t>{small_msg});
+        conn_interface->send_datagram(std::basic_string_view<uint8_t>{big_msg});
+        conn_interface->send_datagram(std::basic_string_view<uint8_t>{small_msg});
 
-            for (auto& f : data_futures)
-                require_future(f);
+        for (auto& f : data_futures)
+            require_future(f);
 
-            REQUIRE(data_counter == int(n));
-        }
+        REQUIRE(data_counter == int(n));
     }
 
     TEST_CASE("007 - Datagram support: Rotating Buffer, Induced Loss", "[007][datagrams][execute][split][rotating][loss]")
     {
         if (disable_rotating_buffer)
             SKIP("Rotating buffer testing not enabled for this test iteration!");
-        SECTION("Simple datagram transmission - induced loss")
-        {
-            log::trace(test_cat, "Beginning the unit test from hell");
-            auto client_established = callback_waiter{[](connection_interface&) {}};
 
-            Network test_net{};
+        log::trace(test_cat, "Beginning the unit test from hell");
+        auto client_established = callback_waiter{[](connection_interface&) {}};
 
-            int bufsize = 64, quarter = bufsize / 4;
+        Network test_net{};
 
-            std::atomic<int> index{0}, counter{0};
+        int bufsize = 64, quarter = bufsize / 4;
 
-            std::vector<std::promise<void>> data_promises{(size_t)bufsize};
-            std::vector<std::future<void>> data_futures{(size_t)bufsize};
+        std::atomic<int> index{0}, counter{0};
 
-            for (int i = 0; i < bufsize; ++i)
-                data_futures[i] = data_promises[i].get_future();
+        std::vector<std::promise<void>> data_promises{(size_t)bufsize};
+        std::vector<std::future<void>> data_futures{(size_t)bufsize};
 
-            bstring received{};
+        for (int i = 0; i < bufsize; ++i)
+            data_futures[i] = data_promises[i].get_future();
 
-            dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
-                log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
+        bstring received{};
 
-                counter += 1;
-                received.swap(data);
+        dgram_data_callback recv_dgram_cb = [&](dgram_interface&, bstring data) {
+            log::debug(test_cat, "Calling endpoint receive datagram callback... data received...");
 
-                try
-                {
-                    data_promises.at(index).set_value();
-                    index += 1;
-                }
-                catch (std::exception& e)
-                {
-                    throw std::runtime_error(e.what());
-                }
-            };
+            counter += 1;
+            received.swap(data);
 
-            opt::enable_datagrams split_dgram{Splitting::ACTIVE, (int)bufsize};
+            try
+            {
+                data_promises.at(index).set_value();
+                index += 1;
+            }
+            catch (std::exception& e)
+            {
+                throw std::runtime_error(e.what());
+            }
+        };
 
-            Address server_local{};
-            Address client_local{};
+        opt::enable_datagrams split_dgram{Splitting::ACTIVE, (int)bufsize};
 
-            auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+        Address server_local{};
+        Address client_local{};
 
-            auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
-            REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-            RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+        auto server_endpoint = test_net.endpoint(server_local, split_dgram, recv_dgram_cb);
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
-            auto client = test_net.endpoint(client_local, split_dgram, client_established);
-            auto conn_interface = client->connect(client_remote, client_tls);
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-            REQUIRE(client_established.wait());
+        auto client = test_net.endpoint(client_local, split_dgram, client_established);
+        auto conn_interface = client->connect(client_remote, client_tls);
 
-            auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
+        REQUIRE(client_established.wait());
 
-            bstring dropped_msg(1500, std::byte{'-'});
-            bstring successful_msg(1500, std::byte{'+'});
+        auto server_ci = server_endpoint->get_all_conns(Direction::INBOUND).front();
 
-            TestHelper::enable_dgram_drop(static_cast<Connection&>(*server_ci));
+        bstring dropped_msg(1500, std::byte{'-'});
+        bstring successful_msg(1500, std::byte{'+'});
 
-            for (int i = 0; i < quarter; ++i)
-                conn_interface->send_datagram(bstring_view{dropped_msg});
+        TestHelper::enable_dgram_drop(static_cast<Connection&>(*server_ci));
 
-            while (TestHelper::get_dgram_debug_counter(*server_ci) < quarter)
-                std::this_thread::sleep_for(10ms);
+        for (int i = 0; i < quarter; ++i)
+            conn_interface->send_datagram(bstring_view{dropped_msg});
 
-            TestHelper::disable_dgram_drop(*server_ci);
+        while (TestHelper::get_dgram_debug_counter(*server_ci) < quarter)
+            std::this_thread::sleep_for(10ms);
 
-            for (int i = 0; i < bufsize; ++i)
-                conn_interface->send_datagram(bstring_view{successful_msg});
+        TestHelper::disable_dgram_drop(*server_ci);
 
-            for (auto& f : data_futures)
-                require_future(f);
+        for (int i = 0; i < bufsize; ++i)
+            conn_interface->send_datagram(bstring_view{successful_msg});
 
-            REQUIRE(counter == bufsize);
-            REQUIRE(received == successful_msg);
-        }
+        for (auto& f : data_futures)
+            require_future(f);
+
+        REQUIRE(counter == bufsize);
+        REQUIRE(received == successful_msg);
     }
 
     /*
