@@ -1,5 +1,10 @@
 #pragma once
 
+#include "connection_ids.hpp"
+#include "context.hpp"
+#include "format.hpp"
+#include "types.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -10,11 +15,6 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_set>
-
-#include "connection_ids.hpp"
-#include "context.hpp"
-#include "format.hpp"
-#include "types.hpp"
 
 namespace oxen::quic
 {
@@ -34,7 +34,7 @@ namespace oxen::quic
         virtual std::shared_ptr<Stream> get_stream_impl(int64_t id) = 0;
 
       public:
-        virtual ustring_view selected_alpn() const = 0;
+        virtual std::string_view selected_alpn() const = 0;
 
         /// Queues an incoming stream of the given StreamT type, forwarding the given arguments to
         /// the StreamT constructor.  The stream will be given the next unseen incoming connection
@@ -119,15 +119,15 @@ namespace oxen::quic
             requires(!std::same_as<CharType, std::byte>)
         void send_datagram(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
         {
-            send_datagram(convert_sv<std::byte>(data), std::move(keep_alive));
+            send_datagram(str_to_bspan(data), std::move(keep_alive));
         }
 
         template <oxenc::basic_char Char>
         void send_datagram(std::vector<Char>&& buf)
         {
             auto keep_alive = std::make_shared<std::vector<Char>>(std::move(buf));
-            std::basic_string_view<Char> view{keep_alive->data(), keep_alive->size()};
-            send_datagram(view, std::move(keep_alive));
+            auto bsp = vec_to_span<std::byte>(*keep_alive);
+            send_datagram(bsp, std::move(keep_alive));
         }
 
         template <oxenc::basic_char CharType>
@@ -135,10 +135,16 @@ namespace oxen::quic
         {
             auto keep_alive = std::make_shared<std::basic_string<CharType>>(std::move(data));
             std::basic_string_view<CharType> view{*keep_alive};
-            send_datagram(view, std::move(keep_alive));
+            send_datagram(str_to_bspan(view), std::move(keep_alive));
         }
 
-        virtual void send_datagram(bstring_view data, std::shared_ptr<void> keep_alive = nullptr) = 0;
+        template <oxenc::basic_char CharType>
+        void send_datagram(std::span<const CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        {
+            send_datagram(span_to_span<std::byte>(data), std::move(keep_alive));
+        }
+
+        virtual void send_datagram(bspan data, std::shared_ptr<void> keep_alive = nullptr) = 0;
 
         virtual Endpoint& endpoint() = 0;
         virtual const Endpoint& endpoint() const = 0;
@@ -150,7 +156,7 @@ namespace oxen::quic
         virtual const ConnectionID& reference_id() const = 0;
         virtual bool is_validated() const = 0;
         virtual Direction direction() const = 0;
-        virtual ustring_view remote_key() const = 0;
+        virtual uspan remote_key() const = 0;
         virtual bool is_inbound() const = 0;
         virtual bool is_outbound() const = 0;
         virtual std::string direction_str() = 0;
@@ -308,9 +314,9 @@ namespace oxen::quic
                 const quic_cid& dcid,
                 const Path& path,
                 std::shared_ptr<IOContext> ctx,
-                const std::vector<ustring>& alpns,
+                std::span<const std::string> alpns,
                 std::chrono::nanoseconds default_handshake_timeout,
-                std::optional<ustring> remote_pk = std::nullopt,
+                std::optional<std::vector<unsigned char>> remote_pk = std::nullopt,
                 ngtcp2_pkt_hd* hdr = nullptr,
                 std::optional<ngtcp2_token_type> token_type = std::nullopt,
                 ngtcp2_cid* ocid = nullptr);
@@ -320,7 +326,7 @@ namespace oxen::quic
         TLSSession* get_session() const { return tls_session.get(); }
         TLSCreds* get_creds() const { return tls_creds.get(); }
 
-        ustring_view remote_key() const override;
+        uspan remote_key() const override;
 
         Direction direction() const override { return dir; }
 
@@ -345,7 +351,7 @@ namespace oxen::quic
         Endpoint& endpoint() override { return _endpoint; }
         const Endpoint& endpoint() const override { return _endpoint; }
 
-        ustring_view selected_alpn() const override;
+        std::string_view selected_alpn() const override;
 
         uint64_t get_streams_available_impl() const override;
         size_t get_max_datagram_piece();
@@ -369,7 +375,7 @@ namespace oxen::quic
         // public debug functions; to be removed with friend test fixture class
         int last_cleared() const override;
 
-        void send_datagram(bstring_view data, std::shared_ptr<void> keep_alive = nullptr) override;
+        void send_datagram(bspan data, std::shared_ptr<void> keep_alive = nullptr) override;
 
         void close_connection(uint64_t error_code = 0) override;
 
@@ -428,9 +434,9 @@ namespace oxen::quic
                 const quic_cid& dcid,
                 const Path& path,
                 std::shared_ptr<IOContext> ctx,
-                const std::vector<ustring>& alpns,
+                std::span<const std::string> alpns,
                 std::chrono::nanoseconds default_handshake_timeout,
-                std::optional<ustring> remote_pk = std::nullopt,
+                std::optional<std::vector<unsigned char>> remote_pk = std::nullopt,
                 ngtcp2_pkt_hd* hdr = nullptr,
                 std::optional<ngtcp2_token_type> token_type = std::nullopt,
                 ngtcp2_cid* ocid = nullptr);
@@ -462,7 +468,7 @@ namespace oxen::quic
         std::atomic<bool> _close_quietly{false};
         std::atomic<bool> _is_validated{false};
 
-        ustring remote_pubkey{};
+        std::vector<unsigned char> remote_pubkey{};
 
         void revert_early_streams();
 
@@ -547,12 +553,12 @@ namespace oxen::quic
         // these are public so ngtcp2 can access them from callbacks
         int stream_opened(int64_t id);
         int stream_ack(int64_t id, size_t size);
-        int stream_receive(int64_t id, bstring_view data, bool fin);
+        int stream_receive(int64_t id, bspan data, bool fin);
         void stream_execute_close(Stream& s, uint64_t app_code);
         void stream_closed(int64_t id, uint64_t app_code);
         void close_all_streams();
         void check_pending_streams(uint64_t available);
-        int recv_datagram(bstring_view data, bool fin);
+        int recv_datagram(bspan data, bool fin);
         int ack_datagram(uint64_t dgram_id);
         int recv_token(const uint8_t* token, size_t tokenlen);
 

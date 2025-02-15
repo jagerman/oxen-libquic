@@ -1,5 +1,12 @@
 #pragma once
 
+#include "connection_ids.hpp"
+#include "error.hpp"
+#include "iochannel.hpp"
+#include "opt.hpp"
+#include "types.hpp"
+#include "utils.hpp"
+
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -10,13 +17,6 @@
 #include <variant>
 #include <vector>
 
-#include "connection_ids.hpp"
-#include "error.hpp"
-#include "iochannel.hpp"
-#include "opt.hpp"
-#include "types.hpp"
-#include "utils.hpp"
-
 namespace oxen::quic
 {
     class Stream;
@@ -25,7 +25,7 @@ namespace oxen::quic
     struct quic_cid;
 
     // Stream callbacks
-    using stream_data_callback = std::function<void(Stream&, bstring_view)>;
+    using stream_data_callback = std::function<void(Stream&, bspan)>;
     using stream_close_callback = std::function<void(Stream&, uint64_t error_code)>;
     using stream_constructor_callback =
             std::function<std::shared_ptr<Stream>(Connection&, Endpoint&, std::optional<int64_t>)>;
@@ -113,7 +113,7 @@ namespace oxen::quic
         stream_close_callback close_callback;
 
       protected:
-        virtual void receive(bstring_view data)
+        virtual void receive(bspan data)
         {
             if (data_callback)
                 data_callback(*this, data);
@@ -130,7 +130,7 @@ namespace oxen::quic
         /// ain't not good enough isn't false.
         virtual void check_timeouts() {}
 
-        void send_impl(bstring_view data, std::shared_ptr<void> keep_alive = nullptr) override;
+        void send_impl(bspan data, std::shared_ptr<void> keep_alive = nullptr) override;
 
         stream_buffer user_buffers;
 
@@ -171,7 +171,7 @@ namespace oxen::quic
 
         void wrote(size_t bytes) override;
 
-        void append_buffer(bstring_view buffer, std::shared_ptr<void> keep_alive);
+        void append_buffer(bspan buffer, std::shared_ptr<void> keep_alive);
 
         void acknowledge(size_t bytes);
 
@@ -227,7 +227,7 @@ namespace oxen::quic
                 single_chunk(chunk_sender& cs, Container&& d) : _chunks{cs.shared_from_this()}, _data{std::move(d)} {}
                 ~single_chunk() { _chunks->queue_next_chunk(); }
 
-                bstring_view view() const
+                bspan view() const
                 {
                     if constexpr (is_pointer)
                     {

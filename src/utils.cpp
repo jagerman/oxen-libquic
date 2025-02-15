@@ -1,14 +1,14 @@
 #include "utils.hpp"
 
+#include "connection.hpp"
+#include "internal.hpp"
+
 #include <oxenc/endian.h>
 
 #include <atomic>
 #include <chrono>
 #include <stdexcept>
 #include <string>
-
-#include "connection.hpp"
-#include "internal.hpp"
 
 #ifdef _WIN32
 #include <windows.h>

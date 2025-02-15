@@ -9,20 +9,16 @@ extern "C"
 #endif
 }
 
-#include <oxenc/bt_producer.h>
-#include <oxenc/bt_serialize.h>
-
-#include <chrono>
-#include <cstddef>
-#include <list>
-#include <optional>
-
 #include "connection.hpp"
 #include "gnutls_crypto.hpp"
 #include "internal.hpp"
 #include "opt.hpp"
 #include "types.hpp"
 #include "utils.hpp"
+
+#include <cstddef>
+#include <list>
+#include <optional>
 
 namespace oxen::quic
 {
@@ -96,9 +92,9 @@ namespace oxen::quic
         return ConnectionID{++_next_rid};
     }
 
-    ustring Endpoint::make_static_secret()
+    std::vector<unsigned char> Endpoint::make_static_secret()
     {
-        ustring secret;
+        std::vector<unsigned char> secret;
         secret.resize(32);
         gnutls_rnd(gnutls_rnd_level_t::GNUTLS_RND_KEY, secret.data(), secret.size());
         return secret;
@@ -754,12 +750,12 @@ namespace oxen::quic
         send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0);
     }
 
-    void Endpoint::store_path_validation_token(Address remote, ustring token)
+    void Endpoint::store_path_validation_token(Address remote, std::vector<unsigned char> token)
     {
         path_validation_tokens.insert_or_assign(std::move(remote), std::move(token));
     }
 
-    std::optional<ustring> Endpoint::get_path_validation_token(const Address& remote)
+    std::optional<std::vector<unsigned char>> Endpoint::get_path_validation_token(const Address& remote)
     {
         if (auto itr = path_validation_tokens.find(remote); itr != path_validation_tokens.end())
             return itr->second;
@@ -933,7 +929,7 @@ namespace oxen::quic
 
         if (_manual_routing)
         {
-            return _manual_routing(path, bstring_view{buf, *bufsize}, n_pkts);
+            return _manual_routing(path, bspan{buf, *bufsize}, n_pkts);
         }
 
         if (!socket)

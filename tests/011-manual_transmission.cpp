@@ -1,9 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {
@@ -13,13 +8,13 @@ namespace oxen::quic::test
         auto server_established = callback_waiter{[](connection_interface&) {}};
 
         Network test_net{};
-        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::promise<bool> d_promise;
         std::future<bool> d_future = d_promise.get_future();
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view dat) {
-            REQUIRE(good_msg == dat);
+        stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promise.set_value(true);
         };
 
@@ -28,11 +23,11 @@ namespace oxen::quic::test
         Address server_local{};
         Address client_local{};
 
-        opt::manual_routing client_sender{[&](const Path& p, bstring_view d) {
+        opt::manual_routing client_sender{[&](const Path& p, bspan d) {
             server_endpoint->manually_receive_packet(Packet{p.invert(), d});
         }};
 
-        opt::manual_routing server_sender{[&](const Path& p, bstring_view d) {
+        opt::manual_routing server_sender{[&](const Path& p, bspan d) {
             client_endpoint->manually_receive_packet(Packet{p.invert(), d});
         }};
 
@@ -83,19 +78,21 @@ namespace oxen::quic::test
 
         opt::enable_datagrams enable_dgrams{};
 
-        dgram_data_callback vanilla_client_recv_dgram_cb = [&](dgram_interface&, bstring data) {
+        dgram_data_callback vanilla_client_recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte> data) {
             manual_client->manually_receive_packet(Packet{Path{manual_client_addr, manual_server_addr}, std::move(data)});
         };
 
-        dgram_data_callback vanilla_server_recv_dgram_cb = [&](dgram_interface&, bstring data) {
+        dgram_data_callback vanilla_server_recv_dgram_cb = [&](dgram_interface&, std::vector<std::byte> data) {
             manual_server->manually_receive_packet(Packet{Path{manual_server_addr, manual_client_addr}, std::move(data)});
         };
 
-        opt::manual_routing manual_client_sender{
-                [&](const Path&, bstring_view d) { vanilla_client_ci->send_datagram(bstring{d}); }};
+        opt::manual_routing manual_client_sender{[&](const Path&, bspan d) {
+            vanilla_client_ci->send_datagram(std::vector<std::byte>{d.begin(), d.end()});
+        }};
 
-        opt::manual_routing manual_server_sender{
-                [&](const Path&, bstring_view d) { vanilla_server_ci->send_datagram(bstring{d}); }};
+        opt::manual_routing manual_server_sender{[&](const Path&, bspan d) {
+            vanilla_server_ci->send_datagram(std::vector<std::byte>{d.begin(), d.end()});
+        }};
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 

@@ -1,8 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {
@@ -88,7 +84,7 @@ namespace oxen::quic::test
         Address server_local{};
         Address client_local{};
 
-        ustring secret;
+        std::vector<unsigned char> secret;
         secret.resize(32);
         gnutls_rnd(GNUTLS_RND_RANDOM, secret.data(), secret.size());
 
@@ -124,7 +120,7 @@ namespace oxen::quic::test
 
         // Send something down the dead path, which will make the client start sending retries on
         // the suddenly dead connection:
-        c_str->send("hello"_us);
+        c_str->send("hello"sv);
 
         log::info(test_cat, "Starting server with wrong static secret");
         net_server = std::make_unique<Network>();

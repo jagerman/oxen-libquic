@@ -1,11 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers.hpp>
-#include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {
@@ -14,14 +7,14 @@ namespace oxen::quic::test
     TEST_CASE("002 - Simple client to server transmission", "[002][simple][execute]")
     {
         Network test_net{};
-        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::promise<bool> d_promise;
         std::future<bool> d_future = d_promise.get_future();
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view dat) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promise.set_value(true);
         };
 
@@ -49,7 +42,7 @@ namespace oxen::quic::test
     TEST_CASE("002 - Simple client to server transmission", "[002][simple][bidirectional]")
     {
         Network test_net{};
-        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::vector<std::promise<void>> d_promises{2};
         std::vector<std::future<void>> d_futures{2};
@@ -59,9 +52,9 @@ namespace oxen::quic::test
 
         std::atomic<int> index = 0;
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view dat) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promises.at(index).set_value();
             index += 1;
         };
@@ -101,7 +94,7 @@ namespace oxen::quic::test
     TEST_CASE("002 - Simple client to server transmission", "[002][simple][2x2]")
     {
         Network test_net{};
-        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto good_msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::vector<std::promise<void>> d_promises{2};
         std::vector<std::future<void>> d_futures{2};
@@ -111,9 +104,9 @@ namespace oxen::quic::test
 
         std::atomic<int> index = 0;
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view dat) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Calling server stream data callback... data received...");
-            REQUIRE(good_msg == dat);
+            REQUIRE_THAT(dat, EqualsSpan(good_msg));
             d_promises.at(index).set_value();
             index += 1;
         };
@@ -150,8 +143,8 @@ namespace oxen::quic::test
     TEST_CASE("002 - Client to server transmission, larger string ownership", "[002][simple][larger][ownership]")
     {
         Network test_net{};
-        bstring good_msg;
-        good_msg.reserve(2600);
+        std::vector<std::byte> good_msg(2600);
+
         for (int i = 0; i < 100; i++)
             for (char c = 'a'; c <= 'z'; c++)
                 good_msg.push_back(static_cast<std::byte>(c));
@@ -161,18 +154,28 @@ namespace oxen::quic::test
         int good = 0, bad = 0;
         std::promise<void> done_receiving;
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view dat) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan dat) {
             log::debug(test_cat, "Server stream data callback -- data received (len {})", dat.size());
-            static bstring partial;
-            partial.append(dat);
+
+            static std::vector<std::byte> partial;
+            partial.insert(partial.end(), dat.begin(), dat.end());
+
             if (partial.size() < good_msg.size())
                 return;
+
             std::lock_guard lock{received_mut};
-            if (bstring_view{partial}.substr(0, good_msg.size()) == good_msg)
+
+            std::string_view partial_sv{reinterpret_cast<const char*>(partial.data()), good_msg.size()},
+                    msg_sv{reinterpret_cast<const char*>(good_msg.data()), good_msg.size()};
+
+            if (partial_sv == msg_sv)
                 good++;
             else
                 bad++;
-            partial = partial.substr(good_msg.size());
+
+            std::vector<std::byte> replace{std::next(partial.begin(), good_msg.size()), partial.end()};
+            partial = std::move(replace);
+
             if (good + bad >= tests)
                 done_receiving.set_value();
         };
@@ -192,33 +195,33 @@ namespace oxen::quic::test
         auto conn_to_a = server_endpoint_b->connect(server_remote_a, server_tls);
         auto stream_to_a = conn_to_a->open_stream();
 
-        SECTION("Sending bstring_view of long-lived buffer")
+        SECTION("Sending bspan of long-lived buffer")
         {
             for (int i = 0; i < tests; i++)
             {
                 // There is no ownership issue here: we're just viewing into our `good_msg` which we
                 // are keeping alive already for the duration of this test.
-                stream_to_a->send(bstring_view{good_msg});
+                stream_to_a->send(good_msg);
             }
         }
-        SECTION("Sending bstring buffer with transferred ownership")
+        SECTION("Sending std::vector<std::byte> buffer with transferred ownership")
         {
             for (int i = 0; i < tests; i++)
             {
                 // Deliberately construct a new temporary string here, and move it into `send()` to
                 // transfer ownership of it off to the stream to manage:
-                bstring copy{good_msg};
+                std::vector<std::byte> copy{good_msg};
                 stream_to_a->send(std::move(copy));
             }
         }
-        SECTION("Sending bstring_view buffer with managed keep-alive")
+        SECTION("Sending bspan buffer with managed keep-alive")
         {
             for (int i = 0; i < tests; i++)
             {
                 // Similar to the above, but keep the data alive via a manual shared_ptr keep-alive
                 // object.
-                auto ptr = std::make_shared<bstring>(good_msg);
-                stream_to_a->send(bstring_view{*ptr}, ptr);
+                auto ptr = std::make_shared<std::vector<std::byte>>(good_msg);
+                stream_to_a->send(bspan{*ptr}, ptr);
             }
         }
 
@@ -243,7 +246,7 @@ namespace oxen::quic::test
         {
             auto server_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
-                    log::info(test_cat, "Server bparser received: {}", msg.view());
+                    log::info(test_cat, "Server bparser received: {}", msg.span());
             }};
 
             stream_constructor_callback server_constructor = [&](Connection& c, Endpoint& e, std::optional<int64_t>) {
@@ -272,7 +275,7 @@ namespace oxen::quic::test
             auto server_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Server bparser received: {}", msg.view());
+                    log::info(test_cat, "Server bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -280,7 +283,7 @@ namespace oxen::quic::test
             auto client_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Client bparser received: {}", msg.view());
+                    log::info(test_cat, "Client bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -316,7 +319,7 @@ namespace oxen::quic::test
             auto server_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Server bparser received: {}", msg.view());
+                    log::info(test_cat, "Server bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -324,7 +327,7 @@ namespace oxen::quic::test
             auto client_bp_cb = callback_waiter{[&](message msg) {
                 if (msg)
                 {
-                    log::info(test_cat, "Client bparser received: {}", msg.view());
+                    log::info(test_cat, "Client bparser received: {}", msg.span());
                     msg.respond("test_response"s);
                 }
             }};
@@ -444,7 +447,7 @@ namespace oxen::quic::test
         auto server_handler = [&](message msg) {
             if (msg)
             {
-                log::info(test_cat, "Server bparser received: {}", msg.view());
+                log::info(test_cat, "Server bparser received: {}", msg.span());
                 if (msg.body() == req_msg)
                     msg.respond(res_msg);
                 else
@@ -457,7 +460,7 @@ namespace oxen::quic::test
             {
                 std::lock_guard lock{mut};
                 responses++;
-                log::debug(test_cat, "Client bparser received response {}: {}", responses, msg.view());
+                log::debug(test_cat, "Client bparser received response {}: {}", responses, msg.span());
                 if (msg.body() == res_msg)
                     good_responses++;
                 if (responses == num_requests)
@@ -535,7 +538,7 @@ namespace oxen::quic::test
                 if (msg)
                 {
                     ++responses;
-                    log::debug(test_cat, "Client bparser received response {}: {}", responses.load(), msg.view());
+                    log::debug(test_cat, "Client bparser received response {}: {}", responses.load(), msg.span());
                     if (msg.body() == res_msg)
                         ++good_responses;
                     if (responses == num_requests)
@@ -583,7 +586,7 @@ namespace oxen::quic::test
 
             auto client_reply_handler = [&](message msg) mutable {
                 if (msg)
-                    log::debug(test_cat, "Client bparser received response: {}", msg.view());
+                    log::debug(test_cat, "Client bparser received response: {}", msg.span());
                 else
                     log::debug(test_cat, "got back a failed message response");
             };

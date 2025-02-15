@@ -8,13 +8,9 @@
 #include <oxenc/hex.h>
 
 #include <CLI/Validators.hpp>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <future>
-#include <iterator>
 #include <limits>
-#include <oxen/quic.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
 
 #include "signal.h"
@@ -209,7 +205,7 @@ ping_stats run_client(
 
     log::info(test_cat, "Constructing endpoint on {}", client_local);
 
-    ustring ep_secret;
+    std::vector<unsigned char> ep_secret;
     ep_secret.resize(32);
     sha3_256(ep_secret.data(), seed_string, "libquic-test-static-secret");
 
@@ -318,7 +314,7 @@ ping_stats run_client(
     // Circular buffer so that we can calculate RTTs even if the responses arrive out of order.
     std::array<std::chrono::steady_clock::time_point, 100> sent_at;
 
-    auto dgram_recv = [&](dgram_interface&, bstring data) mutable {
+    auto dgram_recv = [&](dgram_interface&, std::vector<std::byte> data) mutable {
         if (data.size() != 4)
         {
             log::error(test_cat, "Invalid ping response datagram; expected 4 bytes, got {}", data.size());

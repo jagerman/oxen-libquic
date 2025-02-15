@@ -2,16 +2,6 @@
     Test server binary
 */
 
-#include <gnutls/gnutls.h>
-#include <oxenc/endian.h>
-#include <oxenc/hex.h>
-
-#include <CLI/Validators.hpp>
-#include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
 #include "utils.hpp"
 
 using namespace oxen::quic;
@@ -78,7 +68,7 @@ int main(int argc, char* argv[])
 
     std::map<ConnectionID, std::map<int64_t, stream_info>> csd;
 
-    stream_data_callback stream_data = [&](Stream& s, bstring_view data) {
+    stream_data_callback stream_data = [&](Stream& s, bspan data) {
         auto& sd = csd[s.reference_id];
 
         auto it = sd.find(s.stream_id());
@@ -91,7 +81,7 @@ int main(int argc, char* argv[])
             }
 
             auto size = oxenc::load_little_to_host<uint64_t>(data.data());
-            data.remove_prefix(sizeof(uint64_t));
+            data = data.subspan(sizeof(uint64_t));
 
             it = sd.emplace(s.stream_id(), size).first;
             log::warning(test_cat, "First data from new stream {}, expecting {}B!", s.stream_id(), size);
@@ -106,7 +96,7 @@ int main(int argc, char* argv[])
             log::critical(test_cat, "Received too much data ({}B > {}B)!", info.received, info.expected);
             if (!need_more)
                 return;
-            data.remove_suffix(info.received - info.expected);
+            data = data.first(data.size() - (info.received + info.expected));
         }
 
         if (!no_checksum)
@@ -126,8 +116,7 @@ int main(int argc, char* argv[])
 
         if (info.received >= info.expected)
         {
-            std::basic_string<unsigned char> final_hash;
-            final_hash.resize(33);
+            std::vector<unsigned char> final_hash(33);
             gnutls_hash_output(info.hasher, final_hash.data());
             final_hash[32] = info.checksum;
 

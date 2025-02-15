@@ -1,7 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-#include <thread>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {

@@ -5,6 +5,31 @@
 
 namespace oxen::quic
 {
+    namespace
+    {
+        constexpr std::string_view translate_cert_type(gnutls_certificate_type_t type)
+        {
+            switch (static_cast<int>(type))
+            {
+                case 1:
+                    return "<< X509 Cert >>"sv;
+                case 2:
+                    return "<< OpenPGP Cert >>"sv;
+                case 3:
+                    return "<< Raw PK Cert >>"sv;
+                case 0:
+                default:
+                    return "<< Unknown Type >>"sv;
+            }
+        }
+
+        std::string_view get_cert_type(gnutls_session_t session, gnutls_ctype_target_t type)
+        {
+            return translate_cert_type(gnutls_certificate_type_get2(session, type));
+        }
+
+    }  // namespace
+
     extern "C" int client_session_cb(
             gnutls_session_t session,
             unsigned int htype,
@@ -14,9 +39,9 @@ namespace oxen::quic
     {
         if (htype == GNUTLS_HANDSHAKE_NEW_SESSION_TICKET)
         {
-            auto* conn = get_connection_from_gnutls(session);
+            auto& conn = GNUTLSSession::conn_from(session);
 
-            RemoteAddress remote{conn->remote_key(), conn->remote()};
+            RemoteAddress remote{conn.remote_key(), conn.remote()};
             log::debug(log_cat, "received new tls session ticket from: {}", remote);
 
             gtls_datum data;
@@ -26,48 +51,31 @@ namespace oxen::quic
                 return rv;
             }
 
-            conn->get_creds()->store_session_ticket(*conn, remote, std::span<const unsigned char>{data.data(), data.size()});
+            conn.get_creds()->store_session_ticket(conn, remote, std::span<const unsigned char>{data.data(), data.size()});
         }
 
         return 0;
     }
 
-    static constexpr std::string_view translate_cert_type(gnutls_certificate_type_t type)
+    GNUTLSSession& GNUTLSSession::from(gnutls_session_t g_session)
     {
-        switch (static_cast<int>(type))
-        {
-            case 1:
-                return "<< X509 Cert >>"sv;
-            case 2:
-                return "<< OpenPGP Cert >>"sv;
-            case 3:
-                return "<< Raw PK Cert >>"sv;
-            case 0:
-            default:
-                return "<< Unknown Type >>"sv;
-        }
+        return from(conn_from(g_session));
     }
 
-    static std::string_view get_cert_type(gnutls_session_t session, gnutls_ctype_target_t type)
+    GNUTLSSession& GNUTLSSession::from(Connection& conn)
     {
-        return translate_cert_type(gnutls_certificate_type_get2(session, type));
+        auto* sess = conn.get_session();
+        assert(dynamic_cast<GNUTLSSession*>(sess));
+        return *static_cast<GNUTLSSession*>(sess);
     }
 
-    Connection* get_connection_from_gnutls(gnutls_session_t g_session)
+    Connection& GNUTLSSession::conn_from(gnutls_session_t g_session)
     {
         auto* conn_ref = static_cast<ngtcp2_crypto_conn_ref*>(gnutls_session_get_ptr(g_session));
         assert(conn_ref);
         auto* conn = static_cast<Connection*>(conn_ref->user_data);
         assert(conn);
-        return conn;
-    }
-
-    GNUTLSSession* get_session_from_gnutls(gnutls_session_t g_session)
-    {
-        auto* conn = get_connection_from_gnutls(g_session);
-        GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
-        assert(tls_session);
-        return tls_session;
+        return *conn;
     }
 
     GNUTLSSession::~GNUTLSSession()
@@ -80,7 +88,7 @@ namespace oxen::quic
             GNUTLSCreds& creds,
             const IOContext& /*ctx*/,
             Connection& c,
-            const std::vector<ustring>& alpns,
+            std::span<const std::string> alpns,
             std::optional<gtls_key> expected_key) :
             creds{creds}, _is_client{c.is_outbound()}, _expected_remote_key{std::move(expected_key)}
     {
@@ -188,7 +196,7 @@ namespace oxen::quic
 
             if (use_0rtt && _expected_remote_key)
             {
-                RemoteAddress remote{_expected_remote_key->view(), c.remote()};
+                RemoteAddress remote{*_expected_remote_key, c.remote()};
                 if (auto maybe_session = creds.extract_session_data(remote))
                 {
                     auto& [tls_ticket, quic_tp] = *maybe_session;
@@ -231,34 +239,29 @@ namespace oxen::quic
             }
         }
 
-        if (alpns.size())
+        std::string def_alpn;
+        if (alpns.empty())
         {
-            std::vector<gnutls_datum_t> allowed_alpns;
-            for (auto& s : alpns)
-            {
-                log::trace(
-                        log_cat,
-                        "GNUTLS adding \"{}\" to {} ALPNs",
-                        to_sv(ustring_view{s.data(), s.size()}),
-                        direction_string);
-                allowed_alpns.emplace_back(
-                        gnutls_datum_t{const_cast<unsigned char*>(s.data()), static_cast<unsigned int>(s.size())});
-            }
-
-            if (auto rv = gnutls_alpn_set_protocols(session, &allowed_alpns[0], allowed_alpns.size(), GNUTLS_ALPN_MANDATORY);
-                rv < 0)
-            {
-                log::error(log_cat, "gnutls_alpn_set_protocols failed: {}", gnutls_strerror(rv));
-                throw std::runtime_error("gnutls_alpn_set_protocols failed");
-            }
+            def_alpn = default_alpn_str;
+            alpns = {&def_alpn, 1};
         }
-        else  // set default, mandatory ALPN string
+        std::vector<gnutls_datum_t> allowed_alpns;
+        for (auto& s : alpns)
         {
-            if (auto rv = gnutls_alpn_set_protocols(session, &GNUTLS_DEFAULT_ALPN, 1, GNUTLS_ALPN_MANDATORY); rv < 0)
-            {
-                log::error(log_cat, "gnutls_alpn_set_protocols failed: {}", gnutls_strerror(rv));
-                throw std::runtime_error("gnutls_alpn_set_protocols failed");
-            }
+            log::trace(
+                    log_cat,
+                    "GNUTLS adding \"{}\" to {} ALPNs",
+                    detail::to_span<char>(s.data(), s.size()),
+                    direction_string);
+            allowed_alpns.emplace_back(gnutls_datum_t{
+                    reinterpret_cast<unsigned char*>(const_cast<char*>(s.data())), static_cast<unsigned int>(s.size())});
+        }
+
+        if (auto rv = gnutls_alpn_set_protocols(session, &allowed_alpns[0], allowed_alpns.size(), GNUTLS_ALPN_MANDATORY);
+            rv < 0)
+        {
+            log::error(log_cat, "gnutls_alpn_set_protocols failed: {}", gnutls_strerror(rv));
+            throw std::runtime_error("gnutls_alpn_set_protocols failed");
         }
     }
 
@@ -275,7 +278,7 @@ namespace oxen::quic
 
         if (auto rv = gnutls_alpn_get_selected_protocol(session, &_alpn); rv < 0)
         {
-            auto err = fmt::format("{} called, but ALPN negotiation incomplete.", __PRETTY_FUNCTION__);
+            auto err = "{} called, but ALPN negotiation incomplete."_format(__PRETTY_FUNCTION__);
             log::error(log_cat, "{}", err);
             throw std::logic_error(err);
         }
@@ -392,7 +395,7 @@ namespace oxen::quic
             // provided a certificate and is only called by the server, we can assume the following returns:
             //      true: the certificate was verified, and the connection is marked as validated
             //      false: the certificate was not verified, and the connection is rejected
-            success = (creds.key_verify) ? creds.key_verify(_remote_key.view(), selected_alpn()) : true;
+            success = (creds.key_verify) ? creds.key_verify(_remote_key, selected_alpn()) : true;
 
             return success;
         }

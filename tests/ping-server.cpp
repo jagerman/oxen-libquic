@@ -4,13 +4,10 @@
 
 #include <gnutls/gnutls.h>
 #include <oxenc/endian.h>
-#include <oxenc/hex.h>
 
 #include <CLI/Validators.hpp>
-#include <oxen/quic.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
 #include <random>
-#include <thread>
 
 #include "utils.hpp"
 
@@ -85,7 +82,7 @@ int main(int argc, char* argv[])
     auto flake = [rng = std::mt19937_64{std::random_device{}()},
                   flake = std::bernoulli_distribution{flakiness},
                   &flakiness]() mutable -> bool { return flakiness > 0 ? flake(rng) : false; };
-    auto dgram_recv = [&](dgram_interface& d, bstring_view in) {
+    auto dgram_recv = [&](dgram_interface& d, std::vector<std::byte> in) {
         if (in.size() != 4)
         {
             log::error(test_cat, "Received invalid ping datagram of size {} (expected 4 bytes); ignoring", in.size());
@@ -97,11 +94,11 @@ int main(int argc, char* argv[])
         else
         {
             log::debug(test_cat, "received ping {}, reflecting it", ping_num);
-            d.reply(bstring{in});
+            d.reply(std::move(in));
         }
     };
 
-    ustring ep_secret;
+    std::vector<unsigned char> ep_secret;
     ep_secret.resize(32);
     sha3_256(ep_secret.data(), seed_string, "libquic-test-static-secret");
 

@@ -1,17 +1,25 @@
 #pragma once
 
+#include "address.hpp"
+#include "connection_ids.hpp"
+#include "crypto.hpp"
+#include "types.hpp"
+
 #include <oxenc/base64.h>
 #include <oxenc/hex.h>
+
+extern "C"
+{
+#include <ngtcp2/ngtcp2_crypto_gnutls.h>
+
+#include <gnutls/abstract.h>
+#include <gnutls/crypto.h>
+}
 
 #include <array>
 #include <chrono>
 #include <optional>
 #include <variant>
-
-#include "address.hpp"
-#include "connection_ids.hpp"
-#include "crypto.hpp"
-#include "types.hpp"
 
 namespace oxen::quic
 {
@@ -93,7 +101,7 @@ namespace oxen::quic
                 throw std::bad_alloc{};
         }
 
-        ustring_view view() const { return {d.data, d.size}; }
+        std::span<unsigned char> span() const { return {d.data, d.size}; }
 
         const unsigned char* data() const { return d.data; }
         unsigned char* data() { return d.data; }
@@ -125,7 +133,7 @@ namespace oxen::quic
         gtls_key() = default;
         gtls_key(const unsigned char* data, size_t size) { write(data, size); }
         explicit gtls_key(std::string_view data) : gtls_key{convert_sv<unsigned char>(data)} {}
-        explicit gtls_key(ustring_view data) : gtls_key{data.data(), data.size()} {}
+        explicit gtls_key(std::span<const unsigned char> data) : gtls_key{data.data(), data.size()} {}
 
         //  Writes to the internal buffer holding the gnutls key
         void write(const unsigned char* buf, size_t size)
@@ -135,15 +143,10 @@ namespace oxen::quic
 
             std::memcpy(data(), buf, size);
         }
-
-        ustring_view view() const { return {data(), size()}; }
     };
 
     // key: remote key to verify, alpn: negotiated alpn's
-    using key_verify_callback = std::function<bool(const ustring_view& key, const ustring_view& alpn)>;
-
-    inline const gnutls_datum_t GNUTLS_DEFAULT_ALPN{
-            const_cast<unsigned char*>(default_alpn_str.data()), default_alpn_str.size()};
+    using key_verify_callback = std::function<bool(uspan key, std::string_view alpn)>;
 
     struct gnutls_callback_wrapper
     {
@@ -318,14 +321,6 @@ namespace oxen::quic
                 _key{key, key + keysize}, _ticket{ticket, ticket + ticketsize}, _data{_ticket.data(), ticketsize}
         {}
 
-        explicit gtls_session_ticket(ustring_view key, ustring_view ticket) :
-                gtls_session_ticket{
-                        key.data(),
-                        static_cast<unsigned int>(key.size()),
-                        ticket.data(),
-                        static_cast<unsigned int>(ticket.size())}
-        {}
-
       public:
         gtls_session_ticket() = delete;
         gtls_session_ticket(gtls_session_ticket&& t) = delete;
@@ -338,7 +333,7 @@ namespace oxen::quic
             return gtls_ticket_ptr(new gtls_session_ticket{key->data, key->size, ticket->data, ticket->size});
         }
 
-        static gtls_ticket_ptr make(ustring_view key, const gnutls_datum_t* ticket)
+        static gtls_ticket_ptr make(uspan key, const gnutls_datum_t* ticket)
         {
             return gtls_ticket_ptr(
                     new gtls_session_ticket{key.data(), static_cast<unsigned int>(key.size()), ticket->data, ticket->size});
@@ -347,10 +342,10 @@ namespace oxen::quic
         // Returns a view of the key for this ticket.  The view is valid as long as this
         // gtls_session_ticket object remains alive, and so can be used (for example) as the key of
         // a map containing the object in the value.
-        ustring_view key() const { return {_key.data(), _key.size()}; }
+        uspan span() const { return {_key.data(), _key.size()}; }
 
         // Returns a view of the ticket data.
-        ustring_view ticket() const { return {_ticket.data(), _ticket.size()}; }
+        uspan ticket() const { return {_ticket.data(), _ticket.size()}; }
 
         // Accesses the ticket data pointer as needed by gnutls API
         const gnutls_datum_t* datum() const { return &_data; }
@@ -616,8 +611,8 @@ namespace oxen::quic
         std::unique_ptr<TLSSession> make_session(
                 Connection& c,
                 const IOContext& ctx,
-                const std::vector<ustring>& alpns,
-                std::optional<ustring_view> expected_remote_key) override;
+                std::span<const std::string> alpns,
+                std::optional<std::span<const unsigned char>> expected_remote_key) override;
 
         void load_keys(x509_loader& seed, x509_loader& pk);
 
@@ -634,7 +629,7 @@ namespace oxen::quic
 
         const bool _is_client;
 
-        ustring _selected_alpn{};
+        std::string _selected_alpn{};
         std::optional<gtls_key> _expected_remote_key;
         gtls_key _remote_key{};
         std::optional<std::vector<unsigned char>> _0rtt_tp_data;
@@ -646,21 +641,27 @@ namespace oxen::quic
                 GNUTLSCreds& creds,
                 const IOContext& ctx,
                 Connection& c,
-                const std::vector<ustring>& alpns,
+                std::span<const std::string> alpns,
                 std::optional<gtls_key> expected_key = std::nullopt);
 
         ~GNUTLSSession();
 
         void* get_session() override { return session; }
 
+        // Extract quic objects from gnutls objects.  Precondition: the gnutls session must actually
+        // be one that we set up, and the associated Connection must actually use a GNUTLSSession.
+        static GNUTLSSession& from(gnutls_session_t g_session);
+        static GNUTLSSession& from(Connection& conn);
+        static Connection& conn_from(gnutls_session_t g_session);
+
         bool get_early_data_accepted() const override
         {
             return gnutls_session_get_flags(session) & GNUTLS_SFLAGS_EARLY_DATA;
         }
 
-        ustring_view remote_key() const override { return _remote_key.view(); }
+        std::span<const unsigned char> remote_key() const override { return _remote_key; }
 
-        ustring_view selected_alpn() const override { return _selected_alpn; }
+        std::string_view selected_alpn() const override { return _selected_alpn; }
 
         bool validate_remote_key();
 
@@ -668,9 +669,6 @@ namespace oxen::quic
 
         void send_session_tickets() override;
     };
-
-    GNUTLSSession* get_session_from_gnutls(gnutls_session_t g_session);
-    Connection* get_connection_from_gnutls(gnutls_session_t g_session);
 
 }  // namespace oxen::quic
 

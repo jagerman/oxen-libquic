@@ -1,18 +1,20 @@
 #pragma once
 
 #include <oxenc/base64.h>
+#include <oxenc/hex.h>
+
+#include <oxen/log.hpp>
+#include <oxen/log/format.hpp>
+#include <oxen/quic.hpp>
+#include <oxen/quic/format.hpp>
 
 #include <CLI/CLI.hpp>
 #include <CLI/Error.hpp>
+
+#include <chrono>
 #include <future>
+#include <memory>
 #include <optional>
-#include <oxen/log.hpp>
-#include <oxen/log/format.hpp>
-#include <oxen/quic/endpoint.hpp>
-#include <oxen/quic/format.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <oxen/quic/network.hpp>
-#include <oxen/quic/utils.hpp>
 #include <string>
 #include <type_traits>
 
@@ -82,6 +84,12 @@ namespace oxen::quic
     // not secure and is only to allow reproducible quasi-random test suite keys but should not
     // otherwise be used).
     std::pair<std::string, std::string> generate_ed25519(std::string_view seed_string = ""sv);
+
+    template <oxenc::const_span_type T>
+    inline std::string_view sp_to_sv(const T& sp)
+    {
+        return {reinterpret_cast<const char*>(sp.data()), sp.size()};
+    }
 
     // Takes a hex- or base64-encoded byte value of the given byte size and returns the bytes.
     // Returns nullopt if the encoded value is not a valid byte encoding of the given size.

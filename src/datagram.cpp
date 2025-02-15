@@ -84,12 +84,12 @@ namespace oxen::quic
         return ci.shared_from_this();
     }
 
-    void dgram_interface::reply(bstring_view data, std::shared_ptr<void> keep_alive)
+    void dgram_interface::reply(bspan data, std::shared_ptr<void> keep_alive)
     {
         ci.send_datagram(data, std::move(keep_alive));
     }
 
-    void DatagramIO::send_impl(bstring_view data, std::shared_ptr<void> keep_alive)
+    void DatagramIO::send_impl(bspan data, std::shared_ptr<void> keep_alive)
     {
         endpoint.call([this, data, keep_alive = std::move(keep_alive)]() mutable {
             if (!_conn)
@@ -125,7 +125,7 @@ namespace oxen::quic
         _send_buffer.confirm_sent();
     }
 
-    std::optional<bstring> DatagramIO::to_buffer(bstring_view data, uint16_t dgid)
+    std::optional<std::vector<std::byte>> DatagramIO::to_buffer(bspan data, uint16_t dgid)
     {
         log::trace(log_cat, "DatagramIO handed datagram with endian swapped ID: {}", dgid);
 

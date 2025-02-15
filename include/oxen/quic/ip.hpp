@@ -1,9 +1,9 @@
 #pragma once
 
-#include <array>
-
 #include "formattable.hpp"
 #include "utils.hpp"
+
+#include <array>
 
 /** IP Addressing Types:
     - ipv{4,6} : These types represent raw ipv4/ipv6 addresses. Both hold their respective addresses in host order

@@ -1,11 +1,12 @@
 #pragma once
 
-#include <cstddef>
+#include "format.hpp"
+#include "utils.hpp"
+
 #include <oxen/log.hpp>
 #include <oxen/log/format.hpp>
 
-#include "format.hpp"
-#include "utils.hpp"
+#include <cstddef>
 
 namespace oxen::quic
 {

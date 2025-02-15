@@ -1,13 +1,13 @@
 #include "messages.hpp"
 
-#include <oxenc/endian.h>
-
-#include <limits>
-
 #include "connection.hpp"
 #include "datagram.hpp"
 #include "endpoint.hpp"
 #include "internal.hpp"
+
+#include <oxenc/endian.h>
+
+#include <limits>
 
 namespace oxen::quic
 {
@@ -17,7 +17,7 @@ namespace oxen::quic
             v.resize(rowsize);
     }
 
-    std::optional<bstring> rotating_buffer::receive(bstring_view data, uint16_t dgid)
+    std::optional<std::vector<std::byte>> rotating_buffer::receive(bspan data, uint16_t dgid)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -62,17 +62,17 @@ namespace oxen::quic
                     row,
                     col);
 
-            bstring out;
-            out.reserve(b->data_size + data.size());
+            std::vector<std::byte> out(b->data_size + data.size());
+
             if (b->part < 0)
             {  // We have the first part already
-                out.append(b->data.data(), b->data_size);
-                out.append(data);
+                std::memcpy(out.data(), b->data.data(), b->data_size);
+                std::memcpy(out.data() + b->data_size, data.data(), data.size());
             }
             else
             {
-                out.append(data);
-                out.append(b->data.data(), b->data_size);
+                std::memcpy(out.data() + b->data_size, data.data(), data.size());
+                std::memcpy(out.data(), b->data.data(), b->data_size);
             }
             b.reset();
 
@@ -281,8 +281,7 @@ namespace oxen::quic
                 "Preparing datagram (id: {}) payload (size: {}): {}",
                 result->id,
                 result->bufs[result->bufs_len - 1].len,
-                buffer_printer{
-                        ustring_view{result->bufs[result->bufs_len - 1].base, result->bufs[result->bufs_len - 1].len}});
+                buffer_printer{result->bufs[result->bufs_len - 1].base, result->bufs[result->bufs_len - 1].len});
         return result;
     }
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "loop.hpp"
+
 #include <event2/event.h>
 
 #include <atomic>
@@ -7,8 +9,6 @@
 #include <future>
 #include <memory>
 #include <thread>
-
-#include "loop.hpp"
 
 namespace oxen::quic
 {

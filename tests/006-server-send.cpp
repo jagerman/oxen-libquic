@@ -1,7 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-#include <thread>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {
@@ -10,7 +7,7 @@ namespace oxen::quic::test
     TEST_CASE("006 - Server streams: Direct creation and transmission", "[006][server][streams][send][execute]")
     {
         Network test_net{};
-        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::atomic<int> data_check{0};
 
@@ -27,13 +24,13 @@ namespace oxen::quic::test
             return 0;
         };
 
-        stream_data_callback server_io_data_cb = [&](IOChannel&, bstring_view) {
+        stream_data_callback server_io_data_cb = [&](IOChannel&, bspan) {
             log::debug(test_cat, "Calling server stream data callback... data received... incrementing counter...");
             data_check += 1;
             server_promise.set_value();
         };
 
-        stream_data_callback client_io_data_cb = [&](IOChannel&, bstring_view) {
+        stream_data_callback client_io_data_cb = [&](IOChannel&, bspan) {
             log::debug(test_cat, "Calling client stream data callback... data received... incrementing counter...");
             data_check += 1;
             client_promise.set_value();
@@ -67,8 +64,8 @@ namespace oxen::quic::test
     TEST_CASE("006 - Server streams: Remote initiation, server send", "[006][server][streams][send][execute]")
     {
         Network test_net{};
-        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
-        constexpr auto response = "okay okay i get it already"_bsv;
+        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsp;
+        constexpr auto response = "okay okay i get it already"_bsp;
 
         std::atomic<int> ci{0}, si{0};
         std::atomic<int> data_check{0};
@@ -115,7 +112,7 @@ namespace oxen::quic::test
             return 0;
         };
 
-        stream_data_callback server_io_data_cb = [&](Stream&, bstring_view) {
+        stream_data_callback server_io_data_cb = [&](Stream&, bspan) {
             log::debug(test_cat, "Calling server stream data callback... data received... incrementing counter...");
             data_check += 1;
             try
@@ -129,7 +126,7 @@ namespace oxen::quic::test
             }
         };
 
-        stream_data_callback client_io_data_cb = [&](Stream&, bstring_view) {
+        stream_data_callback client_io_data_cb = [&](Stream&, bspan) {
             log::debug(test_cat, "Calling client stream data callback... data received... incrementing counter...");
             data_check += 1;
             try

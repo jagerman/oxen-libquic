@@ -6,16 +6,16 @@ extern "C"
 #include <event2/thread.h>
 }
 
+#include "context.hpp"
+#include "crypto.hpp"
+#include "utils.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <forward_list>
 #include <future>
 #include <memory>
 #include <thread>
-
-#include "context.hpp"
-#include "crypto.hpp"
-#include "utils.hpp"
 
 namespace oxen::quic
 {

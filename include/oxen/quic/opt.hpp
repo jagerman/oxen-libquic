@@ -1,10 +1,10 @@
 #pragma once
 
-#include <stdexcept>
-
 #include "address.hpp"
 #include "gnutls_crypto.hpp"
 #include "types.hpp"
+
+#include <stdexcept>
 
 namespace oxen::quic
 {
@@ -22,35 +22,29 @@ namespace oxen::quic
             explicit max_streams(uint64_t s) : stream_count{s} {}
         };
 
+        // Sets the inbound and outbound ALPNs simulatneous to the same value(s).  This is equivalent to
+        // passing outbound_alpns and inbound_alpns, separately, with the same argument.
+        struct alpns
+        {
+            std::vector<std::string> inout_alpns;
+            explicit alpns(std::initializer_list<std::string> alpns) : inout_alpns{std::move(alpns)} {}
+            explicit alpns(std::vector<std::string> alpns) : inout_alpns{std::move(alpns)} {}
+        };
+
         // supported ALPNs for outbound connections
         struct outbound_alpns
         {
-            std::vector<ustring> alpns;
-            explicit outbound_alpns(std::vector<ustring> alpns = {}) : alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit outbound_alpns(std::string_view alpn) : outbound_alpns{{ustring{to_usv(alpn)}}} {}
+            std::vector<std::string> alpns;
+            explicit outbound_alpns(std::initializer_list<std::string> alpns = {}) : alpns{std::move(alpns)} {}
+            explicit outbound_alpns(std::vector<std::string> alpns) : alpns{std::move(alpns)} {}
         };
 
         // supported ALPNs for inbound connections
         struct inbound_alpns
         {
-            std::vector<ustring> alpns;
-            explicit inbound_alpns(std::vector<ustring> alpns = {}) : alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit inbound_alpns(std::string_view alpn) : inbound_alpns{{ustring{to_usv(alpn)}}} {}
-        };
-
-        // Sets the inbound and outbound ALPNs simulatneous to the same value(s).  This is equivalent to
-        // passing outbound_alpns and inbound_alps, separately, with the same vector argument.
-        struct alpns
-        {
-            std::vector<ustring> inout_alpns;
-            explicit alpns(std::vector<ustring> alpns = {}) : inout_alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit alpns(std::string_view alpn) : alpns{{ustring{to_usv(alpn)}}} {}
+            std::vector<std::string> alpns;
+            explicit inbound_alpns(std::initializer_list<std::string> alpns = {}) : alpns{std::move(alpns)} {}
+            explicit inbound_alpns(std::vector<std::string> alpns) : alpns{std::move(alpns)} {}
         };
 
         struct handshake_timeout
@@ -150,8 +144,8 @@ namespace oxen::quic
         {
             inline static constexpr size_t SECRET_MIN_SIZE{16};
 
-            ustring secret;
-            explicit static_secret(ustring s) : secret{std::move(s)}
+            std::vector<unsigned char> secret;
+            explicit static_secret(std::vector<unsigned char> s) : secret{std::move(s)}
             {
                 if (secret.size() < SECRET_MIN_SIZE)
                     throw std::invalid_argument{
@@ -164,7 +158,7 @@ namespace oxen::quic
         // take responsibility for passing packets into the Endpoint via Endpoint::manually_receive_packet(...)
         struct manual_routing
         {
-            using send_handler_t = std::function<void(const Path&, bstring_view)>;
+            using send_handler_t = std::function<void(const Path&, bspan)>;
 
           private:
             friend Endpoint;
@@ -180,7 +174,7 @@ namespace oxen::quic
                     throw std::runtime_error{"opt::manual_routing must be constructed with a send handler hook!"};
             }
 
-            io_result operator()(const Path& p, bstring_view data, size_t& n)
+            io_result operator()(const Path& p, bspan data, size_t& n)
             {
                 send_hook(p, data);
                 n = 0;

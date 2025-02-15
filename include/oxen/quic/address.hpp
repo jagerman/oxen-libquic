@@ -1,12 +1,12 @@
 #pragma once
 
-#include <oxenc/endian.h>
-
-#include <compare>
-
 #include "formattable.hpp"
 #include "ip.hpp"
 #include "types.hpp"
+
+#include <oxenc/endian.h>
+
+#include <compare>
 
 #if defined(__OpenBSD__) || defined(__DragonFly__)
 // These systems are known to disallow dual stack binding, and so on such systems when
@@ -292,23 +292,27 @@ namespace oxen::quic
     struct RemoteAddress : public Address
     {
       private:
-        ustring remote_pubkey;
+        std::vector<unsigned char> _remote_pubkey;
 
       public:
         RemoteAddress() = delete;
 
         template <typename... Opt>
         RemoteAddress(std::string_view remote_pk, Opt&&... opts) :
-                Address{std::forward<Opt>(opts)...}, remote_pubkey{to_usv(remote_pk)}
-        {}
+                Address{std::forward<Opt>(opts)...}, _remote_pubkey(remote_pk.size())
+        {
+            std::memcpy(_remote_pubkey.data(), remote_pk.data(), remote_pk.size());
+        }
 
         template <typename... Opt>
-        RemoteAddress(ustring_view remote_pk, Opt&&... opts) : Address{std::forward<Opt>(opts)...}, remote_pubkey{remote_pk}
-        {}
+        RemoteAddress(uspan remote_pk, Opt&&... opts) : Address{std::forward<Opt>(opts)...}
+        {
+            _remote_pubkey.assign(remote_pk.data(), remote_pk.data() + remote_pk.size());
+        }
 
-        ustring_view view_remote_key() const { return remote_pubkey; }
-        const ustring& get_remote_key() const& { return remote_pubkey; }
-        ustring&& get_remote_key() && { return std::move(remote_pubkey); }
+        uspan view_remote_key() const { return _remote_pubkey; }
+        const std::vector<unsigned char>& get_remote_key() const& { return _remote_pubkey; }
+        std::vector<unsigned char>&& get_remote_key() && { return std::move(_remote_pubkey); }
 
         RemoteAddress(const RemoteAddress& obj) = default;
         RemoteAddress& operator=(const RemoteAddress& obj) = default;
@@ -317,7 +321,7 @@ namespace oxen::quic
 
         auto operator<=>(const RemoteAddress& other) const
         {
-            auto ret = remote_pubkey <=> other.remote_pubkey;
+            auto ret = _remote_pubkey <=> other._remote_pubkey;
             if (ret == 0)
                 ret = Address::operator<=>(other);
             return ret;

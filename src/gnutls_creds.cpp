@@ -25,18 +25,17 @@ namespace oxen::quic
     extern "C" int cert_verify_callback_gnutls(gnutls_session_t session)
     {
         log::debug(log_cat, "{} called", __PRETTY_FUNCTION__);
-        auto* conn = get_connection_from_gnutls(session);
+        auto& conn = GNUTLSSession::conn_from(session);
 
-        GNUTLSSession* tls_session = dynamic_cast<GNUTLSSession*>(conn->get_session());
-        assert(tls_session);
+        GNUTLSSession& tls_session = GNUTLSSession::from(conn);
 
-        bool success = false;
-        auto local_name = (conn->is_outbound()) ? "CLIENT" : "SERVER";
+        auto local_name = (conn.is_outbound()) ? "CLIENT" : "SERVER";
 
         //  true: Peer provided a valid cert; connection is accepted and marked validated
         //  false: Peer either provided an invalid cert or no cert; connection is rejected
-        if (success = tls_session->validate_remote_key(); success)
-            conn->set_validated();
+        bool success = tls_session.validate_remote_key();
+        if (success)
+            conn.set_validated();
 
         auto err = "Quic {} was {}able to validate peer certificate; {} connection!"_format(
                 local_name, success ? "" : "un", success ? "accepting" : "rejecting");
@@ -147,7 +146,7 @@ namespace oxen::quic
     }
 
     std::unique_ptr<TLSSession> GNUTLSCreds::make_session(
-            Connection& c, const IOContext& ctx, const std::vector<ustring>& alpns, std::optional<ustring_view> expected_key)
+            Connection& c, const IOContext& ctx, std::span<const std::string> alpns, std::optional<std::span<const unsigned char>> expected_key)
     {
         std::optional<gtls_key> exp_key;
         if (expected_key)

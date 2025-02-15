@@ -1,12 +1,12 @@
 #include "btstream.hpp"
 
-#include <stdexcept>
-
 #include "internal.hpp"
+
+#include <stdexcept>
 
 namespace oxen::quic
 {
-    static std::pair<std::ptrdiff_t, std::size_t> get_location(bstring& data, std::string_view substr)
+    static std::pair<std::ptrdiff_t, std::size_t> get_location(std::vector<std::byte>& data, std::string_view substr)
     {
         auto* bsubstr = reinterpret_cast<const std::byte*>(substr.data());
         // Make sure the given substr actually is a substr of data:
@@ -14,12 +14,12 @@ namespace oxen::quic
         return {bsubstr - data.data(), substr.size()};
     }
 
-    message::message(BTRequestStream& bp, bstring req, bool is_timeout) :
+    message::message(BTRequestStream& bp, std::vector<std::byte> req, bool is_timeout) :
             data{std::move(req)}, return_sender{bp.weak_from_this()}, _rid{bp.reference_id}, timed_out{is_timeout}
     {
         if (!is_timeout)
         {
-            oxenc::bt_list_consumer btlc(data);
+            oxenc::bt_list_consumer btlc(bspan{data});
 
             req_type = get_location(data, btlc.consume_string_view());
             req_id = btlc.consume_integer<int64_t>();
@@ -33,7 +33,7 @@ namespace oxen::quic
         }
     }
 
-    void message::respond(bstring_view body, bool error) const
+    void message::respond(bspan body, bool error) const
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -53,7 +53,7 @@ namespace oxen::quic
         log::debug(log_cat, "Bparser set generic request handler");
         generic_handler = std::move(request_handler);
     }
-    void BTRequestStream::respond(int64_t rid, bstring_view body, bool error)
+    void BTRequestStream::respond(int64_t rid, bspan body, bool error)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -89,7 +89,7 @@ namespace oxen::quic
         }
     }
 
-    void BTRequestStream::receive(bstring_view data)
+    void BTRequestStream::receive(bspan data)
     {
         log::trace(log_cat, "bparser recv data callback called!");
 
@@ -98,7 +98,7 @@ namespace oxen::quic
 
         try
         {
-            process_incoming(to_sv(data));
+            process_incoming(data);
         }
         catch (const std::exception& e)
         {
@@ -186,7 +186,7 @@ namespace oxen::quic
         catch (const no_such_endpoint&)
         {
             log::warning(log_cat, "No handler found for endpoint {}, returning error response", ep);
-            respond(req_id, convert_sv<std::byte, char>("Invalid endpoint '{}'"_format(ep)), true);
+            respond(req_id, str_to_bspan("Invalid endpoint '{}'"_format(ep)), true);
         }
         catch (const std::exception& e)
         {
@@ -195,11 +195,11 @@ namespace oxen::quic
                     "Handler for {} threw an uncaught exception ({}); returning a generic error message",
                     ep,
                     e.what());
-            respond(req_id, "An error occurred while processing the request"_bsv, true);
+            respond(req_id, "An error occurred while processing the request"_bsp, true);
         }
     }
 
-    void BTRequestStream::process_incoming(std::string_view req)
+    void BTRequestStream::process_incoming(bspan req)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -207,32 +207,50 @@ namespace oxen::quic
         {
             if (current_len == 0)
             {
-                size_t consumed = 0;
-
-                if (not size_buf.empty())
+                std::string_view sreq{reinterpret_cast<const char*>(req.data()), req.size()};
+                size_t consumed;
+                size_t prev_len = size_buf.size();
+                if (prev_len)
                 {
-                    size_t prev_len = size_buf.size();
-                    size_buf += req.substr(0, MAX_REQ_LEN_ENCODED);
+                    // We have some leftover digits in size_buf, so copy some more from the incoming
+                    // data to make size_buf up to MAX_REQ_LEN_ENCODED long:
+                    if (prev_len < MAX_REQ_LEN_ENCODED)
+                        size_buf += sreq.substr(MAX_REQ_LEN_ENCODED - prev_len);
 
+                    // Now see if we can parse a `N:` value out of it.
                     consumed = parse_length(size_buf);
-
+                    // 0 means the : wasn't found *but* that the input value is still less than the
+                    // max, so we've already appended it and can just wait for more data to append.
+                    // (This case is rare; it would mean we only got a very small number of stream
+                    // bytes).
                     if (consumed == 0)
                         return;
 
+                    // Otherwise we successfully parsed the size, have updated current_len, and
+                    // don't need the size buffer anymore:
                     size_buf.clear();
-                    req.remove_prefix(consumed - prev_len);
                 }
                 else
                 {
-                    consumed = parse_length(convert_sv<char>(req));
+                    // With no initial buffer we can just parse off the beginning of the input
+                    // value, to save copying it to buf in most cases.
+                    consumed = parse_length(sreq.substr(0, MAX_REQ_LEN_ENCODED));
                     if (consumed == 0)
                     {
-                        size_buf += req;
+                        // The input didn't contain a number, but wasn't long enough to definitively
+                        // be a number, so we copy what we have and then wait for more stream data
+                        // to arrive with the rest of the number.
+                        size_buf.resize(req.size());
+                        std::memcpy(size_buf.data(), req.data(), req.size());
                         return;
                     }
-
-                    req.remove_prefix(consumed);
                 }
+                // If we get here, then we consumed `consumed` in total and parsed it into
+                // current_len, but that includes a possible `prev_len` characters we already had.
+                // So remove whatever arrived in this current call from the from of req; the
+                // remainder is the beginning of the incoming `current_len` request data bytes.
+                assert(consumed > prev_len);
+                req = req.subspan(consumed - prev_len);
             }
 
             assert(current_len > 0);  // We shouldn't get out of the above without knowing this
@@ -245,8 +263,8 @@ namespace oxen::quic
                 if (buf.size() < current_len)
                 {
                     size_t need = current_len - buf.size();
-                    buf += convert_sv<std::byte>(req.substr(0, need));
-                    req.remove_prefix(need);
+                    buf.insert(buf.end(), req.begin(), req.begin() + need);
+                    req = req.subspan(need);
                 }
 
                 handle_input(message{*this, std::move(buf)});
@@ -261,12 +279,12 @@ namespace oxen::quic
             // Otherwise we don't have enough data on hand for a complete request, so move what we
             // got to the buffer to be processed when the next incoming chunk of data arrives.
             buf.reserve(current_len);
-            buf += convert_sv<std::byte>(req);
+            buf.insert(buf.end(), req.begin(), req.end());
             return;
         }
     }
 
-    std::string BTRequestStream::encode_command(std::string_view endpoint, int64_t rid, bstring_view body)
+    std::string BTRequestStream::encode_command(std::string_view endpoint, int64_t rid, bspan body)
     {
         oxenc::bt_list_producer btlp;
 
@@ -278,7 +296,7 @@ namespace oxen::quic
         return std::move(btlp).str();
     }
 
-    std::string BTRequestStream::encode_response(int64_t rid, bstring_view body, bool error)
+    std::string BTRequestStream::encode_response(int64_t rid, bspan body, bool error)
     {
         oxenc::bt_list_producer btlp;
 
