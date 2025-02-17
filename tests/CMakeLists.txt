@@ -50,6 +50,7 @@ if(LIBQUIC_BUILD_TESTS)
         013-eventhandler.cpp
         014-0rtt-resets.cpp
         015-bt-encoding.cpp
+        016-stateless_reset.cpp
 
         case_logger.cpp
     )

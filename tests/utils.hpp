@@ -218,4 +218,34 @@ namespace oxen::quic
     // Returns a human-readable duration, auto-scaling the unit based on the duration given.
     std::string friendly_duration(std::chrono::nanoseconds dur);
 
+    // Kills the Network held in `net` with endpoint `ep` without allowing it to send closes and
+    // whatnot, by removing its socket it from under it.  After the call, `net`, `ep`, and any
+    // ancillary `other...` shared points will all be empty.  Does nothing if `net` is already
+    // empty.
+    template <typename... SP_T>
+    static void kill_network(std::unique_ptr<Network>& net, std::shared_ptr<Endpoint>& ep, std::shared_ptr<SP_T>&... other)
+    {
+        if (!net)
+            return;
+
+        assert(ep);
+        auto sock = TestHelper::get_sock(*ep);
+        log::debug(test_cat, "dirty-closing endpoint socket");
+#ifdef _WIN32
+        ::closesocket(sock);
+#else
+        ::close(sock);
+#endif
+
+        log::debug(test_cat, "releasing endpoint and {} other objects", sizeof...(other));
+        ep.reset();
+        (other.reset(), ...);
+
+        log::debug(test_cat, "dirty-closing Network");
+        net->set_shutdown_immediate();
+        net.reset();
+
+        log::debug(test_cat, "Network killed!");
+    }
+
 }  // namespace oxen::quic
