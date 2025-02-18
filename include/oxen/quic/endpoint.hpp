@@ -69,7 +69,7 @@ namespace oxen::quic
             check_for_tls_creds<Opt...>();
 
             if (not _manual_routing and !remote.is_addressable())
-                throw std::invalid_argument("Address must be addressible to connect");
+                throw std::invalid_argument("Address must be addressable to connect");
 
             if (_local.is_ipv6() && !remote.is_ipv6())
                 remote.map_ipv4_as_ipv6();
