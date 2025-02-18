@@ -792,7 +792,7 @@ namespace oxen::quic
                  {static_cast<const sockaddr*>(hdr.msg_name), hdr.msg_namelen}
 #endif
             },
-            data_sp{data}
+            pkt_data{data}
     {
         assert(path.remote.is_ipv4() || path.remote.is_ipv6());
 
@@ -828,6 +828,12 @@ namespace oxen::quic
             }
         }
         log::trace(log_cat, "incoming packet path is {}", path);
+    }
+
+    void Packet::ensure_owned_data()
+    {
+        if (auto* data_sp = std::get_if<bspan>(&pkt_data))
+            pkt_data = std::vector(data_sp->begin(), data_sp->end());
     }
 
 }  // namespace oxen::quic

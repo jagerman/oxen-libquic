@@ -36,33 +36,36 @@ namespace oxen::quic
     {
         Path path;
         ngtcp2_pkt_info pkt_info{};
-        // *Optional* storage used only if we need to own the data, in which case data_sp points at this.
-        std::vector<std::byte> pkt_data;
-        // Always points at the packet data, which could be pkt_data or external.
-        std::span<const std::byte> data_sp;
+        std::variant<bspan, std::vector<std::byte>> pkt_data;
 
-        size_t size() const { return data_sp.size(); }
+        size_t size() const
+        {
+            return std::visit([](const auto& d) { return d.size(); }, pkt_data);
+        }
 
-        // Return a string_view type, starting from index `pos`
+        // Return a span over the data, regardless of whether it is owned (vector) or not (span)
+        // inside pkt_data.
         template <oxenc::basic_char Char = std::byte>
-        std::span<const Char> data(size_t pos = 0) const
+        std::span<const Char> data() const
         {
-            return std::span<const Char>{reinterpret_cast<const Char*>(data_sp.data() + pos), data_sp.size() - pos};
+            return std::visit(
+                    [](const auto& d) {
+                        return std::span<const Char>{reinterpret_cast<const Char*>(d.data()), d.size()};
+                    },
+                    pkt_data);
         }
 
-        // Returns a fixed size trailing suffix span of the last Suffix bytes of the packet data.
-        // DOES NOT CHECK size() -- you must do that before calling this!
-        template <size_t Suffix, oxenc::basic_char Char = std::byte>
-        std::span<const Char, Suffix> suffix() const
-        {
-            return std::span<const Char, Suffix>{data<Char>(data_sp.size() - Suffix).data(), Suffix};
-        }
+        // Ensures that this packet owns its own data; if it currently doesn't (i.e. if it just
+        // holds a span) then the span is replaced with a new vector containing a copy of that data.
+        // This method should be used if a Packet is being stored to ensure that it doesn't store a
+        // dangling data pointer.
+        void ensure_owned_data();
 
         /// Constructs a packet from a path and data view:
-        Packet(Path p, bspan d) : path{std::move(p)}, data_sp{d} {}
+        Packet(Path p, bspan d) : path{std::move(p)}, pkt_data{d} {}
 
         /// Constructs a packet from a path and transferred data:
-        Packet(Path p, std::vector<std::byte>&& d) : path{std::move(p)}, pkt_data{std::move(d)}, data_sp{pkt_data} {}
+        Packet(Path p, std::vector<std::byte>&& d) : path{std::move(p)}, pkt_data{std::move(d)} {}
 
         /// Constructs a packet from a local address, data, and the IP header; remote addr and ECN
         /// data are extracted from the header.

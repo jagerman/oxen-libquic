@@ -806,13 +806,14 @@ namespace oxen::quic
         log::trace(log_cat, "Checking last 16B of pkt for stateless reset token...");
         Connection* cptr = nullptr;
 
-        if (pkt.size() < NGTCP2_STATELESS_RESET_TOKENLEN)
+        auto pkt_data = pkt.data<uint8_t>();
+        if (pkt_data.size() < NGTCP2_STATELESS_RESET_TOKENLEN)
         {
             log::trace(log_cat, "Packet too small to contain a stateless reset token, remote: {}", pkt.path.remote);
             return cptr;
         }
 
-        auto token = pkt.suffix<NGTCP2_STATELESS_RESET_TOKENLEN, uint8_t>();
+        auto token = pkt_data.last<NGTCP2_STATELESS_RESET_TOKENLEN>();
         log::trace(log_cat, "Checking for stateless reset token {}", oxenc::to_hex(token.begin(), token.end()));
         auto htoken = hash_reset_token(token);
 
