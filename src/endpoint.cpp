@@ -930,7 +930,24 @@ namespace oxen::quic
 
         if (_manual_routing)
         {
-            return _manual_routing(path, bspan{buf, *bufsize}, n_pkts);
+            try
+            {
+                for (size_t i = 0; i < n_pkts; i++)
+                {
+                    _manual_routing(path, bspan{buf, *bufsize});
+                    buf += *bufsize++;
+                }
+            }
+            catch (const std::exception& e)
+            {
+                log::warning(
+                        log_cat,
+                        "Manual packet router raised an exception ({}); dropping packets and signaling error",
+                        e.what());
+                return io_result{EIO};
+            }
+            n_pkts = 0;
+            return io_result{};
         }
 
         if (!socket)

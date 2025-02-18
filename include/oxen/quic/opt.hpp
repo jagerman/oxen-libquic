@@ -174,12 +174,7 @@ namespace oxen::quic
                     throw std::runtime_error{"opt::manual_routing must be constructed with a send handler hook!"};
             }
 
-            io_result operator()(const Path& p, bspan data, size_t& n)
-            {
-                send_hook(p, data);
-                n = 0;
-                return io_result{};
-            }
+            void operator()(const Path& p, bspan data) { send_hook(p, data); }
 
             explicit operator bool() const { return send_hook != nullptr; }
         };
