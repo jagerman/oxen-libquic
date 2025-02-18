@@ -1377,10 +1377,11 @@ namespace oxen::quic
             datagrams->_conn = nullptr;
             datagrams.reset();
         }
-        assert(pseudo_stream);  // If this isn't set it means we've been in here before, but that
-                                // shouldn't happen.
-        pseudo_stream->_conn = nullptr;
-        pseudo_stream.reset();
+        if (pseudo_stream)
+        {
+            pseudo_stream->_conn = nullptr;
+            pseudo_stream.reset();
+        }
     }
 
     int Connection::stream_ack(int64_t id, size_t size)
