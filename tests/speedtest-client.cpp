@@ -288,7 +288,7 @@ int main(int argc, char* argv[])
         {
             s.remaining = 0;
             s.done_sending = true;
-            s.stream->send(bspan{s.bufs[0].data(), s.bufs[0].size()});
+            s.stream->send(s.bufs[0], nullptr);
         }
         else
         {

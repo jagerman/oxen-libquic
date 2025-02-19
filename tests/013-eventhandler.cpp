@@ -49,7 +49,7 @@ namespace oxen::quic::test
             if (send_counter <= NUM_ITERATIONS)
             {
                 send_counter += 1;
-                client_stream->send(msg);
+                client_stream->send(msg, nullptr);
             }
         });
 

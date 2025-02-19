@@ -150,7 +150,7 @@ int main(int argc, char* argv[])
     remaining_str.resize(8);
     oxenc::write_host_as_little(d_ptr->n_iter, remaining_str.data());
     log::warning(test_cat, "Sending datagram count to remote...");
-    client_ci->send_datagram(bspan{remaining_str.data(), remaining_str.size()});
+    client_ci->send_datagram(remaining_str, nullptr);
 
     std::promise<void> send_prom;
     std::future<void> send_f = send_prom.get_future();
@@ -166,7 +166,7 @@ int main(int argc, char* argv[])
         for (uint64_t i = 1; i < d_ptr->n_iter; ++i)
         {
             // Just send these with the 0 at the beginning
-            client_ci->send_datagram(vec_to_span<std::byte>(d_ptr->msg));
+            client_ci->send_datagram(vec_to_span<std::byte>(d_ptr->msg), nullptr);
         }
         // Send a final one with the max value in the beginning so the server knows its done
         std::vector<unsigned char> last_payload{d_ptr->msg};

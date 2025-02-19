@@ -64,7 +64,7 @@ namespace oxen::quic::test
 
         // Send something down the dead path, which will make the client start sending retries on
         // the suddenly dead connection:
-        c_str->send("hello"sv);
+        c_str->send("hello"s);
 
         log::info(test_cat, "Starting server with wrong static secret");
         net_server = std::make_unique<Network>();

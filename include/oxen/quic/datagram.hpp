@@ -31,8 +31,7 @@ namespace oxen::quic
         std::shared_ptr<connection_interface> get_conn_interface();
 
         template <oxenc::basic_char CharType>
-            requires(!std::same_as<CharType, std::byte>)
-        void reply(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        void reply(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive)
         {
             reply(str_to_bspan(data), std::move(keep_alive));
         }
@@ -53,7 +52,7 @@ namespace oxen::quic
             reply(str_to_bspan(view), std::move(keep_alive));
         }
 
-        void reply(bspan data, std::shared_ptr<void> keep_alive = nullptr);
+        void reply(bspan data, std::shared_ptr<void> keep_alive);
     };
 
     // IO callbacks

@@ -38,12 +38,12 @@ namespace oxen::quic::test
 
             CHECK(client_stream->has_watermarks());
 
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             CHECK(low_water.wait());
 
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             CHECK(high_water.wait());
 
@@ -70,17 +70,17 @@ namespace oxen::quic::test
                             },
                             true});
 
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(100ms);
 
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(250ms);
 
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(250ms);
 
@@ -113,7 +113,7 @@ namespace oxen::quic::test
                             },
                             true});
 
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(100ms);
 
@@ -123,10 +123,10 @@ namespace oxen::quic::test
             server_stream->pause();
             REQUIRE(server_stream->is_paused());
 
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bspan{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             server_stream->resume();
             REQUIRE_FALSE(server_stream->is_paused());

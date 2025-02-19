@@ -116,7 +116,7 @@ namespace oxen::quic
         }
 
         template <oxenc::basic_char CharType>
-        void send_datagram(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        void send_datagram(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive)
         {
             send_datagram(str_to_bspan(data), std::move(keep_alive));
         }
@@ -138,12 +138,12 @@ namespace oxen::quic
         }
 
         template <oxenc::basic_char CharType>
-        void send_datagram(std::span<const CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        void send_datagram(std::span<const CharType> data, std::shared_ptr<void> keep_alive)
         {
             send_datagram(span_to_span<std::byte>(data), std::move(keep_alive));
         }
 
-        virtual void send_datagram(bspan data, std::shared_ptr<void> keep_alive = nullptr) = 0;
+        virtual void send_datagram(bspan data, std::shared_ptr<void> keep_alive) = 0;
 
         virtual Endpoint& endpoint() = 0;
         virtual const Endpoint& endpoint() const = 0;
@@ -374,7 +374,7 @@ namespace oxen::quic
         // public debug functions; to be removed with friend test fixture class
         int last_cleared() const override;
 
-        void send_datagram(bspan data, std::shared_ptr<void> keep_alive = nullptr) override;
+        void send_datagram(bspan data, std::shared_ptr<void> keep_alive) override;
 
         void close_connection(uint64_t error_code = 0) override;
 

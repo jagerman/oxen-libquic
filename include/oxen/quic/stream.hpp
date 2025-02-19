@@ -149,7 +149,7 @@ namespace oxen::quic
         /// ain't not good enough isn't false.
         virtual void check_timeouts() {}
 
-        void send_impl(bspan data, std::shared_ptr<void> keep_alive = nullptr) override;
+        void send_impl(bspan data, std::shared_ptr<void> keep_alive) override;
 
         stream_buffer user_buffers;
 

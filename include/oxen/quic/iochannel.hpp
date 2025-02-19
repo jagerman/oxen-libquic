@@ -49,16 +49,16 @@ namespace oxen::quic
         Address local() const;
         Address remote() const;
 
-        void send(bspan data, std::shared_ptr<void> keep_alive = nullptr) { send_impl(data, std::move(keep_alive)); }
+        void send(bspan data, std::shared_ptr<void> keep_alive) { send_impl(data, std::move(keep_alive)); }
 
         template <oxenc::basic_char CharType>
-        void send(std::span<const CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        void send(std::span<const CharType> data, std::shared_ptr<void> keep_alive)
         {
             send_impl(span_to_span<std::byte>(data), std::move(keep_alive));
         }
 
         template <oxenc::basic_char CharType>
-        void send(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
+        void send(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive)
         {
             send_impl(str_to_bspan(data), std::move(keep_alive));
         }

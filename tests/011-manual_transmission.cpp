@@ -48,7 +48,7 @@ namespace oxen::quic::test
         // client make stream and send; message displayed by server_data_cb
         auto client_stream = conn_interface->open_stream();
 
-        REQUIRE_NOTHROW(client_stream->send(good_msg));
+        REQUIRE_NOTHROW(client_stream->send(good_msg, nullptr));
 
         require_future(d_future);
     }

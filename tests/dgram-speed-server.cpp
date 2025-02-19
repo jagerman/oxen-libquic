@@ -96,7 +96,7 @@ int main(int argc, char* argv[])
                     info.n_received,
                     info.n_expected);
 
-            di.reply("DONE!"sv);
+            di.reply("DONE!"s);
             t_prom.set_value();
         }
     };

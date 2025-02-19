@@ -181,7 +181,7 @@ namespace oxen::quic::test
         std::this_thread::sleep_for(5ms);
         REQUIRE(conn_interface->get_max_datagram_size() < MAX_GREEDY_PMTUD_UDP_PAYLOAD);
 
-        conn_interface->send_datagram(msg);
+        conn_interface->send_datagram(msg, nullptr);
 
         require_future(data_future);
         CHECK_FALSE(bad_call);
@@ -317,7 +317,7 @@ namespace oxen::quic::test
             good_msg.push_back(static_cast<std::byte>(v++));
 
         for (int i = 0; i < n; ++i)
-            conn_interface->send_datagram(good_msg);
+            conn_interface->send_datagram(good_msg, nullptr);
 
         require_future(data_promise.get_future());
 
@@ -386,11 +386,11 @@ namespace oxen::quic::test
         while (small_msg.size() < 500)
             small_msg.push_back(std::byte{v++});
 
-        conn_interface->send_datagram(big_msg);
-        conn_interface->send_datagram(big_msg);
-        conn_interface->send_datagram(small_msg);
-        conn_interface->send_datagram(big_msg);
-        conn_interface->send_datagram(small_msg);
+        conn_interface->send_datagram(big_msg, nullptr);
+        conn_interface->send_datagram(big_msg, nullptr);
+        conn_interface->send_datagram(small_msg, nullptr);
+        conn_interface->send_datagram(big_msg, nullptr);
+        conn_interface->send_datagram(small_msg, nullptr);
 
         require_future(data_promise.get_future());
 
@@ -449,7 +449,7 @@ namespace oxen::quic::test
         TestHelper::enable_dgram_drop(static_cast<Connection&>(*server_ci));
 
         for (int i = 0; i < quarter; ++i)
-            conn_interface->send_datagram(dropped_msg);
+            conn_interface->send_datagram(dropped_msg, nullptr);
 
         while (TestHelper::get_dgram_debug_counter(*server_ci) < quarter)
             std::this_thread::sleep_for(10ms);
@@ -457,7 +457,7 @@ namespace oxen::quic::test
         TestHelper::disable_dgram_drop(*server_ci);
 
         for (int i = 0; i < bufsize; ++i)
-            conn_interface->send_datagram(successful_msg);
+            conn_interface->send_datagram(successful_msg, nullptr);
 
         require_future(data_promise.get_future());
 
@@ -598,7 +598,7 @@ namespace oxen::quic::test
 
         client->call([&]() {
             for (int i = 0; i < n; i++)
-                conn_interface->send_datagram(big);
+                conn_interface->send_datagram(big, nullptr);
 
             pr.set_value();
         });
