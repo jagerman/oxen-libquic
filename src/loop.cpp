@@ -84,9 +84,9 @@ namespace oxen::quic
             std::function<void()> task,
             bool one_off,
             bool start_immediately,
-            bool fixed_interval)
+            bool task_rescheduling)
     {
-        f = (one_off or not fixed_interval) ? std::move(task) : [this, func = std::move(task)]() mutable {
+        f = (one_off or not task_rescheduling) ? std::move(task) : [this, func = std::move(task)]() mutable {
             func();
             event_del(ev.get());
             event_add(ev.get(), &interval);
@@ -97,7 +97,7 @@ namespace oxen::quic
         ev.reset(event_new(
                 _loop.get(),
                 -1,
-                fixed_interval ? 0 : EV_PERSIST,
+                task_rescheduling ? 0 : EV_PERSIST,
                 [](evutil_socket_t, short, void* s) {
                     try
                     {
