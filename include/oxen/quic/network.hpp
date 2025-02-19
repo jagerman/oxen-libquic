@@ -52,8 +52,7 @@ namespace oxen::quic
         template <typename... Opt>
         std::shared_ptr<Endpoint> endpoint(const Address& local_addr, Opt&&... opts)
         {
-            auto [it, added] =
-                    endpoint_map.emplace(std::make_shared<Endpoint>(*this, local_addr, std::forward<Opt>(opts)...));
+            auto [it, added] = endpoints.emplace(std::make_shared<Endpoint>(*this, local_addr, std::forward<Opt>(opts)...));
 
             return *it;
         }
@@ -110,7 +109,7 @@ namespace oxen::quic
       private:
         std::shared_ptr<Loop> _loop;
         std::atomic<bool> shutdown_immediate{false};
-        std::unordered_set<std::shared_ptr<Endpoint>> endpoint_map;
+        std::unordered_set<std::shared_ptr<Endpoint>> endpoints;
 
         friend class Endpoint;
         friend class Connection;

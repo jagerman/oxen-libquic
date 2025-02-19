@@ -46,17 +46,9 @@ namespace oxen::quic
     void Network::close_gracefully()
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-
-        std::promise<void> pr;
-        auto ft = pr.get_future();
-
-        _loop->call([&]() mutable {
-            for (const auto& ep : endpoint_map)
+        _loop->call_get([this] {
+            for (const auto& ep : endpoints)
                 ep->_close_conns(std::nullopt);
-
-            pr.set_value();
         });
-
-        ft.get();
     }
 }  // namespace oxen::quic
