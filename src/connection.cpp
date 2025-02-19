@@ -1517,6 +1517,17 @@ namespace oxen::quic
 
             try
             {
+                // FIXME TODO: this is performing an allocation and copy for *every* small datagram
+                // (every datagram when splitting disabled), to optimize the case where a split
+                // datagram recipient wants to transfer an owned buffer of a recombined split
+                // packet.  This is *only* going to be preferable in a case where the callback
+                // always wants to make a copy anyway, and is going to be *always* worse for
+                // non-storing callbacks.
+                //
+                // We should ideally perhaps have *two* datagram callbacks: one that always copies
+                // (i.e. this one) and one that takes a span for cases where the span callback
+                // doesn't need to copy.
+
                 datagrams->dgram_data_cb(
                         *di, (maybe_data ? std::move(*maybe_data) : std::vector<std::byte>{data.begin(), data.end()}));
                 good = true;
