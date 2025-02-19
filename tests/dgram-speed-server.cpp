@@ -50,14 +50,13 @@ int main(int argc, char* argv[])
         uint64_t n_received = 0;
     };
 
-    recv_info dgram_data;
-
-    std::promise<void> t_prom;
-    std::future<void> t_fut = t_prom.get_future();
+    std::unordered_map<ConnectionID, recv_info> conn_dgram_data;
 
     std::shared_ptr<Endpoint> server;
 
-    dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, std::vector<std::byte> data) {
+    dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, std::span<const std::byte> data) {
+        auto& dgram_data = conn_dgram_data[di.reference_id];
+
         if (dgram_data.n_expected == 0)
         {
             // The very first packet should be 8 bytes containing the uint64_t count of total
@@ -68,7 +67,8 @@ int main(int argc, char* argv[])
             dgram_data.n_expected = count;
             log::warning(
                     test_cat,
-                    "First data from new connection datagram channel, expecting {} datagrams!",
+                    "First data from new connection {} datagram channel, expecting {} datagrams!",
+                    di.get_conn_interface()->remote(),
                     dgram_data.n_expected);
             return;
         }
@@ -94,13 +94,13 @@ int main(int argc, char* argv[])
 
             log::critical(
                     test_cat,
-                    "Datagram test complete. Fidelity: {}\% ({} received of {} expected)",
+                    "Datagram test complete for {}. Fidelity: {}\% ({} received of {} expected)",
+                    di.get_conn_interface()->remote(),
                     reception_rate,
                     info.n_received,
                     info.n_expected);
 
             di.reply("DONE!"s);
-            t_prom.set_value();
         }
     };
 
@@ -121,7 +121,6 @@ int main(int argc, char* argv[])
 
     server_log_listening(server_local, DEFAULT_DGRAM_SPEED_ADDR, pubkey, seed_string, enable_0rtt);
 
-    t_fut.get();
-
-    log::warning(test_cat, "Shutting down test server");
+    for (;;)
+        std::this_thread::sleep_for(10min);
 }
