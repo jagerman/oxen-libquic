@@ -116,7 +116,6 @@ namespace oxen::quic
         }
 
         template <oxenc::basic_char CharType>
-            requires(!std::same_as<CharType, std::byte>)
         void send_datagram(std::basic_string_view<CharType> data, std::shared_ptr<void> keep_alive = nullptr)
         {
             send_datagram(str_to_bspan(data), std::move(keep_alive));

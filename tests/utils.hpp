@@ -17,6 +17,11 @@
 #include <string>
 #include <type_traits>
 
+extern "C"
+{
+#include <unistd.h>
+}
+
 namespace oxen::quic
 {
     extern bool disable_ipv6, disable_rotating_buffer;

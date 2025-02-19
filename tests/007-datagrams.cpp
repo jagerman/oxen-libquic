@@ -585,11 +585,12 @@ namespace oxen::quic::test
             target_dgrams = n + (n + packable - 1) / packable;
         }
 
-        std::basic_string<uint8_t> big{};
+        std::vector<std::byte> big;
+        big.reserve(dgram_size);
         uint8_t v{0};
 
         while (big.size() < dgram_size)
-            big += v++;
+            big.push_back(static_cast<std::byte>(v++));
 
         TestHelper::enable_dgram_counter(*conn_interface);
 
@@ -597,7 +598,7 @@ namespace oxen::quic::test
 
         client->call([&]() {
             for (int i = 0; i < n; i++)
-                conn_interface->send_datagram(std::basic_string_view<uint8_t>{big});
+                conn_interface->send_datagram(big);
 
             pr.set_value();
         });

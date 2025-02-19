@@ -132,7 +132,8 @@ namespace oxen::quic
     {
         gtls_key() = default;
         gtls_key(const unsigned char* data, size_t size) { write(data, size); }
-        explicit gtls_key(std::string_view data) : gtls_key{convert_sv<unsigned char>(data)} {}
+        explicit gtls_key(std::string_view data) : gtls_key{reinterpret_cast<const unsigned char*>(data.data()), data.size()}
+        {}
         explicit gtls_key(std::span<const unsigned char> data) : gtls_key{data.data(), data.size()} {}
 
         //  Writes to the internal buffer holding the gnutls key
