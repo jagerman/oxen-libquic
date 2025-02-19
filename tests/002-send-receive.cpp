@@ -221,7 +221,8 @@ namespace oxen::quic::test
                 // Similar to the above, but keep the data alive via a manual shared_ptr keep-alive
                 // object.
                 auto ptr = std::make_shared<std::vector<std::byte>>(good_msg);
-                stream_to_a->send(*ptr, std::move(ptr));
+                auto& v = *ptr;
+                stream_to_a->send(v, std::move(ptr));
             }
         }
 
