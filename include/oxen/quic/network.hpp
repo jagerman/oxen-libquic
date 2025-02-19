@@ -57,6 +57,19 @@ namespace oxen::quic
             return *it;
         }
 
+        // Shuts down an endpoint, closing all connections and sockets in the process, and blocks
+        // until the endpoint is fully destroyed.  This happens automatically upon Network
+        // destruction, but can also be done in cases where the Network object is doing other
+        // things.
+        //
+        // An application calling this is expected to call this as `close(std::move(endpoint))` to
+        // give up ownership of its endpoint as part of the call.
+        void close(std::shared_ptr<Endpoint>&& endpoint);
+
+        // Same as close(std::move(endpoint)), except that this does not wait for shutdown to
+        // complete.
+        void close_soon(std::shared_ptr<Endpoint>&& endpoint);
+
         template <typename T, typename... Args>
         std::shared_ptr<T> make_shared(Args&&... args)
         {
