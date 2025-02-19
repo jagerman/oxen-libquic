@@ -1,12 +1,11 @@
 #pragma once
 
-#include <limits>
-
 #include "connection_ids.hpp"
 #include "iochannel.hpp"
 #include "messages.hpp"
-#include "udp.hpp"
 #include "utils.hpp"
+
+#include <limits>
 
 namespace oxen::quic
 {

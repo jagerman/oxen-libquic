@@ -1,8 +1,8 @@
 #include "gnutls_crypto.hpp"
 
-#include <nettle/sha3.h>
-
 #include "internal.hpp"
+
+#include <nettle/sha3.h>
 
 namespace oxen::quic
 {

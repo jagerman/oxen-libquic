@@ -2,14 +2,16 @@
     Ping server binary
 */
 
-#include <gnutls/gnutls.h>
+#include "utils.hpp"
+
+#include <oxen/quic/gnutls_crypto.hpp>
 #include <oxenc/endian.h>
 
 #include <CLI/Validators.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <random>
 
-#include "utils.hpp"
+#include <gnutls/gnutls.h>
+
+#include <random>
 
 using namespace oxen::quic;
 

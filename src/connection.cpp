@@ -457,7 +457,7 @@ namespace oxen::quic
         if (tls_creds->outbound_0rtt())
         {
             const bool accepted = tls_session->get_early_data_accepted();
-            log::debug(log_cat, "Early data was {} by server", accepted ? "ACCEPTED" : "REJECTED");
+            log::critical(log_cat, "Early data was {} by server", accepted ? "ACCEPTED" : "REJECTED");
 
             if (accepted)
             {

@@ -2,19 +2,21 @@
     Ping client binary
 */
 
-#include <gnutls/gnutls.h>
+#include "signal.h"
+#include "utils.hpp"
+
+#include <oxen/quic/gnutls_crypto.hpp>
 #include <oxenc/bt_serialize.h>
 #include <oxenc/endian.h>
 #include <oxenc/hex.h>
 
 #include <CLI/Validators.hpp>
+
+#include <gnutls/gnutls.h>
+
 #include <filesystem>
 #include <fstream>
 #include <limits>
-#include <oxen/quic/gnutls_crypto.hpp>
-
-#include "signal.h"
-#include "utils.hpp"
 
 using namespace oxen::quic;
 

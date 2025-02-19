@@ -1,13 +1,13 @@
+#include "connection.hpp"
+#include "gnutls_crypto.hpp"
+#include "internal.hpp"
+
 #include <oxenc/bt_producer.h>
 #include <oxenc/bt_serialize.h>
 
 #include <chrono>
 #include <tuple>
 #include <utility>
-
-#include "connection.hpp"
-#include "gnutls_crypto.hpp"
-#include "internal.hpp"
 
 namespace oxen::quic
 {
@@ -146,7 +146,10 @@ namespace oxen::quic
     }
 
     std::unique_ptr<TLSSession> GNUTLSCreds::make_session(
-            Connection& c, const IOContext& ctx, std::span<const std::string> alpns, std::optional<std::span<const unsigned char>> expected_key)
+            Connection& c,
+            const IOContext& ctx,
+            std::span<const std::string> alpns,
+            std::optional<std::span<const unsigned char>> expected_key)
     {
         std::optional<gtls_key> exp_key;
         if (expected_key)
