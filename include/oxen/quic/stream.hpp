@@ -97,9 +97,16 @@ namespace oxen::quic
 
         bool is_paused() const;
 
-        // These public methods are synchronized so that they can be safely called from outside the
-        // libquic main loop thread.
+        // Returns true if the stream is usable, i.e. not closing or shutdown.
         bool available() const;
+
+        // Returns true if the stream is ready, that is, has an assigned stream ID and can send data
+        // to the other side.  Note that, when a connection is established using 0-RTT, new streams
+        // will be instantly ready (up to the server's stream limit as contained in the stored 0-RTT
+        // data), but if 0-RTT fails, they will temporarily become unready again until the new, full
+        // 1-RTT connection re-admits them as new streams.  Typically this is momentary, but it
+        // could be prolonged if the server changed transport parameters to reduce the number of
+        // available streams.
         bool is_ready() const;
 
         std::shared_ptr<Stream> get_stream() override;
@@ -123,7 +130,19 @@ namespace oxen::quic
 
         // Called immediately after set_ready so that a subclass can do thing as soon as the stream
         // becomes ready. The default does nothing.
+        //
+        // Note that when using 0-RTT, this will be fired *twice* if 0-RTT is attempted but fails:
+        // once immediately upon stream construction (if the cached 0-RTT transport data allows the
+        // stream to be opened), but then the 0-RTT failure will momentarily "un-ready" it
+        // (`on_unready()` is called) if 0-RTT is rejected.  Typically it will then become ready
+        // again almost immediately as the connection reopens as many 0-RTT streams as it can, but
+        // note that this might not possible (for instance, if the server max streams values has
+        // been reduced).
         virtual void on_ready() {}
+
+        // Called when 0-RTT is rejected and the stream is returned to pending status, which may
+        // only be momentary.  See above.
+        virtual void on_unready() {}
 
         /// Called periodically to check if anything needs to be timed out.  The default does
         /// nothing, but subclasses can override to not do nothing if it's not the case that nothing
@@ -323,6 +342,6 @@ namespace oxen::quic
             chunk_sender<T>::make(simultaneous, *this, std::move(next_chunk), std::move(done));
         }
 
-        void set_ready();
+        void set_ready(bool ready = true);
     };
 }  // namespace oxen::quic

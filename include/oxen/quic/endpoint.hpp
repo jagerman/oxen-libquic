@@ -368,7 +368,16 @@ namespace oxen::quic
 
         void check_timeouts();
 
-        Connection* accept_initial_connection(const Packet& pkt);
+        // Attempts to interpret the packet as an initial connection.  If the packet is acceptable,
+        // a new Connection is created and a pointer to it is returned.  The bool indicates whether
+        // the request has been handled:
+        // - always true when a non-nullptr Connection* is returned
+        // - otherwise:
+        //   - true if the packet has been dealt with, such as illiciting a retry.  The caller
+        //     should do nothing else with it.
+        //   - false if the packet did not look like a connection, and the caller can try something
+        //     else.
+        std::pair<Connection*, bool> accept_initial_connection(const Packet& pkt);
         Connection* check_stateless_reset(const Packet& pkt);
 
         template <typename... Opt>

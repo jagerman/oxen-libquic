@@ -367,11 +367,17 @@ namespace oxen::quic
         return size() - unacked();
     }
 
-    void Stream::set_ready()
+    void Stream::set_ready(bool ready)
     {
-        log::trace(log_cat, "Setting stream ready");
-        _ready = true;
-        on_ready();
+        if (_ready == ready)
+            return;
+
+        log::debug(log_cat, "Setting stream {}", ready ? "ready" : "unready");
+        _ready = ready;
+        if (ready)
+            on_ready();
+        else
+            on_unready();
     }
 
     void _chunk_sender_trace(const char* file, int lineno, std::string_view message)

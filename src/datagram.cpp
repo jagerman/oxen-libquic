@@ -60,6 +60,10 @@ namespace oxen::quic
     {
         _send_buffer.early_data_begin();
     }
+    void DatagramIO::early_data_retry()
+    {
+        _send_buffer.early_data_retry();
+    }
     void DatagramIO::early_data_end(bool accepted)
     {
         _send_buffer.early_data_end(accepted);

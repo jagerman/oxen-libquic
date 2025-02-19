@@ -184,8 +184,13 @@ namespace oxen::quic
         //   - early_data_end(false) during handshake complete.
         //   - e.g. datagrams consumed by connection for sending out, expecting to start over from
         //     the beginning.
+        //
+        // It is also possible to get a Retry during the attempt to establish 0-RTT, which signifies
+        // that any already-send datagrams are lost and so we mark them all as unsent to try sending
+        // them again with the retried 0-RTT connection.
         void early_data_begin();
         void early_data_end(bool accepted);
+        void early_data_retry();
 
         // (See methods of same name in connection_interface for details)
         void set_split_datagram_lookahead(int n);

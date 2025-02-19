@@ -16,6 +16,7 @@
 #include <limits>
 #include <memory>
 #include <random>
+#include <ranges>
 #include <stdexcept>
 
 namespace oxen::quic
@@ -283,12 +284,15 @@ namespace oxen::quic
             return 0;
         }
 
-        static int extend_max_local_streams_bidi(
-                [[maybe_unused]] ngtcp2_conn* _conn, uint64_t /*max_streams*/, void* user_data)
+        static int extend_max_local_streams_bidi([[maybe_unused]] ngtcp2_conn* _conn, uint64_t max_streams, void* user_data)
         {
-            log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-            // removed assert to call this hook in 0rtt connection config
             auto& conn = *static_cast<Connection*>(user_data);
+            log::debug(
+                    log_cat,
+                    "max local bidi streams extended on {} {} to {}",
+                    conn.direction_str(),
+                    conn.reference_id(),
+                    max_streams);
 
             if (auto remaining = ngtcp2_conn_get_streams_bidi_left(conn); remaining > 0)
                 conn.check_pending_streams(remaining);
@@ -336,6 +340,28 @@ namespace oxen::quic
                 log::trace(log_cat, "Early data rejected (but this connection was not using early data)");
 
             return 0;
+        }
+
+        static int on_recv_retry(ngtcp2_conn* _conn, const ngtcp2_pkt_hd* hd, void* user_data)
+        {
+            int rv = ngtcp2_crypto_recv_retry_cb(_conn, hd, user_data);
+            if (rv == 0)
+            {
+                log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+
+                auto& conn = *static_cast<Connection*>(user_data);
+                assert(_conn == conn);
+
+                // ngtcp2 automatically resends lost stream data on a retry, but we also want to
+                // allow our known-lost initial datagrams to be resent:
+                if (conn._early_data && conn.datagrams)
+                {
+                    log::debug(log_cat, "Client received a Retry during early data; resetting datagrams");
+                    conn.datagrams->early_data_retry();
+                }
+            }
+
+            return rv;
         }
 
         static int recv_stateless_reset(
@@ -611,11 +637,30 @@ namespace oxen::quic
         assert(endpoint().in_event_loop());
         log::debug(log_cat, "Client reverting early stream data");
 
-        for (auto& s : _streams)
+        // We need to re-open any opened streams because the remote rejected early data, and when
+        // that happens ngtcp2 reverts all stream state.  So we prepend all our streams back into
+        // pending_streams (in reverse order so that they will get opened in the same order) then
+        // call check_pending_streams to reopen them.
+        for (auto& [id, stream] : std::ranges::views::reverse(_streams))
         {
-            log::trace(log_cat, "Reverting stream (ID:{})...", s.first);
-            s.second->revert_stream();
+            log::debug(log_cat, "Resetting early stream {} and returning to pending streams", id);
+            stream->revert_stream();
+            stream->set_ready(false);
+            if (!(id & 0x01))
+            {  // Client-initiated stream (and we are always the client)
+                pending_streams.push_front(std::move(stream));
+            }
+            else
+            {
+                // This shouldn't happen because if we're still in early data the server shouldn't
+                // have been able to send anything to us yet.
+                log::warning(log_cat, "Unexpected non-client-initiated stream {} in early stream reset", id);
+                _stream_queue[id] = std::move(stream);
+            }
         }
+        _streams.clear();
+        if (auto remaining = ngtcp2_conn_get_streams_bidi_left(*this); remaining > 0)
+            check_pending_streams(remaining);
     }
 
     void Connection::handle_conn_packet(const Packet& pkt)
@@ -1787,7 +1832,7 @@ namespace oxen::quic
         {
             callbacks.client_initial = ngtcp2_crypto_client_initial_cb;
             callbacks.handshake_confirmed = connection_callbacks::on_handshake_confirmed;
-            callbacks.recv_retry = ngtcp2_crypto_recv_retry_cb;
+            callbacks.recv_retry = connection_callbacks::on_recv_retry;
             callbacks.recv_new_token = connection_callbacks::on_recv_token;
             callbacks.tls_early_data_rejected = connection_callbacks::on_early_data_rejected;
 

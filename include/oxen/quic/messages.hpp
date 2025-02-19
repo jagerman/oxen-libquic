@@ -165,6 +165,12 @@ namespace oxen::quic
         // any datagrams can actually be delivered to the queue.
         void early_data_begin();
 
+        // Called to retry all datagrams by marking them as unsent; this is called by early_data_end
+        // if early data was rejected, but is also called if we receive a Retry packet from the
+        // server during 0-RTT, which means any already-send 0-RTT datagrams will have been lost and
+        // need to be retransmitted.
+        void early_data_retry();
+
         // Called as soon as early data is finished, if initiailized in early data mode (i.e.
         // attempting 0-RTT).  That is, it is called as soon as early data is rejected, or as soon
         // as handshake completes without early data rejection.  The bool indicates whether early

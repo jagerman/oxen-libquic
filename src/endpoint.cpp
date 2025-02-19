@@ -265,7 +265,12 @@ namespace oxen::quic
         if (!cptr)
         {
             if (_accepting_inbound)
-                cptr = accept_initial_connection(pkt);
+            {
+                bool dealt_with;
+                std::tie(cptr, dealt_with) = accept_initial_connection(pkt);
+                if (!cptr && dealt_with)
+                    return;
+            }
 
             if (!cptr)
             {
@@ -836,7 +841,7 @@ namespace oxen::quic
 
         return cptr;
     }
-    Connection* Endpoint::accept_initial_connection(const Packet& pkt)
+    std::pair<Connection*, bool> Endpoint::accept_initial_connection(const Packet& pkt)
     {
         log::trace(log_cat, "Attempt to accept new connection...");
 
@@ -846,7 +851,7 @@ namespace oxen::quic
         auto rv = ngtcp2_accept(&hdr, data.data(), data.size());
 
         if (rv < 0 || hdr.type != NGTCP2_PKT_INITIAL)
-            return nullptr;
+            return {nullptr, false};
 
         ngtcp2_cid original_cid;
         ngtcp2_cid* pkt_original_cid = nullptr;
@@ -860,7 +865,7 @@ namespace oxen::quic
                     if (not verify_retry_token(pkt, &hdr, &original_cid))
                     {
                         send_stateless_connection_close(pkt, &hdr, io_error{NGTCP2_INVALID_TOKEN});
-                        return nullptr;
+                        return {nullptr, true};
                     }
 
                     pkt_original_cid = &original_cid;
@@ -870,19 +875,17 @@ namespace oxen::quic
                     if (not verify_token(pkt, &hdr))
                     {
                         send_retry(pkt, &hdr);
-                        return nullptr;
+                        return {nullptr, true};
                     }
 
                     token_type = NGTCP2_TOKEN_TYPE_NEW_TOKEN;
                     break;
                 default:
                     if (hdr.dcid.datalen < NGTCP2_MIN_INITIAL_DCIDLEN)
-                    {
                         send_stateless_connection_close(pkt, &hdr, io_error{NGTCP2_INVALID_TOKEN});
-                        return nullptr;
-                    }
-                    send_retry(pkt, &hdr);
-                    return nullptr;
+                    else
+                        send_retry(pkt, &hdr);
+                    return {nullptr, true};
             }
         }
 
@@ -921,7 +924,7 @@ namespace oxen::quic
         }
 
         initial_association(*conn);
-        return conn;
+        return {conn, true};
     }
 
     io_result Endpoint::send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t ecn, size_t& n_pkts)

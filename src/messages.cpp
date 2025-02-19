@@ -105,6 +105,23 @@ namespace oxen::quic
         early_data_head = std::make_optional<size_t>(0);
     }
 
+    void datagram_queue::early_data_retry()
+    {
+        if (!early_data_head)
+            return;
+
+        // This is the furthest index we could have (partially) marked as sent:
+        size_t max_i = *early_data_head + (packet_splitting ? split_lookahead : 0);
+        size_t i = 0;
+        for (auto& pkt : buf)
+        {
+            pkt.unsend();
+            if (++i > max_i)
+                break;
+        }
+        *early_data_head = 0;
+    }
+
     void datagram_queue::early_data_end(bool accepted)
     {
         if (!early_data_head)
@@ -115,16 +132,7 @@ namespace oxen::quic
             // Early data was rejected, which means any 0-RTT datagrams we sent got dropped on
             // the floor and we should unmark them as sent so that they get sent properly under
             // 1-RTT.
-
-            // This is the furthest index we could have (partially) marked as sent:
-            size_t max_i = *early_data_head + (packet_splitting ? split_lookahead : 0);
-            size_t i = 0;
-            for (auto& pkt : buf)
-            {
-                pkt.unsend();
-                if (++i > max_i)
-                    break;
-            }
+            early_data_retry();
         }
         else
         {
