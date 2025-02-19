@@ -97,6 +97,11 @@ namespace oxen::quic
 
         const Address& local() const { return _local; }
 
+        // Sets the local endpoint address.  This should *only* be used when using manual packet
+        // routing; otherwise the address will be set automatically and this method should not
+        // normally be called.
+        void set_local(Address new_local) { _local = new_local; }
+
         bool is_accepting() const { return _accepting_inbound; }
 
         bool datagrams_enabled() const { return _datagrams; }
@@ -308,8 +313,7 @@ namespace oxen::quic
 
         void _execute_close_hooks(Connection& conn, io_error ec = io_error{0});
 
-        // Test methods
-        void set_local(Address new_local) { _local = new_local; }
+        // Test method
         Connection* get_conn(const quic_cid& ID);
 
         /// Connection Containers

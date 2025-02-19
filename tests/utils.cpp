@@ -258,4 +258,64 @@ namespace oxen::quic
         return friendly;
     }
 
+    std::shared_ptr<packet_delayer> packet_delayer::make(std::chrono::milliseconds delay)
+    {
+        return std::shared_ptr<packet_delayer>{new packet_delayer{delay}};
+    }
+
+    void packet_delayer::init(std::shared_ptr<Loop> loop_, std::shared_ptr<Endpoint> ep_)
+    {
+        if (ep)
+            throw std::logic_error{"Cannot call packet_delayer::init more than once"};
+        ep = std::move(ep_);
+        loop = std::move(loop_);
+        if (!ep || !loop)
+            throw std::logic_error{"packet_delayer::init called with nullptr endpoint and/or loop"};
+
+        sock = std::make_unique<UDPSocket>(loop->loop().get(), ep->local(), [wself = weak_from_this()](Packet&& pkt) {
+            log::debug(log_cat, "incoming {}B udp packet from {}; delaying delivery", pkt.size(), pkt.path);
+            auto self = wself.lock();
+            if (!self)
+                return;
+
+            pkt.ensure_owned_data();
+            self->loop->call_later(self->delay.load(), [wself, pkt = std::move(pkt)]() mutable {
+                log::debug(log_cat, "completing incoming delayed delivery of {}B packet on path {}", pkt.size(), pkt.path);
+                if (auto self = wself.lock())
+                    self->ep->manually_receive_packet(std::move(pkt));
+            });
+        });
+        ep->set_local(sock->address());
+    }
+
+    packet_delayer::operator opt::manual_routing()
+    {
+        return opt::manual_routing{[wself = weak_from_this()](const Path& p, std::span<const std::byte> pkt) {
+            log::debug(log_cat, "outgoing {}B packet along {}; delaying delivery", pkt.size(), p);
+            auto self = wself.lock();
+            if (!self)
+                return;
+            if (!self->loop || !self->ep)
+            {
+                log::critical(log_cat, "Error: packet_delayer received packet without a call to init()");
+                return;
+            }
+            self->loop->call_later(self->delay.load(), [wself, path = p, data = std::vector(pkt.begin(), pkt.end())] {
+                log::debug(log_cat, "completing outgoing delayed delivery of {}B packet along {}", data.size(), path);
+                if (auto self = wself.lock())
+                {
+                    size_t sz = data.size();
+                    auto [res, sent] = self->sock->send(path, data.data(), &sz, 0, 1);
+                    if (sent != 1)
+                        log::critical(
+                                log_cat,
+                                "Error: packet_delayer failed to send, and no retry queue is implemented; dropping packet");
+                }
+                else
+                {
+                }
+            });
+        }};
+    }
+
 }  // namespace oxen::quic

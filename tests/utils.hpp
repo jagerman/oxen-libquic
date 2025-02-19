@@ -1,12 +1,11 @@
 #pragma once
 
-#include <oxenc/base64.h>
-#include <oxenc/hex.h>
-
 #include <oxen/log.hpp>
 #include <oxen/log/format.hpp>
 #include <oxen/quic.hpp>
 #include <oxen/quic/format.hpp>
+#include <oxenc/base64.h>
+#include <oxenc/hex.h>
 
 #include <CLI/CLI.hpp>
 #include <CLI/Error.hpp>
@@ -247,5 +246,45 @@ namespace oxen::quic
 
         log::debug(test_cat, "Network killed!");
     }
+
+    // Manual packet delivery system that delays all packet transmission by a configurable amount of
+    // time; used to test things like 0rtt where we can use the delay to test whether data is
+    // arriving before a handshake could have completed.  The delay is applied to both incoming and
+    // outgoing packets, and so should generally be used on just one side of the connection.
+    //
+    // This is quite event loop heavy as every packet is separately queued via a timer on the end
+    // loop and is not meant to be particularly performant.
+    //
+    // To use this you must:
+    // - construct this object via `auto delayer = packet_delayer::make(10ms);`
+    // - construct the endpoint, passing `*delayer` to the `endpoint(...)` call (this object
+    //   auto-converts into the appropriate manual routing option).
+    // - call `delayer->init(loop, ep)`, providing a loop and the endpoint (it does not have to be
+    //   the endpoint's loop), which starts the actual underlying socket.
+    class packet_delayer : public std::enable_shared_from_this<packet_delayer>
+    {
+      public:
+        std::atomic<std::chrono::milliseconds> delay;
+
+      private:
+        std::shared_ptr<Loop> loop;
+        std::shared_ptr<Endpoint> ep;
+        std::unique_ptr<UDPSocket> sock;
+
+        explicit packet_delayer(std::chrono::milliseconds delay) : delay{delay} {}
+
+      public:
+        static std::shared_ptr<packet_delayer> make(std::chrono::milliseconds delay = 10ms);
+
+        // Non-copyable, non-movable:
+        packet_delayer(packet_delayer&&) = delete;
+        packet_delayer(const packet_delayer&) = delete;
+        packet_delayer& operator=(packet_delayer&&) = delete;
+        packet_delayer& operator=(const packet_delayer&) = delete;
+
+        operator opt::manual_routing();
+
+        void init(std::shared_ptr<Loop>, std::shared_ptr<Endpoint> ep);
+    };
 
 }  // namespace oxen::quic
