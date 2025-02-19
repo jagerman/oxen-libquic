@@ -8,24 +8,12 @@ using namespace oxen::quic;
 
 int main(int argc, char* argv[])
 {
-    CLI::App cli{"libQUIC test client"};
+    CLI::App cli{"libQUIC stream speedtest client"};
 
-    std::string remote_addr = "127.0.0.1:5500";
-    cli.add_option("--remote", remote_addr, "Remove address to connect to")->type_name("IP:PORT")->capture_default_str();
-
-    std::string remote_pubkey;
-    cli.add_option("-p,--remote-pubkey", remote_pubkey, "Remote speedtest-client pubkey")
-            ->type_name("PUBKEY_HEX_OR_B64")
-            ->transform([](const std::string& val) -> std::string {
-                if (auto pk = decode_bytes(val))
-                    return std::move(*pk);
-                throw CLI::ValidationError{
-                        "Invalid value passed to --remote-pubkey: expected value encoded as hex or base64"};
-            })
-            ->required();
-
-    std::string local_addr = "";
-    cli.add_option("--local", local_addr, "Local bind address, if required")->type_name("IP:PORT")->capture_default_str();
+    std::string local_addr, remote_addr = "127.0.0.1:5500"s, remote_pubkey, seed_string;
+    bool enable_0rtt;
+    std::filesystem::path zerortt_path;
+    common_client_opts(cli, local_addr, remote_addr, remote_pubkey, seed_string, enable_0rtt, zerortt_path);
 
     std::string log_file, log_level;
     add_log_opts(cli, log_file, log_level);
@@ -34,20 +22,11 @@ int main(int argc, char* argv[])
     cli.add_option("-j,--parallel", parallel, "Number of simultaneous streams to send (currently max 32)")
             ->check(CLI::Range(1, 32));
 
-    bool receive = false;
-    cli.add_option(
-            "-R,--receive",
-            receive,
-            "If specified receive data from the server instead than sending data.  Ignored if --bidir is specified.");
-
-    bool bidir = false;
-    cli.add_option("-B,--bidir", bidir, "Test transfer *and* receiving; if omitted only send or receive (see --receive)");
-
     uint64_t size = 1'000'000'000;
     cli.add_option(
             "-S,--size",
             size,
-            "Amount of data to transfer (if using --bidir, this amount is in each direction).  When using --parallel the "
+            "Amount of data to transfer.  When using --parallel the "
             "data is divided equally across streams.");
 
     bool pregenerate = false;
@@ -127,13 +106,16 @@ int main(int argc, char* argv[])
 
     auto [seed, pubkey] = generate_ed25519();
     auto client_tls = GNUTLSCreds::make_from_ed_keys(seed, pubkey);
+    if (enable_0rtt)
+        zerortt_storage::enable(*client_tls, zerortt_path);
 
     std::vector<std::unique_ptr<stream_data>> streams;
     streams.reserve(parallel);
 
     stream_close_callback stream_closed = [&](Stream& s, uint64_t errcode) {
         size_t i = s.stream_id() >> 2;
-        log::critical(test_cat, "Stream {} (rawid={}) closed (error={})", i, s.stream_id(), errcode);
+        auto error = (errcode == STREAM_ERROR_CONNECTION_CLOSED || !errcode) ? ""s : " with error {}"_format(errcode);
+        log::critical(test_cat, "Stream {} (rawid={}) closed{}", i, s.stream_id(), error);
     };
 
     stream_data_callback on_stream_data = [&](Stream& s, bspan data) {
@@ -205,7 +187,7 @@ int main(int argc, char* argv[])
     RemoteAddress server_addr{remote_pubkey, server_a, server_p};
 
     log::debug(test_cat, "Constructing endpoint on {}", client_local);
-    auto client = client_net.endpoint(client_local);
+    auto client = client_net.endpoint(client_local, generate_static_secret(seed_string), opt::alpns{"speedtest"});
     log::debug(test_cat, "Connecting to {}...", server_addr);
     auto client_ci = client->connect(server_addr, client_tls, on_stream_data, stream_closed);
 

@@ -1,7 +1,12 @@
 #include "utils.hpp"
 
+#include <oxen/quic/opt.hpp>
+
 #include <nettle/eddsa.h>
 #include <nettle/sha3.h>
+
+#include <chrono>
+#include <fstream>
 
 namespace oxen::quic
 {
@@ -169,7 +174,7 @@ namespace oxen::quic
         }
         else
         {
-            gnutls_rnd(gnutls_rnd_level_t::GNUTLS_RND_KEY, seed.data(), sizeof(seed.size()));
+            gnutls_rnd(gnutls_rnd_level_t::GNUTLS_RND_KEY, seed.data(), seed.size());
         }
 
         pubkey.resize(32);
@@ -177,6 +182,27 @@ namespace oxen::quic
                 reinterpret_cast<unsigned char*>(pubkey.data()), reinterpret_cast<const unsigned char*>(seed.data()));
 
         return result;
+    }
+
+    opt::static_secret generate_static_secret(std::string_view seed_string)
+    {
+        std::vector<unsigned char> ep_secret;
+        ep_secret.resize(32);
+        if (seed_string.empty())
+            gnutls_rnd(gnutls_rnd_level_t::GNUTLS_RND_KEY, ep_secret.data(), ep_secret.size());
+        else
+            sha3_256(ep_secret.data(), seed_string, "libquic-test-static-secret");
+        return opt::static_secret{std::move(ep_secret)};
+    }
+
+    std::optional<std::string> decode_bytes(std::string_view encoded, size_t size)
+    {
+        if (encoded.size() == size * 2 && oxenc::is_hex(encoded))
+            return oxenc::from_hex(encoded);
+        if (encoded.size() >= oxenc::to_base64_size(size, false) && encoded.size() <= oxenc::to_base64_size(32, true) &&
+            oxenc::is_base64(encoded))
+            return oxenc::from_base64(encoded);
+        return std::nullopt;
     }
 
     void add_log_opts(CLI::App& cli, std::string& file, std::string& level)
@@ -192,6 +218,113 @@ namespace oxen::quic
                 ->type_name("LEVEL")
                 ->capture_default_str()
                 ->check(CLI::IsMember({"trace", "debug", "info", "warn", "error", "critical", "off"}));
+    }
+
+    void common_server_opts(CLI::App& cli, std::string& server_listen, std::string& seed_string, bool& enable_0rtt)
+    {
+        seed_string.clear();
+        enable_0rtt = false;
+
+        cli.add_option("--listen", server_listen, "Server address to listen on")
+                ->type_name("IP:PORT")
+                ->capture_default_str();
+
+        cli.add_option(
+                "-s,--seed",
+                seed_string,
+                "If non-empty then the server key and endpoint private data will be generated from a hash of the given "
+                "seed, "
+                "for reproducible keys and operation.  If omitted/empty a random seed is used.");
+
+        cli.add_flag("-Z,--enable-0rtt", enable_0rtt, "Enable 0-RTT early data for this endpoint");
+    }
+
+    void common_client_opts(
+            CLI::App& cli,
+            std::string& local_addr,
+            std::string& remote_addr,
+            std::string& remote_pubkey,
+            std::string& seed_string,
+            bool& enable_0rtt,
+            std::filesystem::path& store_0rtt)
+    {
+        if (remote_addr.empty())
+            remote_addr = "127.0.0.1:5500";
+        remote_pubkey.clear();
+        seed_string.clear();
+        enable_0rtt = false;
+        if (store_0rtt.empty())
+            store_0rtt = std::filesystem::path{u8"./libquic-test-0rtt-cache.bin"};
+
+        cli.add_option("-R,--remote", remote_addr, "Remote address to connect to")
+                ->type_name("IP:PORT")
+                ->capture_default_str();
+
+        auto* rem_pubkey = cli.add_option_group("remote pubkey");
+        rem_pubkey->add_option("-P,--remote-pubkey", remote_pubkey, "Remote server pubkey")
+                ->type_name("HEX_OR_B64")
+                ->transform([](const std::string& val) -> std::string {
+                    if (auto pk = decode_bytes(val))
+                        return std::move(*pk);
+                    throw CLI::ValidationError{
+                            "Invalid value passed to --remote-pubkey: expected value encoded as hex or base64"};
+                });
+        rem_pubkey->add_option("--remote-seed", remote_pubkey, "Calculate server pubkey using this server seed value")
+                ->transform([](const std::string& val) { return generate_ed25519(val).second; });
+        rem_pubkey->require_option(1);
+
+        cli.add_flag("-Z,--enable-0rtt", enable_0rtt, "Enable 0-RTT early data for this endpoint");
+        cli.add_option("-z,--zerortt-storage", store_0rtt, "Path to load and store 0rtt information from.");
+
+        cli.add_option("--local", local_addr, "Local bind address (optional)")->type_name("IP:PORT")->capture_default_str();
+
+        cli.add_option(
+                "-s,--seed",
+                seed_string,
+                "If non-empty then the client key and endpoint private data will be generated from a hash of the given "
+                "seed, for reproducible keys and operation.  If omitted/empty a random seed is used.");
+    }
+
+    void server_log_listening(
+            const Address& server_local,
+            const Address& default_local,
+            const std::string& pubkey,
+            const std::string& seed_string,
+            bool enable_0rtt,
+            std::string_view extra)
+    {
+        // We always want to see this log statement because it contains the pubkey the client needs,
+        // but it feels wrong to force it to a critical statement, so temporarily lower the level to
+        // info to display it.
+        log_level_lowerer enable_info{log::Level::info, test_cat.name};
+        std::vector<std::vector<std::string>> flags;
+        flags.resize(seed_string.empty() ? 1 : 2);
+        flags[0].push_back("-P {}"_format(oxenc::to_base64(pubkey)));
+        if (!seed_string.empty())
+        {
+            auto quote = seed_string.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") !=
+                                         std::string::npos
+                               ? "'"sv
+                               : ""sv;
+            flags[1].push_back("--remote-seed {0}{1}{0}"_format(quote, seed_string));
+        }
+
+        for (auto& f : flags)
+        {
+            if (server_local != default_local)
+                f.push_back("-R {}"_format(server_local.to_string()));
+            if (enable_0rtt)
+                f.emplace_back("-Z");
+            if (!extra.empty())
+                f.emplace_back(extra);
+        }
+
+        std::string flags_out;
+        flags_out += "        {}"_format(fmt::join(flags[0], " "));
+        for (size_t i = 1; i < flags.size(); i++)
+            flags_out += "\n    or:\n        {}"_format(fmt::join(flags[i], " "));
+
+        log::info(test_cat, "Listening on {}; client connection args:\n{}", server_local, flags_out);
     }
 
     void setup_logging(std::string out, const std::string& level)
@@ -212,6 +345,134 @@ namespace oxen::quic
 
         if (lvl <= oxen::log::Level::trace)
             enable_gnutls_logging();
+    }
+
+    zerortt_storage::zerortt_storage(std::filesystem::path p) : path{std::move(p)}
+    {
+        load();
+    }
+    void zerortt_storage::load(bool prune_expired)
+    {
+        if (std::filesystem::exists(path))
+        {
+            std::ifstream in;
+            in.exceptions(std::ios::failbit);
+            in.open(path, std::ios::binary);
+            in.seekg(0, std::ios::end);
+            std::string dumped;
+            dumped.resize(in.tellg());
+            in.seekg(0, std::ios::beg);
+            in.read(dumped.data(), dumped.size());
+
+            oxenc::bt_deserialize(dumped, data);
+
+            if (prune_expired)
+                clear_expired();
+        }
+        else
+            data.clear();
+    }
+
+    bool zerortt_storage::clear_expired()
+    {
+        bool modified = false;
+        for (auto it = data.begin(); it != data.end();)
+        {
+            auto& [pk, tickets] = *it;
+            for (auto it = tickets.begin(); it != tickets.end();)
+            {
+                auto& exp = it->second;
+                if (std::chrono::system_clock::from_time_t(exp) < std::chrono::system_clock::now())
+                {
+                    log::trace(log_cat, "Dropping expired 0-RTT session data for pubkey {}", oxenc::to_hex(pk));
+                    it = tickets.erase(it);
+                    modified = true;
+                }
+                else
+                    ++it;
+            }
+            if (tickets.empty())
+            {
+                modified = true;
+                it = data.erase(it);
+            }
+            else
+                ++it;
+        }
+        return modified;
+    }
+
+    void zerortt_storage::dump(bool prune_expired)
+    {
+        if (prune_expired)
+            clear_expired();
+
+        std::ofstream out;
+        out.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+        out.open(path, std::ios::binary | std::ios::out | std::ios::trunc);
+        auto contents = oxenc::bt_serialize(data);
+        out.write(contents.data(), contents.size());
+    }
+
+    void zerortt_storage::store(
+            const RemoteAddress& remote,
+            std::vector<unsigned char> vdata,
+            std::chrono::system_clock::time_point expiry,
+            bool dump_now)
+    {
+        log::debug(log_cat, "Storing 0-RTT session data for remote {}", remote);
+
+        auto ukey = remote.view_remote_key();
+        std::string key{reinterpret_cast<const char*>(ukey.data()), ukey.size()};
+        std::string session_data{reinterpret_cast<const char*>(vdata.data()), vdata.size()};
+        data[key].emplace_back(std::move(session_data), std::chrono::system_clock::to_time_t(expiry));
+        if (dump_now)
+            dump();
+    }
+    std::optional<std::vector<unsigned char>> zerortt_storage::extract(const RemoteAddress& remote, bool dump_now)
+    {
+        log::debug(log_cat, "Looking up 0-RTT session data for remote {}", remote);
+        bool modified = clear_expired();
+        auto ukey = remote.view_remote_key();
+        std::string key{reinterpret_cast<const char*>(ukey.data()), ukey.size()};
+        std::optional<std::vector<unsigned char>> result;
+        auto it = data.find(key);
+        if (it != data.end())
+        {
+            auto& mine = it->second;
+            auto now = std::chrono::system_clock::now();
+            result.emplace(mine.back().first.size());
+            std::memcpy(result->data(), mine.back().first.data(), result->size());
+            log::debug(
+                    log_cat,
+                    "Found 0-RTT session data with expiry +{}s; {} session data remaining",
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::system_clock::from_time_t(mine.back().second) - now)
+                            .count(),
+                    mine.size() - 1);
+            mine.pop_back();
+            if (mine.empty())
+                data.erase(it);
+            modified = true;
+        }
+        else
+            log::debug(log_cat, "No 0-RTT session data found");
+
+        if (modified && dump_now)
+            dump();
+
+        return result;
+    }
+
+    void zerortt_storage::enable(GNUTLSCreds& creds, std::filesystem::path path)
+    {
+        auto zstore = std::make_shared<zerortt_storage>(std::move(path));
+        creds.enable_outbound_0rtt(
+                [zstore](
+                        const RemoteAddress& remote,
+                        std::vector<unsigned char> vdata,
+                        std::chrono::system_clock::time_point expiry) { zstore->store(remote, vdata, expiry); },
+                [zstore](const RemoteAddress& remote) { return zstore->extract(remote); });
     }
 
     std::string friendly_duration(std::chrono::nanoseconds dur)

@@ -40,6 +40,10 @@ namespace oxen::quic
     inline const std::string TEST_ENDPOINT = "test_endpoint"s;
     inline const std::string TEST_BODY = "test_body"s;
 
+    inline const Address DEFAULT_SPEEDTEST_ADDR{LOCALHOST, uint16_t{5500}};
+    inline const Address DEFAULT_DGRAM_SPEED_ADDR{LOCALHOST, uint16_t{5501}};
+    inline const Address DEFAULT_PING_ADDR{LOCALHOST, uint16_t{5502}};
+
     class TestHelper
     {
       public:
@@ -89,6 +93,10 @@ namespace oxen::quic
     // otherwise be used).
     std::pair<std::string, std::string> generate_ed25519(std::string_view seed_string = ""sv);
 
+    // Generates a static secret for testing purposes.  Like generate_ed25519, this will use a hash
+    // of the given seed, if non-empty, and otherwise will generate a random value.
+    opt::static_secret generate_static_secret(std::string_view seed_string = ""sv);
+
     template <oxenc::const_span_type T>
     inline std::string_view sp_to_sv(const T& sp)
     {
@@ -97,20 +105,33 @@ namespace oxen::quic
 
     // Takes a hex- or base64-encoded byte value of the given byte size and returns the bytes.
     // Returns nullopt if the encoded value is not a valid byte encoding of the given size.
-    template <typename Char = char>
-    inline std::optional<std::basic_string<Char>> decode_bytes(std::string_view encoded, size_t size = 32)
-    {
-        if (encoded.size() == size * 2 && oxenc::is_hex(encoded))
-            return oxenc::from_hex<Char>(encoded);
-        if (encoded.size() >= oxenc::to_base64_size(size, false) && encoded.size() <= oxenc::to_base64_size(32, true) &&
-            oxenc::is_base64(encoded))
-            return oxenc::from_base64<Char>(encoded);
-        return std::nullopt;
-    }
+    std::optional<std::string> decode_bytes(std::string_view encoded, size_t size = 32);
 
+    // Adds common logging options
     void add_log_opts(CLI::App& cli, std::string& file, std::string& level);
 
+    // Adds common server options.
+    void common_server_opts(CLI::App& cli, std::string& server_listen, std::string& seed_string, bool& enable_0rtt);
+
+    // Adds common client options.
+    void common_client_opts(
+            CLI::App& cli,
+            std::string& local_addr,
+            std::string& remote_addr,
+            std::string& remote_pubkey,
+            std::string& seed_string,
+            bool& enable_0rtt,
+            std::filesystem::path& store_0rtt);
+
     void setup_logging(std::string out, const std::string& level);
+
+    void server_log_listening(
+            const Address& server_local,
+            const Address& default_local,
+            const std::string& pubkey,
+            const std::string& seed_string,
+            bool enable_0rtt,
+            std::string_view extra = ""sv);
 
     /// RAII class that resets the log level for the given category while the object is alive, then
     /// resets it to what it was at construction when the object is destroyed.
@@ -217,6 +238,39 @@ namespace oxen::quic
                 return func(std::forward<decltype(args)>(args)...);
             };
         }
+    };
+
+    // Helper class for persistent zerortt storage.  This loads from disk on construction, and
+    // replaces the content on disk whenever a new entry is added.
+    struct zerortt_storage
+    {
+        // pubkey -> list of [ticketdata, expiry]
+        using zerortt_data_t = std::unordered_map<std::string, std::list<std::pair<std::string, int64_t>>>;
+
+        std::filesystem::path path;
+        zerortt_data_t data;
+
+        explicit zerortt_storage(std::filesystem::path p);
+
+        // Load/save to disk.  Called automatically on construction and when storing a new entry.
+        void load(bool prune_expired = true);
+        void dump(bool prune_expired = true);
+
+        // Cleans up expired entries.  Returns true if anything changed.
+        bool clear_expired();
+
+        // Stores new session data
+        void store(
+                const RemoteAddress& remote,
+                std::vector<unsigned char> vdata,
+                std::chrono::system_clock::time_point expiry,
+                bool dump = true);
+        // Looks up a remote by key, removing and returning the most recently added non-expired
+        // session data.  Returns nullopt if no session data was found.
+        std::optional<std::vector<unsigned char>> extract(const RemoteAddress& remote, bool dump = true);
+
+        // Enables zerortt for the given creds using persistent storage via an instance of this class.
+        static void enable(GNUTLSCreds& creds, std::filesystem::path path);
     };
 
     // Returns a human-readable duration, auto-scaling the unit based on the duration given.

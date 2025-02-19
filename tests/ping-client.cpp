@@ -15,7 +15,6 @@
 #include <gnutls/gnutls.h>
 
 #include <filesystem>
-#include <fstream>
 #include <limits>
 
 using namespace oxen::quic;
@@ -33,7 +32,7 @@ ping_stats run_client(
         std::string_view local_addr,
         std::string_view seed_string,
         bool enable_0rtt,
-        std::filesystem::path store_0rtt,
+        const std::filesystem::path& zerortt_path,
         uint32_t ping_count,
         double ping_interval,
         double ping_timeout,
@@ -46,29 +45,11 @@ int main(int argc, char* argv[])
     std::string log_file, log_level;
     add_log_opts(cli, log_file, log_level);
 
-    std::string remote_addr = "127.0.0.1:5500";
-    cli.add_option("--remote", remote_addr, "Remove address to connect to")->type_name("IP:PORT")->capture_default_str();
-
-    std::string remote_pubkey;
-    cli.add_option("-p,--remote-pubkey", remote_pubkey, "Remote server pubkey")
-            ->type_name("PUBKEY_HEX_OR_B64")
-            ->transform([](const std::string& val) -> std::string {
-                if (auto pk = decode_bytes(val))
-                    return std::move(*pk);
-                throw CLI::ValidationError{
-                        "Invalid value passed to --remote-pubkey: expected value encoded as hex or base64"};
-            })
-            ->required();
-
-    std::string local_addr = "";
-    cli.add_option("--local", local_addr, "Local bind address (optional)")->type_name("IP:PORT")->capture_default_str();
-
-    std::string seed_string = "";
-    cli.add_option(
-            "-s,--seed",
-            seed_string,
-            "If non-empty then the client key and endpoint private data will be generated from a hash of the given seed, "
-            "for reproducible keys and operation.  If omitted/empty a random seed is used.");
+    std::string local_addr, remote_pubkey, seed_string;
+    auto remote_addr = DEFAULT_PING_ADDR.to_string();
+    bool enable_0rtt;
+    std::filesystem::path zerortt_path;
+    common_client_opts(cli, local_addr, remote_addr, remote_pubkey, seed_string, enable_0rtt, zerortt_path);
 
     double ping_timeout = 5.0;
     cli.add_option(
@@ -76,15 +57,6 @@ int main(int argc, char* argv[])
                ping_timeout,
                "How long to wait for the final ping reply (when using -c) before giving up and disconnecting without it.")
             ->capture_default_str();
-
-    bool enable_0rtt = false;
-    cli.add_flag(
-            "-Z,--enable-0rtt",
-            enable_0rtt,
-            "Enable 0-RTT and early data for this endpoint (cannot be used without key verification)");
-
-    std::filesystem::path store_zerortt{"./ping-client-0rtt-cache.bin"};
-    cli.add_option("-z,--zerortt-storage", store_zerortt, "Path to load and store 0rtt information from.");
 
     uint32_t ping_count = 0;
     double ping_interval = 1.0;
@@ -117,7 +89,7 @@ int main(int argc, char* argv[])
             local_addr,
             seed_string,
             enable_0rtt,
-            store_zerortt,
+            zerortt_path,
             ping_count,
             ping_interval,
             ping_timeout,
@@ -156,7 +128,7 @@ ping_stats run_client(
         std::string_view local_addr,
         std::string_view seed_string,
         bool enable_0rtt,
-        std::filesystem::path store_0rtt,
+        const std::filesystem::path& zerortt_path,
         uint32_t ping_count,
         double ping_interval_d,
         double ping_timeout,
@@ -211,93 +183,16 @@ ping_stats run_client(
     ep_secret.resize(32);
     sha3_256(ep_secret.data(), seed_string, "libquic-test-static-secret");
 
-    std::unordered_map<std::string, std::list<std::pair<std::string, int64_t>>> zrtt_store;
-    auto dump_zrtt = [&zrtt_store, &store_0rtt] {
-        std::ofstream out;
-        out.exceptions(std::ifstream::failbit | std::ifstream::badbit);
-        out.open(store_0rtt, std::ios::binary | std::ios::out | std::ios::trunc);
-        auto contents = oxenc::bt_serialize(zrtt_store);
-        out.write(contents.data(), contents.size());
-    };
-
     if (enable_0rtt)
-    {
-        if (std::filesystem::exists(store_0rtt))
-        {
-            std::ifstream in;
-            in.exceptions(std::ios::failbit);
-            in.open(store_0rtt, std::ios::binary);
-            in.seekg(0, std::ios::end);
-            std::string data;
-            data.resize(in.tellg());
-            in.seekg(0, std::ios::beg);
-            in.read(data.data(), data.size());
-
-            oxenc::bt_deserialize(data, zrtt_store);
-        }
-
-        auto store = [&zrtt_store, &dump_zrtt](
-                             const RemoteAddress& remote,
-                             std::vector<unsigned char> vdata,
-                             std::chrono::system_clock::time_point expiry) {
-            // FIXME, change to debug
-            log::critical(log_cat, "Storing 0-RTT session data for remote {}", remote);
-
-            auto ukey = remote.view_remote_key();
-            std::string key{reinterpret_cast<const char*>(ukey.data()), ukey.size()};
-            std::string data{reinterpret_cast<const char*>(vdata.data()), vdata.size()};
-            zrtt_store[key].emplace_back(std::move(data), std::chrono::system_clock::to_time_t(expiry));
-            dump_zrtt();
-        };
-
-        auto extract = [&zrtt_store, &dump_zrtt](const RemoteAddress& remote) -> std::optional<std::vector<unsigned char>> {
-            log::critical(log_cat, "Looking up 0-RTT session data for remote {}", remote);
-            auto ukey = remote.view_remote_key();
-            std::string key{reinterpret_cast<const char*>(ukey.data()), ukey.size()};
-            std::optional<std::vector<unsigned char>> result;
-            auto it = zrtt_store.find(key);
-            if (it == zrtt_store.end())
-            {
-                log::debug(log_cat, "No 0-RTT session data found");
-                return result;
-            }
-
-            auto& mine = it->second;
-            auto now = std::chrono::system_clock::now();
-            // We track these in order, but it's possible that earlier tickets have a longer
-            // expiry, so try the tail first but then work back towards the head until we find
-            // something (or run out of tickets).
-            while (!mine.empty() && std::chrono::system_clock::from_time_t(mine.back().second) <= now)
-            {
-                log::trace(log_cat, "Dropping expired 0-RTT session data");
-                mine.pop_back();
-            }
-            if (!mine.empty())
-            {
-                result.emplace(mine.back().first.size());
-                std::memcpy(result->data(), mine.back().first.data(), result->size());
-                log::debug(
-                        log_cat,
-                        "Found 0-RTT session data with expiry +{}s; {} session data remaining",
-                        std::chrono::duration_cast<std::chrono::seconds>(
-                                std::chrono::system_clock::from_time_t(mine.back().second) - now)
-                                .count(),
-                        mine.size() - 1);
-                mine.pop_back();
-            }
-            if (mine.empty())
-                zrtt_store.erase(it);
-
-            dump_zrtt();
-
-            return result;
-        };
-
-        client_tls->enable_outbound_0rtt(std::move(store), std::move(extract));
-    }
+        zerortt_storage::enable(*client_tls, zerortt_path);
 
     auto client = client_net.endpoint(
-            client_local, conn_established, conn_closed, opt::enable_datagrams{}, opt::static_secret{std::move(ep_secret)});
+            client_local,
+            conn_established,
+            conn_closed,
+            opt::enable_datagrams{},
+            generate_static_secret(seed_string),
+            opt::alpns{"quic-ping"});
 
     auto sig_handler = std::async(std::launch::async, [wclient = std::weak_ptr{client}, &sigset, &reconnect]() {
         int signum = 0;

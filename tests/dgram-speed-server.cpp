@@ -8,11 +8,12 @@ using namespace oxen::quic;
 
 int main(int argc, char* argv[])
 {
-    CLI::App cli{"libQUIC test server"};
+    CLI::App cli{"libQUIC datagram speedtest server"};
 
-    std::string server_addr = "127.0.0.1:5500";
-
-    cli.add_option("--listen", server_addr, "Server address to listen on")->type_name("IP:PORT")->capture_default_str();
+    auto server_addr = DEFAULT_DGRAM_SPEED_ADDR.to_string();
+    std::string seed_string;
+    bool enable_0rtt;
+    common_server_opts(cli, server_addr, seed_string, enable_0rtt);
 
     std::string log_file, log_level;
     add_log_opts(cli, log_file, log_level);
@@ -28,12 +29,14 @@ int main(int argc, char* argv[])
 
     setup_logging(log_file, log_level);
 
-    auto [seed, pubkey] = generate_ed25519();
+    auto [seed, pubkey] = generate_ed25519(seed_string);
     auto server_tls = GNUTLSCreds::make_from_ed_keys(seed, pubkey);
+    if (enable_0rtt)
+        server_tls->enable_inbound_0rtt();
 
     Network server_net{};
 
-    auto [listen_addr, listen_port] = parse_addr(server_addr, 5500);
+    auto [listen_addr, listen_port] = parse_addr(server_addr, DEFAULT_DGRAM_SPEED_ADDR.port());
     Address server_local{listen_addr, listen_port};
 
     stream_open_callback stream_opened = [&](Stream& s) {
@@ -106,7 +109,8 @@ int main(int argc, char* argv[])
         log::debug(test_cat, "Starting up endpoint");
         auto split_dgram = opt::enable_datagrams(Splitting::ACTIVE);
         // opt::enable_datagrams split_dgram(Splitting::ACTIVE);
-        server = server_net.endpoint(server_local, recv_dgram_cb, split_dgram);
+        server = server_net.endpoint(
+                server_local, recv_dgram_cb, split_dgram, generate_static_secret(seed_string), opt::alpns{"dgram-speed"});
         server->listen(server_tls, stream_opened);
     }
     catch (const std::exception& e)
@@ -115,18 +119,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    {
-        // We always want to see this log statement because it contains the pubkey the client needs,
-        // but it feels wrong to force it to a critical statement, so temporarily lower the level to
-        // info to display it.
-        log_level_lowerer enable_info{log::Level::info, test_cat.name};
-        log::info(
-                test_cat,
-                "Listening on {}; client connection args:\n\t{}--remote-pubkey={}",
-                server_local,
-                server_local != Address{"127.0.0.1", 5500} ? "--remote {} "_format(server_local.to_string()) : "",
-                oxenc::to_base64(pubkey));
-    }
+    server_log_listening(server_local, DEFAULT_DGRAM_SPEED_ADDR, pubkey, seed_string, enable_0rtt);
 
     t_fut.get();
 

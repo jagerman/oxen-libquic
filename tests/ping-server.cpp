@@ -27,19 +27,10 @@ int main(int argc, char* argv[])
     std::string log_file, log_level;
     add_log_opts(cli, log_file, log_level);
 
-    std::string server_addr = "127.0.0.1:5500";
-
-    cli.add_option("--listen", server_addr, "Server address to listen on")->type_name("IP:PORT")->capture_default_str();
-
-    bool enable_0rtt = false;
-    cli.add_flag("-Z,--enable-0rtt", enable_0rtt, "Enable 0-RTT and early data for this endpoint");
-
-    std::string seed_string = "";
-    cli.add_option(
-            "-s,--seed",
-            seed_string,
-            "If non-empty then the server key and endpoint private data will be generated from a hash of the given seed, "
-            "for reproducible keys and operation.  If omitted/empty a random seed is used.");
+    std::string server_addr = DEFAULT_PING_ADDR.to_string();
+    std::string seed_string;
+    bool enable_0rtt;
+    common_server_opts(cli, server_addr, seed_string, enable_0rtt);
 
     double flakiness = 0.0;
     cli.add_option("-f,--flakiness", flakiness, "Fail to respond to pings this proportion of the time.")
@@ -57,18 +48,12 @@ int main(int argc, char* argv[])
 
     setup_logging(log_file, log_level);
 
-    if (seed_string.empty())
-    {
-        seed_string.resize(32);
-        gnutls_rnd(GNUTLS_RND_KEY, seed_string.data(), seed_string.size());
-    }
-
     auto [seed, pubkey] = generate_ed25519(seed_string);
     auto server_tls = GNUTLSCreds::make_from_ed_keys(seed, pubkey);
 
     Network server_net{};
 
-    auto [listen_addr, listen_port] = parse_addr(server_addr, 5500);
+    auto [listen_addr, listen_port] = parse_addr(server_addr, DEFAULT_PING_ADDR.port());
     Address server_local{listen_addr, listen_port};
 
     std::shared_ptr<Endpoint> server;
@@ -100,10 +85,6 @@ int main(int argc, char* argv[])
         }
     };
 
-    std::vector<unsigned char> ep_secret;
-    ep_secret.resize(32);
-    sha3_256(ep_secret.data(), seed_string, "libquic-test-static-secret");
-
     try
     {
         log::info(test_cat, "Starting endpoint...");
@@ -115,13 +96,11 @@ int main(int argc, char* argv[])
                 conn_established,
                 conn_closed,
                 opt::enable_datagrams{},
-                opt::static_secret{std::move(ep_secret)});
+                generate_static_secret(seed_string),
+                opt::alpns{"quic-ping"});
         server->listen(server_tls, dgram_recv);
-        log::info(
-                test_cat,
-                "Server listening on: {} with pubkey:\n\n\t{}\n\nawaiting connections...",
-                server_local,
-                oxenc::to_base64(pubkey));
+
+        server_log_listening(server_local, DEFAULT_PING_ADDR, pubkey, seed_string, enable_0rtt);
     }
     catch (const std::exception& e)
     {

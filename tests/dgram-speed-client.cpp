@@ -8,24 +8,13 @@ using namespace oxen::quic;
 
 int main(int argc, char* argv[])
 {
-    CLI::App cli{"libQUIC test client"};
+    CLI::App cli{"libQUIC datagram speedtest client"};
 
-    std::string remote_addr = "127.0.0.1:5500";
-    cli.add_option("--remote", remote_addr, "Remove address to connect to")->type_name("IP:PORT")->capture_default_str();
-
-    std::string remote_pubkey;
-    cli.add_option("-p,--remote-pubkey", remote_pubkey, "Remote speedtest-client pubkey")
-            ->type_name("PUBKEY_HEX_OR_B64")
-            ->transform([](const std::string& val) -> std::string {
-                if (auto pk = decode_bytes(val))
-                    return std::move(*pk);
-                throw CLI::ValidationError{
-                        "Invalid value passed to --remote-pubkey: expected value encoded as hex or base64"};
-            })
-            ->required();
-
-    std::string local_addr = "";
-    cli.add_option("--local", local_addr, "Local bind address, if required")->type_name("IP:PORT")->capture_default_str();
+    std::string local_addr, remote_pubkey, seed_string;
+    auto remote_addr = DEFAULT_DGRAM_SPEED_ADDR.to_string();
+    bool enable_0rtt;
+    std::filesystem::path zerortt_path;
+    common_client_opts(cli, local_addr, remote_addr, remote_pubkey, seed_string, enable_0rtt, zerortt_path);
 
     std::string log_file, log_level;
     add_log_opts(cli, log_file, log_level);
@@ -77,8 +66,10 @@ int main(int argc, char* argv[])
 
     Network client_net{};
 
-    auto [seed, pubkey] = generate_ed25519();
+    auto [seed, pubkey] = generate_ed25519(seed_string);
     auto client_tls = GNUTLSCreds::make_from_ed_keys(seed, pubkey);
+    if (enable_0rtt)
+        zerortt_storage::enable(*client_tls, zerortt_path);
 
     send_data* d_ptr;
 
@@ -135,7 +126,13 @@ int main(int argc, char* argv[])
     opt::enable_datagrams split_dgram(Splitting::ACTIVE);
 
     log::critical(test_cat, "Calling 'client_connect'...");
-    auto client = client_net.endpoint(client_local, client_established, recv_dgram_cb, split_dgram);
+    auto client = client_net.endpoint(
+            client_local,
+            client_established,
+            recv_dgram_cb,
+            split_dgram,
+            generate_static_secret(seed_string),
+            opt::alpns{"dgram-speed"});
     auto client_ci = client->connect(server_addr, client_tls, stream_closed);
 
     client_established.wait();
