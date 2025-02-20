@@ -226,9 +226,9 @@ namespace oxen::quic
 
         explicit callback_waiter(T f) : func{std::move(f)} {}
 
-        bool wait(std::chrono::milliseconds timeout = 5s) { return f.wait_for(timeout) == std::future_status::ready; }
+        [[nodiscard]] bool wait(std::chrono::milliseconds timeout = 5s) { return f.wait_for(timeout) == std::future_status::ready; }
 
-        bool is_ready() { return wait(0s); }
+        [[nodiscard]] bool is_ready() { return wait(0s); }
 
         // Deliberate implicit conversion to the std::function<...>
         operator Func_t()

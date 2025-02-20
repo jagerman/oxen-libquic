@@ -15,6 +15,12 @@ int main(int argc, char* argv[])
     bool enable_0rtt;
     common_server_opts(cli, server_addr, seed_string, enable_0rtt);
 
+    bool verify_datagrams = false;
+    cli.add_flag("-V,--verify-datagrams", verify_datagrams, "Verify the value of each received datagrams");
+
+    bool shutdown_on_error = false;
+    cli.add_flag("--shutdown", shutdown_on_error, "Stop the server after a non-perfect fidelity or datagram verification failure");
+
     std::string log_file, log_level;
     add_log_opts(cli, log_file, log_level);
 
@@ -48,14 +54,32 @@ int main(int argc, char* argv[])
     {
         uint64_t n_expected = 0;
         uint64_t n_received = 0;
+        size_t last_dgram_size = 0;
     };
 
     std::unordered_map<ConnectionID, recv_info> conn_dgram_data;
 
     std::shared_ptr<Endpoint> server;
 
+    std::atomic<bool> shutdown{false};
+
+    std::vector<std::byte> dgram_rainbow;
+    dgram_rainbow.resize(5000);
+    for (size_t i = 0; i < dgram_rainbow.size(); i++)
+        dgram_rainbow[i] = static_cast<std::byte>(i % 256);
+
     dgram_data_callback recv_dgram_cb = [&](dgram_interface& di, std::span<const std::byte> data) {
         auto& dgram_data = conn_dgram_data[di.reference_id];
+
+        if (data.size() != dgram_data.last_dgram_size)
+        {
+            log::warning(
+                    test_cat,
+                    "Received a changed datagram size {}; last datagram was {}",
+                    data.size(),
+                    dgram_data.last_dgram_size);
+            dgram_data.last_dgram_size = data.size();
+        }
 
         if (dgram_data.n_expected == 0)
         {
@@ -73,12 +97,39 @@ int main(int argc, char* argv[])
             return;
         }
 
-        // Subsequent packets start with a \x00 until the final one; that has first byte set to \x01.
-        const bool done = data[0] != std::byte{0};
+        // The final packet starts with a \x00; up until then we get starts from 1,2,...250,1,2,...,250,1,2,...
+        const bool done = data[0] == std::byte{0};
 
         auto& info = dgram_data;
+
+        if (verify_datagrams)
+        {
+            // The first byte value is itself the rainbow offset, and goes 1->250 repeatedly until
+            // the final packet, which has initial byte 0:
+            size_t offset = static_cast<uint8_t>(data[0]);
+            bool bad = false;
+            if (offset > 250)
+            {
+                bad = true;
+                log::error(log_cat, "Datagram {} verification found invalid first byte value {}", info.n_received, offset);
+            }
+            else if (data != std::span{dgram_rainbow}.subspan(offset, data.size()))
+            {
+                bad = true;
+            }
+            if (bad) {
+                log::error(
+                        test_cat,
+                        "Datagram {} verification failed: expected byte rainbow, received {}",
+                        info.n_received,
+                        buffer_printer{data});
+                if (shutdown_on_error)
+                    shutdown = true;
+            }
+        }
+
         bool need_more = info.n_received < info.n_expected;
-        info.n_received += 1;
+        info.n_received++;
 
         if (info.n_received > info.n_expected)
         {
@@ -99,6 +150,9 @@ int main(int argc, char* argv[])
                     reception_rate,
                     info.n_received,
                     info.n_expected);
+
+            if (shutdown_on_error && info.n_received < info.n_expected)
+                shutdown = true;
 
             di.reply("DONE!"s);
         }
@@ -121,6 +175,6 @@ int main(int argc, char* argv[])
 
     server_log_listening(server_local, DEFAULT_DGRAM_SPEED_ADDR, pubkey, seed_string, enable_0rtt);
 
-    for (;;)
-        std::this_thread::sleep_for(10min);
+    while (!shutdown)
+        std::this_thread::sleep_for(100ms);
 }

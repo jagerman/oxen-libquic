@@ -12,14 +12,12 @@ namespace oxen::quic
     struct received_datagram
     {
         uint16_t id{0};
-        // -1 = payload, 1 = addendum
-        int8_t part{0};
+        bool first_part = false;
         uint16_t data_size{0};
         std::array<std::byte, MAX_PMTUD_UDP_PAYLOAD> data;
 
-        received_datagram() = default;
-        explicit received_datagram(uint16_t dgid, bspan d) :
-                id{dgid}, part{(dgid % 4 == 2) ? int8_t{-1} : int8_t{1}}, data_size{static_cast<uint16_t>(d.size())}
+        received_datagram(uint16_t dgid, bspan d) :
+                id{dgid}, first_part{dgid % 4 == 2}, data_size{static_cast<uint16_t>(d.size())}
         {
             std::memcpy(data.data(), d.data(), data_size);
         }

@@ -58,25 +58,26 @@ namespace oxen::quic
                     log_cat,
                     "Pairing datagram (ID: {}) with {} half at buffer pos [{},{}]",
                     dgid,
-                    (b->part < 0 ? "first"s : "second"s),
+                    b->first_part ? "first"sv : "second"sv,
                     row,
                     col);
 
-            std::vector<std::byte> out(b->data_size + data.size());
+            std::vector<std::byte> out;
+            out.reserve(b->data_size + data.size());
 
-            if (b->part < 0)
-            {  // We have the first part already
-                std::memcpy(out.data(), b->data.data(), b->data_size);
-                std::memcpy(out.data() + b->data_size, data.data(), data.size());
+            if (b->first_part)
+            {
+                out.insert(out.end(), b->data.begin(), b->data.begin() + b->data_size);
+                out.insert(out.end(), data.begin(), data.end());
             }
             else
             {
-                std::memcpy(out.data() + b->data_size, data.data(), data.size());
-                std::memcpy(out.data(), b->data.data(), b->data_size);
+                out.insert(out.end(), data.begin(), data.end());
+                out.insert(out.end(), b->data.begin(), b->data.begin() + b->data_size);
             }
             b.reset();
 
-            currently_held[row] -= 1;
+            currently_held[row]--;
 
             return out;
         }
@@ -85,7 +86,7 @@ namespace oxen::quic
         log::trace(log_cat, "Storing datagram (ID: {}) at buffer pos [{},{}]", dgid, row, col);
 
         b = std::make_unique<received_datagram>(dgid, data);
-        currently_held[row] += 1;
+        currently_held[row]++;
 
         int to_clear = (row + 2) % 4;
 
@@ -212,7 +213,7 @@ namespace oxen::quic
 
         std::optional<prepared_datagram> result;
 
-        size_t i = early_data_head.value_or(0);
+        const size_t i = early_data_head.value_or(0);
         if (i >= buf.size())
             return result;
 
@@ -225,7 +226,7 @@ namespace oxen::quic
                 if (dgram.sent_second())
                     continue;
                 if (i > 0 && dgram.status != DGSent::Unsent)
-                    // For non-head lookaheads we can only sent the small part if none of the
+                    // For non-head lookaheads we can only send the small part if none of the
                     // payload is sent already, because otherwise we would be inducing out-of-order
                     // delivery if we complete the packet before earlier packets.
                     continue;
