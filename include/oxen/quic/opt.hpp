@@ -26,7 +26,7 @@ namespace oxen::quic
         struct alpns
         {
             std::vector<std::string> inout_alpns;
-            explicit alpns(std::initializer_list<std::string> alpns) : inout_alpns{std::move(alpns)} {}
+            explicit alpns(std::initializer_list<const char*> alpns) : inout_alpns{alpns.begin(), alpns.end()} {}
             explicit alpns(std::vector<std::string> alpns) : inout_alpns{std::move(alpns)} {}
         };
 
@@ -34,7 +34,7 @@ namespace oxen::quic
         struct outbound_alpns
         {
             std::vector<std::string> alpns;
-            explicit outbound_alpns(std::initializer_list<std::string> alpns = {}) : alpns{std::move(alpns)} {}
+            explicit outbound_alpns(std::initializer_list<const char*> alpns) : alpns{alpns.begin(), alpns.end()} {}
             explicit outbound_alpns(std::vector<std::string> alpns) : alpns{std::move(alpns)} {}
         };
 
@@ -42,7 +42,7 @@ namespace oxen::quic
         struct inbound_alpns
         {
             std::vector<std::string> alpns;
-            explicit inbound_alpns(std::initializer_list<std::string> alpns = {}) : alpns{std::move(alpns)} {}
+            explicit inbound_alpns(std::initializer_list<const char*> alpns) : alpns{alpns.begin(), alpns.end()} {}
             explicit inbound_alpns(std::vector<std::string> alpns) : alpns{std::move(alpns)} {}
         };
 
