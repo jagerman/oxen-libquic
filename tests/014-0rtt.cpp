@@ -185,8 +185,13 @@ namespace oxen::quic::test
 #endif
         }
 
+#if defined(__linux__) && defined(__x86_64__)
         constexpr auto SIMULATED_RTT = 20ms;
         constexpr auto RTT_BUFFER = 10ms;
+#else  // Apple, ARM, etc. need more time
+        constexpr auto SIMULATED_RTT = 100ms;
+        constexpr auto RTT_BUFFER = 50ms;
+#endif
 
         delayer->delay = SIMULATED_RTT / 2;
 
