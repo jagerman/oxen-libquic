@@ -37,6 +37,7 @@ target_link_libraries(quic
     oxenc
     PRIVATE
     libquic_internal
+    nettle::nettle
 )
 
 target_compile_features(quic INTERFACE cxx_std_20)

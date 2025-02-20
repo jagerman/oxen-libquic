@@ -18,10 +18,9 @@ macro(link_test_dep x)
     endif()
 endmacro()
 
-# We need hogweed and nettle for generating Ed25519 keys (this is already a gnutls dependency, so we
+# We need hogweed for generating Ed25519 keys (this is already a gnutls dependency, so we
 # shouldn't be adding any new dep by requiring it)
 link_test_dep(hogweed)
-link_test_dep(nettle)
 
 function(extra_linking target)
 if(WIN32 AND NOT BUILD_SHARED_LIBS)
