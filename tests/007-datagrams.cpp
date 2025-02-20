@@ -524,7 +524,8 @@ namespace oxen::quic::test
         REQUIRE(client_established.wait());
 
         // Give the connection time to figure out PMTU
-        std::this_thread::sleep_for(10ms);
+        for (int i = 0; i < 10 && conn_interface->get_max_datagram_size() < 2796; i++)
+            std::this_thread::sleep_for(5ms);
         REQUIRE(conn_interface->get_max_datagram_size() == 2796);
 
         static constexpr size_t max_unsplit = 1398;

@@ -185,12 +185,23 @@ namespace oxen::quic::test
 #endif
         }
 
-#if defined(__linux__) && defined(__x86_64__)
-        constexpr auto SIMULATED_RTT = 20ms;
-        constexpr auto RTT_BUFFER = 10ms;
-#else  // Apple, ARM, etc. need more time
-        constexpr auto SIMULATED_RTT = 100ms;
-        constexpr auto RTT_BUFFER = 50ms;
+        auto SIMULATED_RTT = 20ms;
+        auto RTT_BUFFER = 15ms;
+#if !defined(__linux__)
+        // Apple's OS just sucks
+        SIMULATED_RTT *= 5;
+        RTT_BUFFER *= 5;
+
+#elif !defined(__x86_64__)
+        // Linux ARM running on overloaded Pis can need a lot more
+        SIMULATED_RTT *= 10;
+        RTT_BUFFER *= 10;
+#endif
+
+#ifndef NDEBUG
+        // Debug builds take longer too
+        SIMULATED_RTT *= 2;
+        RTT_BUFFER *= 2;
 #endif
 
         delayer->delay = SIMULATED_RTT / 2;
