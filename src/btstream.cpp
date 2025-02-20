@@ -215,7 +215,7 @@ namespace oxen::quic
                     // We have some leftover digits in size_buf, so copy some more from the incoming
                     // data to make size_buf up to MAX_REQ_LEN_ENCODED long:
                     if (prev_len < MAX_REQ_LEN_ENCODED)
-                        size_buf += sreq.substr(MAX_REQ_LEN_ENCODED - prev_len);
+                        size_buf += sreq.substr(0, MAX_REQ_LEN_ENCODED - prev_len);
 
                     // Now see if we can parse a `N:` value out of it.
                     consumed = parse_length(size_buf);
