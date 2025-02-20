@@ -23,13 +23,11 @@ namespace oxen::quic::test
         Address server_local{};
         Address client_local{};
 
-        opt::manual_routing client_sender{[&](const Path& p, bspan d) {
-            server_endpoint->manually_receive_packet(Packet{p.invert(), d});
-        }};
+        opt::manual_routing client_sender{
+                [&](const Path& p, bspan d) { server_endpoint->manually_receive_packet(Packet{p.invert(), d}); }};
 
-        opt::manual_routing server_sender{[&](const Path& p, bspan d) {
-            client_endpoint->manually_receive_packet(Packet{p.invert(), d});
-        }};
+        opt::manual_routing server_sender{
+                [&](const Path& p, bspan d) { client_endpoint->manually_receive_packet(Packet{p.invert(), d}); }};
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
@@ -86,13 +84,11 @@ namespace oxen::quic::test
             manual_server->manually_receive_packet(Packet{Path{manual_server_addr, manual_client_addr}, std::move(data)});
         };
 
-        opt::manual_routing manual_client_sender{[&](const Path&, bspan d) {
-            vanilla_client_ci->send_datagram(std::vector<std::byte>{d.begin(), d.end()});
-        }};
+        opt::manual_routing manual_client_sender{
+                [&](const Path&, bspan d) { vanilla_client_ci->send_datagram(std::vector<std::byte>{d.begin(), d.end()}); }};
 
-        opt::manual_routing manual_server_sender{[&](const Path&, bspan d) {
-            vanilla_server_ci->send_datagram(std::vector<std::byte>{d.begin(), d.end()});
-        }};
+        opt::manual_routing manual_server_sender{
+                [&](const Path&, bspan d) { vanilla_server_ci->send_datagram(std::vector<std::byte>{d.begin(), d.end()}); }};
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 

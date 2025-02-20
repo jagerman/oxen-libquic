@@ -19,7 +19,10 @@ int main(int argc, char* argv[])
     cli.add_flag("-V,--verify-datagrams", verify_datagrams, "Verify the value of each received datagrams");
 
     bool shutdown_on_error = false;
-    cli.add_flag("--shutdown", shutdown_on_error, "Stop the server after a non-perfect fidelity or datagram verification failure");
+    cli.add_flag(
+            "--shutdown",
+            shutdown_on_error,
+            "Stop the server after a non-perfect fidelity or datagram verification failure");
 
     std::string log_file, log_level;
     add_log_opts(cli, log_file, log_level);
@@ -117,7 +120,8 @@ int main(int argc, char* argv[])
             {
                 bad = true;
             }
-            if (bad) {
+            if (bad)
+            {
                 log::error(
                         test_cat,
                         "Datagram {} verification failed: expected byte rainbow, received {}",

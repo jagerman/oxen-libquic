@@ -36,7 +36,7 @@ namespace oxen::quic
         Network();
         explicit Network(std::shared_ptr<Loop> ev_loop);
 
-        Network(const Network& n) : Network{n._loop} {};
+        Network(const Network& n) : Network{n._loop} {}
 
         Network& operator=(Network) = delete;
         Network& operator=(Network&&) = delete;

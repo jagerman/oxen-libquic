@@ -141,7 +141,8 @@ int main(int argc, char* argv[])
 
     client_ci->set_split_datagram_lookahead(lookahead);
 
-    if (!client_established.wait()) {
+    if (!client_established.wait())
+    {
         log::critical(log_cat, "Connection timed out!");
         return 1;
     }
