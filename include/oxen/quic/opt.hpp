@@ -1,7 +1,6 @@
 #pragma once
 
 #include "address.hpp"
-#include "gnutls_crypto.hpp"
 #include "types.hpp"
 
 #include <stdexcept>

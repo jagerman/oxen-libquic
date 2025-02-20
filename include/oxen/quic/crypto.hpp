@@ -6,6 +6,7 @@ extern "C"
 }
 
 #include "address.hpp"
+#include "connection_ids.hpp"
 
 #include <memory>
 
@@ -23,6 +24,38 @@ namespace oxen::quic
         std::vector<unsigned char> tls_session_ticket;
         std::vector<unsigned char> quic_transport_params;
     };
+
+    // Stores a hash of a stateless reset token; we store and lookup using the hashed version rather
+    // than the raw token, as suggested in 10.3.1 of the RFC.  The hash calculation requires the
+    // endpoint's static secret so that the actual value stored locally is not knowable by the
+    // remote who sent the token.
+    struct hashed_reset_token : std::array<uint8_t, 16>
+    {
+        hashed_reset_token() = default;
+        explicit hashed_reset_token(
+                std::span<const uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> token, std::span<const uint8_t> static_secret);
+        hashed_reset_token(const hashed_reset_token&) = default;
+        hashed_reset_token(hashed_reset_token&&) = default;
+        hashed_reset_token& operator=(const hashed_reset_token&) = default;
+        hashed_reset_token& operator=(hashed_reset_token&&) = default;
+    };
+
+    using stateless_reset_token = std::array<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN>;
+
+    // Generates a stateless reset token for the given cid, using the static_secret for secure but
+    // reproducible reset tokens for a given CID.
+    stateless_reset_token generate_reset_token(std::span<const uint8_t> static_secret, const quic_cid& cid);
+    stateless_reset_token generate_reset_token(std::span<const uint8_t> static_secret, const ngtcp2_cid* cid);
+
+    // Same as above, but writes the token into the given span instead of returning an array.
+    void generate_reset_token(
+            std::span<const uint8_t> static_secret,
+            const quic_cid& cid,
+            std::span<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> out);
+    void generate_reset_token(
+            std::span<const uint8_t> static_secret,
+            const ngtcp2_cid* cid,
+            std::span<uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN> out);
 
     class TLSCreds
     {
@@ -72,3 +105,15 @@ namespace oxen::quic
     };
 
 }  // namespace oxen::quic
+
+// Trivial std::hash implementation for pre-hashed reset tokens
+template <>
+struct std::hash<oxen::quic::hashed_reset_token>
+{
+    size_t operator()(const oxen::quic::hashed_reset_token& token) const
+    {
+        size_t x;
+        std::memcpy(&x, token.data(), sizeof(x));
+        return x;
+    }
+};

@@ -12,8 +12,6 @@ extern "C"
 #include <sys/socket.h>
 #endif
 #include <ngtcp2/ngtcp2.h>
-
-#include <gnutls/gnutls.h>
 }
 
 #include <oxenc/endian.h>

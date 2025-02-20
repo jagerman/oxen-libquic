@@ -12,7 +12,6 @@ extern "C"
 
 #include "connection.hpp"
 #include "context.hpp"
-#include "gnutls_crypto.hpp"
 #include "network.hpp"
 #include "udp.hpp"
 #include "utils.hpp"

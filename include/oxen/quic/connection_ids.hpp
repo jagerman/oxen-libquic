@@ -1,15 +1,7 @@
 #pragma once
 
-#include <stdexcept>
-
-extern "C"
-{
-#include <gnutls/crypto.h>
-}
-
 #include "formattable.hpp"
 #include "types.hpp"
-#include "utils.hpp"
 
 namespace oxen::quic
 {

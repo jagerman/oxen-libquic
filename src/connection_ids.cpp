@@ -5,6 +5,8 @@
 
 #include <oxenc/hex.h>
 
+#include <gnutls/crypto.h>
+
 namespace oxen::quic
 {
 
