@@ -627,7 +627,7 @@ namespace oxen::quic
                     now);
             rv != 0)
         {
-            log::warning(log_cat, "Server could not verify retry token!");
+            log::info(log_cat, "Server could not verify retry token!");
             return false;
         }
 

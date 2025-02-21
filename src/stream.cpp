@@ -345,15 +345,41 @@ namespace oxen::quic
         if (data.empty())
             return;
 
+        // If we aren't currently in the event loop then we need to keep a weak pointer to the
+        // stream so that, when the below lambda gets processed, we can tell whether the stream is
+        // still actually alive.  (But if we're already in the event loop the lambda fires
+        // immediately and we don't want to have to do an extra refcount increment/decrement).
+        std::optional<std::weak_ptr<Stream>> wself;
+        if (!endpoint.in_event_loop())
+            wself = weak_from_this();
+
         // In theory, `endpoint` that we use here might be inaccessible as well, but unlike conn
         // (which we have to check because it could have been closed by remote actions or network
         // events) the application has control and responsibility for keeping the network/endpoint
         // alive at least as long as all the Connections/Streams that instances that were attached
         // to it.
-        endpoint.call([this, data, ka = std::move(keep_alive)]() {
-            if (!_conn || _conn->is_closing() || _conn->is_draining())
+        endpoint.call([this, wself = std::move(wself), data, ka = std::move(keep_alive)]() {
+            std::shared_ptr<Stream> sself;
+            if (wself)
             {
-                log::warning(log_cat, "Stream {} unable to send: connection is closed", _stream_id);
+                // send() was called from outside the event loop, so check to make sure the stream
+                // is still alive (and thus `this` is still valid):
+                if (!(sself = wself->lock()))
+                {
+                    log::debug(log_cat, "Stream has gone away, dropping send data");
+                    return;
+                }
+            }
+            // else send() was already inside the event loop and thus `this` is still valid
+
+            if (_is_closing || _is_shutdown || _sent_fin)
+            {
+                log::debug(log_cat, "Stream {} is closing/shutting down, dropping send data", _stream_id);
+                return;
+            }
+            else if (!_conn || _conn->is_closing() || _conn->is_draining())
+            {
+                log::debug(log_cat, "Stream {} unable to send: connection is closed", _stream_id);
                 return;
             }
             log::trace(log_cat, "Stream (ID: {}) sending message: {}", _stream_id, buffer_printer{data});
