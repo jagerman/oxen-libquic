@@ -1522,8 +1522,7 @@ namespace oxen::quic
     {
         log::trace(log_cat, "Connection (CID: {}) received datagram: {}", _source_cid, buffer_printer{data});
 
-        if (!datagrams)
-            log::warning(log_cat, "Received a datagram but this connection was not configured with datagram support");
+        assert(datagrams);  // This callback shouldn't have been set up if we don't have datagrams
 
         std::optional<std::vector<std::byte>> maybe_data;
 
