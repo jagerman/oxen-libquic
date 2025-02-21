@@ -5,16 +5,16 @@ extern "C"
 #include <ngtcp2/ngtcp2.h>
 }
 
-#include <cstddef>
-#include <cstdio>
-#include <stdexcept>
-
 #include "connection.hpp"
 #include "context.hpp"
 #include "endpoint.hpp"
 #include "internal.hpp"
 #include "network.hpp"
 #include "types.hpp"
+
+#include <cstddef>
+#include <cstdio>
+#include <stdexcept>
 
 namespace oxen::quic
 {
@@ -31,7 +31,7 @@ namespace oxen::quic
 
         if (!close_callback)
             close_callback = [](Stream&, uint64_t error_code) {
-                log::info(log_cat, "Default stream close callback called ({})", quic_strerror(error_code));
+                log::debug(log_cat, "Default stream close callback called ({})", quic_strerror(error_code));
             };
 
         log::trace(log_cat, "Stream object created");
@@ -70,7 +70,7 @@ namespace oxen::quic
 
             _is_watermarked = true;
 
-            log::info(log_cat, "Stream set watermarks!");
+            log::trace(log_cat, "Stream set watermarks!");
         });
     }
 
@@ -90,7 +90,7 @@ namespace oxen::quic
             if (_high_water)
                 _high_water.clear();
             _is_watermarked = false;
-            log::info(log_cat, "Stream cleared currently set watermarks!");
+            log::trace(log_cat, "Stream cleared currently set watermarks!");
         });
     }
 
@@ -163,9 +163,9 @@ namespace oxen::quic
             log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
             if (_is_shutdown)
-                log::info(log_cat, "Stream is already shutting down");
+                log::trace(log_cat, "Stream is already shutting down");
             else if (_is_closing)
-                log::debug(log_cat, "Stream is already closing");
+                log::trace(log_cat, "Stream is already closing");
             else
             {
                 _is_closing = _is_shutdown = true;
@@ -206,7 +206,7 @@ namespace oxen::quic
         _is_closing = _is_shutdown = true;
     }
 
-    void Stream::append_buffer(bstring_view buffer, std::shared_ptr<void> keep_alive)
+    void Stream::append_buffer(bspan buffer, std::shared_ptr<void> keep_alive)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         user_buffers.emplace_back(buffer, std::move(keep_alive));
@@ -215,7 +215,7 @@ namespace oxen::quic
         if (_ready)
             _conn->packet_io_ready();
         else
-            log::info(log_cat, "Stream not ready for broadcast yet, data appended to buffer and on deck");
+            log::debug(log_cat, "Stream not ready for broadcast yet, data appended to buffer and on deck");
     }
 
     void Stream::acknowledge(size_t bytes)
@@ -236,7 +236,10 @@ namespace oxen::quic
 
         // advance bsv pointer to cover any remaining acked data
         if (bytes)
-            user_buffers.front().first.remove_prefix(bytes);
+        {
+            auto& front = user_buffers.front().first;
+            front = front.subspan(bytes);
+        }
 
         auto sz = size();
 
@@ -250,11 +253,11 @@ namespace oxen::quic
             if (unsent >= _high_mark)
             {
                 _low_primed = true;
-                log::info(log_cat, "Low water hook primed!");
+                log::trace(log_cat, "Low water hook primed!");
 
                 if (_high_water and _high_primed)
                 {
-                    log::info(log_cat, "Executing high watermark hook!");
+                    log::debug(log_cat, "Executing high watermark hook!");
                     _high_primed = false;
                     return _high_water(*this);
                 }
@@ -264,11 +267,11 @@ namespace oxen::quic
             else if (unsent <= _low_mark)
             {
                 _high_primed = true;
-                log::info(log_cat, "High water hook primed!");
+                log::trace(log_cat, "High water hook primed!");
 
                 if (_low_water and _low_primed)
                 {
-                    log::info(log_cat, "Executing low watermark hook!");
+                    log::debug(log_cat, "Executing low watermark hook!");
                     _low_primed = false;
                     return _low_water(*this);
                 }
@@ -289,7 +292,7 @@ namespace oxen::quic
         _unacked_size += bytes;
     }
 
-    static auto get_buffer_it(std::deque<std::pair<bstring_view, std::shared_ptr<void>>>& bufs, size_t offset)
+    static auto get_buffer_it(std::deque<std::pair<bspan, std::shared_ptr<void>>>& bufs, size_t offset)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         auto it = bufs.begin();
@@ -301,6 +304,14 @@ namespace oxen::quic
         }
 
         return std::make_pair(std::move(it), offset);
+    }
+
+    void Stream::revert_stream()
+    {
+        assert(endpoint.in_event_loop());
+        log::trace(log_cat, "Stream (ID:{}) reverting after early data rejected...", _stream_id);
+        _unacked_size = 0;
+        log::debug(log_cat, "Stream (ID:{}) has {}B in buffer, 0B unacked...", _stream_id, size());
     }
 
     std::vector<ngtcp2_vec> Stream::pending()
@@ -329,7 +340,7 @@ namespace oxen::quic
         return nbufs;
     }
 
-    void Stream::send_impl(bstring_view data, std::shared_ptr<void> keep_alive)
+    void Stream::send_impl(bspan data, std::shared_ptr<void> keep_alive)
     {
         if (data.empty())
             return;
@@ -382,11 +393,17 @@ namespace oxen::quic
         return size() - unacked();
     }
 
-    void Stream::set_ready()
+    void Stream::set_ready(bool ready)
     {
-        log::trace(log_cat, "Setting stream ready");
-        _ready = true;
-        on_ready();
+        if (_ready == ready)
+            return;
+
+        log::debug(log_cat, "Setting stream {}", ready ? "ready" : "unready");
+        _ready = ready;
+        if (ready)
+            on_ready();
+        else
+            on_unready();
     }
 
     void _chunk_sender_trace(const char* file, int lineno, std::string_view message)
@@ -399,10 +416,10 @@ namespace oxen::quic
         log::trace(log_cat, "{}:{} -- {}{}", file, lineno, message, val);
     }
 
-    prepared_datagram Stream::pending_datagram(bool)
+    std::optional<prepared_datagram> Stream::pending_datagram(bool)
     {
         log::warning(log_cat, "{} called, but this is a stream object!", __PRETTY_FUNCTION__);
-        throw std::runtime_error{"Stream objects should not be queried for pending datagrams!"};
+        return std::nullopt;
     }
 
 }  // namespace oxen::quic

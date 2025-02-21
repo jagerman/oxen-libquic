@@ -1,10 +1,9 @@
 #pragma once
 
-#include <stdexcept>
-
 #include "address.hpp"
-#include "crypto.hpp"
 #include "types.hpp"
+
+#include <stdexcept>
 
 namespace oxen::quic
 {
@@ -22,35 +21,29 @@ namespace oxen::quic
             explicit max_streams(uint64_t s) : stream_count{s} {}
         };
 
+        // Sets the inbound and outbound ALPNs simulatneous to the same value(s).  This is equivalent to
+        // passing outbound_alpns and inbound_alpns, separately, with the same argument.
+        struct alpns
+        {
+            std::vector<std::string> inout_alpns;
+            explicit alpns(std::initializer_list<const char*> alpns) : inout_alpns{alpns.begin(), alpns.end()} {}
+            explicit alpns(std::vector<std::string> alpns) : inout_alpns{std::move(alpns)} {}
+        };
+
         // supported ALPNs for outbound connections
         struct outbound_alpns
         {
-            std::vector<ustring> alpns;
-            explicit outbound_alpns(std::vector<ustring> alpns = {}) : alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit outbound_alpns(std::string_view alpn) : outbound_alpns{{ustring{to_usv(alpn)}}} {}
+            std::vector<std::string> alpns;
+            explicit outbound_alpns(std::initializer_list<const char*> alpns) : alpns{alpns.begin(), alpns.end()} {}
+            explicit outbound_alpns(std::vector<std::string> alpns) : alpns{std::move(alpns)} {}
         };
 
         // supported ALPNs for inbound connections
         struct inbound_alpns
         {
-            std::vector<ustring> alpns;
-            explicit inbound_alpns(std::vector<ustring> alpns = {}) : alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit inbound_alpns(std::string_view alpn) : inbound_alpns{{ustring{to_usv(alpn)}}} {}
-        };
-
-        // Sets the inbound and outbound ALPNs simulatneous to the same value(s).  This is equivalent to
-        // passing outbound_alpns and inbound_alps, separately, with the same vector argument.
-        struct alpns
-        {
-            std::vector<ustring> inout_alpns;
-            explicit alpns(std::vector<ustring> alpns = {}) : inout_alpns{std::move(alpns)} {}
-
-            // Convenience wrapper that sets a single ALPN value from a regular string:
-            explicit alpns(std::string_view alpn) : alpns{{ustring{to_usv(alpn)}}} {}
+            std::vector<std::string> alpns;
+            explicit inbound_alpns(std::initializer_list<const char*> alpns) : alpns{alpns.begin(), alpns.end()} {}
+            explicit inbound_alpns(std::vector<std::string> alpns) : alpns{std::move(alpns)} {}
         };
 
         struct handshake_timeout
@@ -90,9 +83,14 @@ namespace oxen::quic
         /// to Network::Endpoint(...) will enable datagrams without packet-splitting. From there, pass
         /// `Splitting::ACTIVE` to the constructor to enable packet-splitting.
         ///
-        /// The size of the rotating datagram buffer can also be specified as a second parameter to the
-        /// constructor. Buffer size is subdivided amongst 4 equally sized buffer rows, so the bufsize
-        /// must be perfectly divisible by 4
+        /// The size of the rotating datagram buffer can also be specified as a second parameter to
+        /// the constructor. Buffer size is subdivided amongst 4 equally sized buffer rows, so the
+        /// bufsize must be perfectly divisible by 4, and must be at least 32 (but significantly
+        /// larger is recommended), and can be at most 16384.  The default size is 4096.
+        ///
+        /// It must also be, at bare minimum, at least double the datagram lookahead plus 2 (8+2 by
+        /// default) that the other side of the connection is using, but it is up to the application
+        /// to ensure it uses a compatible value on each side as this is not enforced.
         ///
         /// The max size of a transmittable datagram can be queried directly from connection_interface::
         /// get_max_datagram_size(). At connection initialization, ngtcp2 will default this value to 1200.
@@ -114,8 +112,11 @@ namespace oxen::quic
             explicit enable_datagrams(Splitting m) : split_packets{true}, mode{m} {}
             explicit enable_datagrams(Splitting m, int b) : split_packets{true}, mode{m}, bufsize{b}
             {
-                if (b <= 0)
-                    throw std::out_of_range{"Bufsize must be positive"};
+                if (b < 64)
+                    // This 64 cutoff is somewhat arbitrary, but going much smaller than this will
+                    // start to cause problems with the default packet coalescing lookahead (which,
+                    // by default, can deliver pieces of packets up to 9 datagram packets apart).
+                    throw std::out_of_range{"Bufsize must be >= 64"};
                 if (b > 1 << 14)
                     throw std::out_of_range{"Bufsize too large"};
                 if (b % 4 != 0)
@@ -123,18 +124,27 @@ namespace oxen::quic
             }
         };
 
-        // Used to provide precalculated static secret data for an endpoint to use for validation
-        // tokens.  If not provided, 32 random bytes are generated during endpoint construction.  The
-        // data provided must be (at least) SECRET_MIN_SIZE long (longer values are ignored).  For a
-        // deterministic value you should not pass sensitive data here (such as a raw private key), but
+        // Used to provide precalculated static secret data for an endpoint to use when keying
+        // material is used for quasi-random values, such as token verification and stateless reset
+        // token generation and handling.  If not provided, 32 random bytes are generated during
+        // endpoint construction.  The data provided must be (at least) SECRET_MIN_SIZE long, but 32
+        // or longer is recommended.
+        //
+        // It is recommended to not pass sensitive data here (such as a raw private key), but
         // instead use a cryptographically secure hash (ideally with a unique key or suffix) of such
         // data.
+        //
+        // Providing a secure, deterministic, static secret is recommended for endpoints that could
+        // restart using the same keys and address as this allows stateless reset tokens to remain
+        // valid across a reset of the application.  Without a fixed secret, the stateless reset
+        // tokens generated after a restart would not match the ones a client received prior to the
+        // restart.
         struct static_secret
         {
-            inline static constexpr size_t SECRET_MIN_SIZE = 16;
+            inline static constexpr size_t SECRET_MIN_SIZE{16};
 
-            ustring secret;
-            explicit static_secret(ustring s) : secret{std::move(s)}
+            std::vector<unsigned char> secret;
+            explicit static_secret(std::vector<unsigned char> s) : secret{std::move(s)}
             {
                 if (secret.size() < SECRET_MIN_SIZE)
                     throw std::invalid_argument{
@@ -147,14 +157,14 @@ namespace oxen::quic
         // take responsibility for passing packets into the Endpoint via Endpoint::manually_receive_packet(...)
         struct manual_routing
         {
-            using send_handler_t = std::function<void(const Path&, bstring_view)>;
+            using send_handler_t = std::function<void(const Path&, bspan)>;
 
           private:
             friend Endpoint;
 
             manual_routing() = default;
 
-            send_handler_t send_hook = nullptr;
+            send_handler_t send_hook{nullptr};
 
           public:
             explicit manual_routing(send_handler_t cb) : send_hook{std::move(cb)}
@@ -163,12 +173,7 @@ namespace oxen::quic
                     throw std::runtime_error{"opt::manual_routing must be constructed with a send handler hook!"};
             }
 
-            io_result operator()(const Path& p, bstring_view data, size_t& n)
-            {
-                send_hook(p, data);
-                n = 0;
-                return io_result{};
-            }
+            void operator()(const Path& p, bspan data) { send_hook(p, data); }
 
             explicit operator bool() const { return send_hook != nullptr; }
         };
@@ -181,8 +186,8 @@ namespace oxen::quic
             using buffer_hook_t = std::function<void(Stream&)>;
 
           private:
-            buffer_hook_t _hook = nullptr;
-            bool _persist = true;
+            buffer_hook_t _hook{nullptr};
+            bool _persist{true};
 
           public:
             watermark() = default;
@@ -202,5 +207,6 @@ namespace oxen::quic
                     _hook = nullptr;
             }
         };
+
     }  //  namespace opt
 }  // namespace oxen::quic

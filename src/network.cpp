@@ -1,14 +1,14 @@
 #include "network.hpp"
 
+#include "connection.hpp"
+#include "endpoint.hpp"
+#include "internal.hpp"
+
 #include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
-
-#include "connection.hpp"
-#include "endpoint.hpp"
-#include "internal.hpp"
 
 namespace oxen::quic
 {
@@ -23,7 +23,7 @@ namespace oxen::quic
 
     Network::~Network()
     {
-        log::info(log_cat, "Shutting down network...");
+        log::debug(log_cat, "Shutting down network...");
 
         if (not shutdown_immediate)
             close_gracefully();
@@ -38,6 +38,39 @@ namespace oxen::quic
         log::info(log_cat, "Network shutdown complete");
     }
 
+    void Network::close(std::shared_ptr<Endpoint>&& endpoint)
+    {
+        assert(endpoint);
+        if (endpoint.use_count() > 2)
+            log::warning(
+                    log_cat,
+                    "Network::close() called with an endpoint with extra owners; closing will not be complete until "
+                    "remaining shared_ptr instances are destroyed");
+
+        _loop->call_get([this, &endpoint] {
+            endpoint->_close_conns(std::nullopt);
+            if (!endpoints.erase(endpoint))
+                log::warning(log_cat, "Network::close() called with an endpoint that does not belong to it");
+        });
+        endpoint.reset();
+    }
+
+    void Network::close_soon(std::shared_ptr<Endpoint>&& endpoint)
+    {
+        assert(endpoint);
+        if (endpoint.use_count() > 2)
+            log::warning(
+                    log_cat,
+                    "Network::close_soon() called with an endpoint with extra owners; closing will not be complete until "
+                    "remaining shared_ptr instances are destroyed");
+
+        _loop->call([this, endpoint = std::move(endpoint)] {
+            endpoint->_close_conns(std::nullopt);
+            if (!endpoints.erase(endpoint))
+                log::warning(log_cat, "Network::close_soon() called with an endpoint that does not belong to it");
+        });
+    }
+
     Network Network::create_linked_network()
     {
         return Network{_loop};
@@ -45,18 +78,10 @@ namespace oxen::quic
 
     void Network::close_gracefully()
     {
-        log::info(log_cat, "{} called", __PRETTY_FUNCTION__);
-
-        std::promise<void> pr;
-        auto ft = pr.get_future();
-
-        _loop->call([&]() mutable {
-            for (const auto& ep : endpoint_map)
+        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+        _loop->call_get([this] {
+            for (const auto& ep : endpoints)
                 ep->_close_conns(std::nullopt);
-
-            pr.set_value();
         });
-
-        ft.get();
     }
 }  // namespace oxen::quic

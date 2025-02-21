@@ -39,7 +39,7 @@ namespace oxen::quic
                 - this is an equally annoying typedef for `suseconds_t`
         Alas, yet again another mac idiosyncrasy...
      */
-    timeval loop_time_to_timeval(std::chrono::microseconds t)
+    static timeval loop_time_to_timeval(std::chrono::microseconds t)
     {
         return timeval{
                 .tv_sec = static_cast<decltype(timeval::tv_sec)>(t / 1s),
@@ -53,7 +53,7 @@ namespace oxen::quic
 
         if (event_add(ev.get(), &interval) != 0)
         {
-            log::critical(log_cat, "EventHandler failed to start repeating event!");
+            log::warning(log_cat, "EventHandler failed to start repeating event!");
             return false;
         }
 
@@ -69,7 +69,7 @@ namespace oxen::quic
 
         if (event_del(ev.get()) != 0)
         {
-            log::critical(log_cat, "EventHandler failed to pause repeating event!");
+            log::warning(log_cat, "EventHandler failed to pause repeating event!");
             return false;
         }
 
@@ -84,9 +84,9 @@ namespace oxen::quic
             std::function<void()> task,
             bool one_off,
             bool start_immediately,
-            bool fixed_interval)
+            bool task_rescheduling)
     {
-        f = (one_off or not fixed_interval) ? std::move(task) : [this, func = std::move(task)]() mutable {
+        f = (one_off or not task_rescheduling) ? std::move(task) : [this, func = std::move(task)]() mutable {
             func();
             event_del(ev.get());
             event_add(ev.get(), &interval);
@@ -97,14 +97,14 @@ namespace oxen::quic
         ev.reset(event_new(
                 _loop.get(),
                 -1,
-                fixed_interval ? 0 : EV_PERSIST,
+                task_rescheduling ? 0 : EV_PERSIST,
                 [](evutil_socket_t, short, void* s) {
                     try
                     {
                         auto* self = reinterpret_cast<Ticker*>(s);
                         if (not self->f)
                         {
-                            log::critical(log_cat, "Ticker does not have a callback to execute!");
+                            log::warning(log_cat, "Ticker does not have a callback to execute!");
                             return;
                         }
                         // execute callback
@@ -112,13 +112,13 @@ namespace oxen::quic
                     }
                     catch (const std::exception& e)
                     {
-                        log::critical(log_cat, "Ticker caught exception: {}", e.what());
+                        log::warning(log_cat, "Ticker caught exception: {}", e.what());
                     }
                 },
                 this));
 
         if ((one_off or start_immediately) and not start())
-            log::critical(log_cat, "Failed to immediately start one-off event!");
+            log::warning(log_cat, "Failed to immediately start one-off event!");
     }
 
     Ticker::~Ticker()
@@ -177,7 +177,7 @@ namespace oxen::quic
 
         ev_loop = std::shared_ptr<event_base>{event_base_new_with_config(ev_conf.get()), event_base_free};
 
-        log::info(log_cat, "Started libevent loop with backend {}", event_base_get_method(ev_loop.get()));
+        log::debug(log_cat, "Started libevent loop with backend {}", event_base_get_method(ev_loop.get()));
 
         setup_job_waker();
 
@@ -194,12 +194,12 @@ namespace oxen::quic
         p.get_future().get();
 
         running.store(true);
-        log::info(log_cat, "loop is started");
+        log::info(log_cat, "libevent loop is started");
     }
 
     Loop::~Loop()
     {
-        log::info(log_cat, "Shutting down loop...");
+        log::debug(log_cat, "Shutting down loop...");
 
         stop_thread();
 
@@ -223,6 +223,8 @@ namespace oxen::quic
 
     void Loop::stop_thread(bool immediate)
     {
+        log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
+
         if (loop_thread)
             immediate ? event_base_loopbreak(ev_loop.get()) : event_base_loopexit(ev_loop.get(), nullptr);
 

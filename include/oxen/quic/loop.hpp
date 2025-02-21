@@ -6,16 +6,16 @@ extern "C"
 #include <event2/thread.h>
 }
 
+#include "context.hpp"
+#include "crypto.hpp"
+#include "utils.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <forward_list>
 #include <future>
 #include <memory>
 #include <thread>
-
-#include "context.hpp"
-#include "crypto.hpp"
-#include "utils.hpp"
 
 namespace oxen::quic
 {
@@ -43,7 +43,7 @@ namespace oxen::quic
                 std::function<void()> task,
                 bool one_off = false,
                 bool start_immediately = true,
-                bool fixed_interval = false);
+                bool task_rescheduling = false);
 
         Ticker() = default;
 
@@ -93,7 +93,6 @@ namespace oxen::quic
                     [hndlr = std::move(handler), func = std::move(hook)]() mutable {
                         auto h = std::move(hndlr);
                         func();
-                        h.reset();
                     },
                     true);
         }
@@ -205,18 +204,26 @@ namespace oxen::quic
             the repeated event. It is NOT tied to the lifetime of the caller via a weak_ptr.
 
             Configurable parameters:
-                - start_immediately : will call ::event_add() before returning the ticker
-                - fixed_interval :
-                        - if FALSE (default behavior), will attempt to execute every `interval`, regardless of how long the
-                            event itself takes
-                        - if TRUE, will wait the entire `interval` after finishing execution of the event before attempting
-                            execution again
+                - start_immediately: will call ::event_add() before returning the ticker.  This does *not* call the function
+                    immediately.  If false then the ticker is not started and will not do anything until `start()` is called
+                    on the ticker.
+                - task_rescheduling:
+                    - if `false` (default behavior), the ticker is on a fixed interval schedule, regardless of any scheduling
+                        delays or how long the task itself takes to complete: the event loop will attempt to execute it
+                        `interval`, measured from now.  Any scheduling delays or long time taken by the task in one call do
+                        not affect the scheduling of future calls.
+                    - if `true`, the event will be rescheduled each time it completes so that the next call will occur
+                        `interval` after the previous one completes.  Thus any scheduling delays or time spent in the task
+                        itself will cause the next call to be pushed later (to `interval` after task completion).
         */
         template <typename Callable>
         [[nodiscard]] std::shared_ptr<Ticker> call_every(
-                std::chrono::microseconds interval, Callable&& f, bool start_immediately = true, bool fixed_interval = false)
+                std::chrono::microseconds interval,
+                Callable&& f,
+                bool start_immediately = true,
+                bool task_rescheduling = false)
         {
-            return _call_every(interval, std::forward<Callable>(f), Loop::loop_id, start_immediately, fixed_interval);
+            return _call_every(interval, std::forward<Callable>(f), Loop::loop_id, start_immediately, task_rescheduling);
         }
 
         template <std::invocable Callable>
@@ -263,11 +270,11 @@ namespace oxen::quic
                 Callable&& f,
                 caller_id_t _id,
                 bool start_immediately,
-                bool fixed_interval)
+                bool task_rescheduling)
         {
             auto h = make_handler(_id);
 
-            h->init_event(loop(), interval, std::forward<Callable>(f), false, start_immediately, fixed_interval);
+            h->init_event(loop(), interval, std::forward<Callable>(f), false, start_immediately, task_rescheduling);
 
             return h;
         }

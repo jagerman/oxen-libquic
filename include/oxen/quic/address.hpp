@@ -1,12 +1,12 @@
 #pragma once
 
+#include "formattable.hpp"
+#include "ip.hpp"
+#include "types.hpp"
+
 #include <oxenc/endian.h>
 
 #include <compare>
-
-#include "formattable.hpp"
-#include "ip.hpp"
-#include "utils.hpp"
 
 #if defined(__OpenBSD__) || defined(__DragonFly__)
 // These systems are known to disallow dual stack binding, and so on such systems when
@@ -25,8 +25,17 @@ namespace oxen::quic
 {
     inline constexpr std::array<uint8_t, 16> _ipv6_any_addr = {0};
 
-    template <typename T>
-    concept RawSockAddr = std::same_as<T, sockaddr> || std::same_as<T, sockaddr_in> || std::same_as<T, sockaddr_in6>;
+    struct Address;
+
+    inline namespace concepts
+    {
+        template <typename T>
+        concept raw_sockaddr_type =
+                std::same_as<T, sockaddr> || std::same_as<T, sockaddr_in> || std::same_as<T, sockaddr_in6>;
+
+        template <typename T>
+        concept quic_address_type = std::derived_from<T, Address>;
+    }  // namespace concepts
 
     // Holds an address, with a ngtcp2_addr held for easier passing into ngtcp2 functions
     struct Address
@@ -71,7 +80,7 @@ namespace oxen::quic
         explicit Address(const ipv6& v6, uint16_t port = 0);
 
         // Assignment from a sockaddr pointer; we copy the sockaddr's contents
-        template <RawSockAddr T>
+        template <concepts::raw_sockaddr_type T>
         Address& operator=(const T* s)
         {
             _addr.addrlen = std::is_same_v<T, sockaddr>
@@ -215,12 +224,12 @@ namespace oxen::quic
         // pointer to other things (like bool) won't occur.
         //
         // If the given pointer is mutated you *must* call update_socklen() afterwards.
-        template <RawSockAddr T>
+        template <concepts::raw_sockaddr_type T>
         operator T*()
         {
             return reinterpret_cast<T*>(&_sock_addr);
         }
-        template <RawSockAddr T>
+        template <concepts::raw_sockaddr_type T>
         operator const T*() const
         {
             return reinterpret_cast<const T*>(&_sock_addr);
@@ -283,32 +292,41 @@ namespace oxen::quic
     struct RemoteAddress : public Address
     {
       private:
-        ustring remote_pubkey;
+        std::vector<unsigned char> _remote_pubkey;
 
       public:
         RemoteAddress() = delete;
 
         template <typename... Opt>
         RemoteAddress(std::string_view remote_pk, Opt&&... opts) :
-                Address{std::forward<Opt>(opts)...}, remote_pubkey{to_usv(remote_pk)}
-        {}
+                Address{std::forward<Opt>(opts)...}, _remote_pubkey(remote_pk.size())
+        {
+            std::memcpy(_remote_pubkey.data(), remote_pk.data(), remote_pk.size());
+        }
 
         template <typename... Opt>
-        RemoteAddress(ustring_view remote_pk, Opt&&... opts) : Address{std::forward<Opt>(opts)...}, remote_pubkey{remote_pk}
-        {}
-
-        ustring_view view_remote_key() const { return remote_pubkey; }
-        const ustring& get_remote_key() const& { return remote_pubkey; }
-        ustring&& get_remote_key() && { return std::move(remote_pubkey); }
-
-        RemoteAddress(const RemoteAddress& obj) : Address{obj}, remote_pubkey{obj.remote_pubkey} {}
-        RemoteAddress& operator=(const RemoteAddress& obj)
+        RemoteAddress(uspan remote_pk, Opt&&... opts) : Address{std::forward<Opt>(opts)...}
         {
-            remote_pubkey = obj.remote_pubkey;
-            Address::operator=(obj);
-            _copy_internals(obj);
-            return *this;
+            _remote_pubkey.assign(remote_pk.data(), remote_pk.data() + remote_pk.size());
         }
+
+        uspan view_remote_key() const { return _remote_pubkey; }
+        const std::vector<unsigned char>& get_remote_key() const& { return _remote_pubkey; }
+        std::vector<unsigned char>&& get_remote_key() && { return std::move(_remote_pubkey); }
+
+        RemoteAddress(const RemoteAddress& obj) = default;
+        RemoteAddress& operator=(const RemoteAddress& obj) = default;
+        RemoteAddress(RemoteAddress&& other) = default;
+        RemoteAddress& operator=(RemoteAddress&& other) = default;
+
+        auto operator<=>(const RemoteAddress& other) const
+        {
+            auto ret = _remote_pubkey <=> other._remote_pubkey;
+            if (ret == 0)
+                ret = Address::operator<=>(other);
+            return ret;
+        }
+        auto operator==(const RemoteAddress& other) const { return (*this <=> other) == 0; }
     };
 
     // Wrapper for ngtcp2_path with remote/local components. Implicitly convertible
@@ -366,12 +384,10 @@ namespace oxen::quic
 
 namespace std
 {
-    inline constexpr size_t inverse_golden_ratio = sizeof(size_t) >= 8 ? 0x9e37'79b9'7f4a'7c15 : 0x9e37'79b9;
-
     template <>
     struct hash<oxen::quic::Address>
     {
-        size_t operator()(const oxen::quic::Address& addr) const
+        size_t operator()(const oxen::quic::Address& addr) const noexcept
         {
             std::string_view addr_data;
             uint16_t port;
@@ -390,7 +406,19 @@ namespace std
             }
 
             auto h = hash<string_view>{}(addr_data);
-            h ^= hash<decltype(port)>{}(port) + inverse_golden_ratio + (h << 6) + (h >> 2);
+            h ^= hash<decltype(port)>{}(port) + oxen::quic::inverse_golden_ratio + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
+    template <>
+    struct hash<oxen::quic::RemoteAddress>
+    {
+        size_t operator()(const oxen::quic::RemoteAddress& addr) const noexcept
+        {
+            auto vrk = addr.view_remote_key();
+            size_t h = hash<std::string_view>{}(std::string_view{reinterpret_cast<const char*>(vrk.data()), vrk.size()});
+            h ^= hash<oxen::quic::Address>{}(addr) + oxen::quic::inverse_golden_ratio + (h << 6) + (h >> 2);
             return h;
         }
     };
@@ -398,10 +426,10 @@ namespace std
     template <>
     struct hash<oxen::quic::Path>
     {
-        size_t operator()(const oxen::quic::Path& addr) const
+        size_t operator()(const oxen::quic::Path& addr) const noexcept
         {
             auto h = hash<oxen::quic::Address>{}(addr.local);
-            h ^= hash<oxen::quic::Address>{}(addr.remote) + inverse_golden_ratio + (h << 6) + (h >> 2);
+            h ^= hash<oxen::quic::Address>{}(addr.remote) + oxen::quic::inverse_golden_ratio + (h << 6) + (h >> 2);
             return h;
         }
     };

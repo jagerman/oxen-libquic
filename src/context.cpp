@@ -83,4 +83,5 @@ namespace oxen::quic
         log::trace(log_cat, "IO context stored connection closed callback");
         conn_closed_cb = std::move(func);
     }
+
 }  // namespace oxen::quic

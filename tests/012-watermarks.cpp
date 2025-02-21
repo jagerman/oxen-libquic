@@ -1,16 +1,11 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {
     TEST_CASE("012 - Stream Buffer Watermarking", "[012][watermark][streams]")
     {
         Network test_net{};
-        bstring req_msg(100'000, std::byte{'a'});
+        std::vector<std::byte> req_msg(100'000, std::byte{'a'});
 
         auto client_established = callback_waiter{[](connection_interface&) {}};
         auto server_established = callback_waiter{[](connection_interface&) {}};
@@ -23,7 +18,7 @@ namespace oxen::quic::test
         auto server_endpoint = test_net.endpoint(server_local, server_established);
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
 
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         auto client_endpoint = test_net.endpoint(client_local, client_established);
         auto conn_interface = client_endpoint->connect(client_remote, client_tls);
@@ -43,12 +38,12 @@ namespace oxen::quic::test
 
             CHECK(client_stream->has_watermarks());
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             CHECK(low_water.wait());
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             CHECK(high_water.wait());
 
@@ -64,28 +59,28 @@ namespace oxen::quic::test
                     2000,
                     opt::watermark{
                             [&](const Stream&) {
-                                log::debug(log_cat, "Executing low hook!");
+                                log::debug(test_cat, "Executing low hook!");
                                 low_count += 1;
                             },
                             true},
                     opt::watermark{
                             [&](const Stream&) {
-                                log::debug(log_cat, "Executing high hook!");
+                                log::debug(test_cat, "Executing high hook!");
                                 high_count += 1;
                             },
                             true});
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(100ms);
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(250ms);
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(250ms);
 
@@ -107,18 +102,18 @@ namespace oxen::quic::test
                     2000,
                     opt::watermark{
                             [&](const Stream&) {
-                                log::debug(log_cat, "Executing low hook!");
+                                log::debug(test_cat, "Executing low hook!");
                                 low_count += 1;
                             },
                             true},
                     opt::watermark{
                             [&](const Stream&) {
-                                log::debug(log_cat, "Executing high hook!");
+                                log::debug(test_cat, "Executing high hook!");
                                 high_count += 1;
                             },
                             true});
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             std::this_thread::sleep_for(100ms);
 
@@ -128,10 +123,10 @@ namespace oxen::quic::test
             server_stream->pause();
             REQUIRE(server_stream->is_paused());
 
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
-            REQUIRE_NOTHROW(client_stream->send(bstring_view{req_msg}));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
+            REQUIRE_NOTHROW(client_stream->send(req_msg, nullptr));
 
             server_stream->resume();
             REQUIRE_FALSE(server_stream->is_paused());

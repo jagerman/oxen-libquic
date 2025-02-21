@@ -1,9 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {
@@ -340,7 +335,7 @@ namespace oxen::quic::test
         auto server_endpoint = test_net.endpoint(server_local, server_established);
         CHECK_NOTHROW(server_endpoint->listen(server_tls));
 
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         SECTION("Incorrect pubkey in remote")
         {
@@ -352,7 +347,7 @@ namespace oxen::quic::test
 
             auto client_endpoint = test_net.endpoint(client_local, client_established_2, client_closed);
 
-            RemoteAddress bad_client_remote{defaults::CLIENT_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+            RemoteAddress bad_client_remote{defaults::CLIENT_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
             auto client_ci = client_endpoint->connect(bad_client_remote, client_tls);
 
@@ -368,7 +363,7 @@ namespace oxen::quic::test
 
             auto short_key = defaults::SERVER_PUBKEY.substr(0, 31);
 
-            RemoteAddress bad_client_remote{short_key, "127.0.0.1"s, server_endpoint->local().port()};
+            RemoteAddress bad_client_remote{short_key, LOCALHOST, server_endpoint->local().port()};
 
             REQUIRE_THROWS(client_endpoint->connect(bad_client_remote, client_tls));
         }
@@ -378,7 +373,7 @@ namespace oxen::quic::test
             // If uncommented, this line will not compile! Remote addresses must pass a remote pubkey to be
             // verified upon the client successfully establishing connection with a remote.
 
-            // RemoteAddress client_remote{"127.0.0.1"s, server_endpoint->local().port()};
+            // RemoteAddress client_remote{LOCALHOST, server_endpoint->local().port()};
             CHECK(true);
         }
 
@@ -411,7 +406,7 @@ namespace oxen::quic::test
         auto server_endpoint = test_net.endpoint(server_local, server_established);
         CHECK_NOTHROW(server_endpoint->listen(server_tls));
 
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         auto client_endpoint = test_net.endpoint(client_local, client_established);
 
@@ -446,9 +441,8 @@ namespace oxen::quic::test
 
         auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
 
-        server_tls->set_key_verify_callback([](const ustring_view& key, const ustring_view&) {
-            return key == convert_sv<unsigned char>(std::string_view{defaults::CLIENT_PUBKEY});
-        });
+        server_tls->set_key_verify_callback(
+                [](const uspan& key, std::string_view) { return sp_to_sv(key) == defaults::CLIENT_PUBKEY; });
 
         Address server_local{};
         Address client_local{};
@@ -457,7 +451,7 @@ namespace oxen::quic::test
         CHECK_NOTHROW(server_endpoint->listen(server_tls));
 
         auto client_endpoint = test_net.endpoint(client_local, client_established);
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         auto client_ci = client_endpoint->connect(client_remote, client_tls);
 
@@ -469,8 +463,8 @@ namespace oxen::quic::test
         auto& server_ci = server_cis.front();
         CHECK(client_ci->is_validated());
         CHECK(server_ci->is_validated());
-        CHECK(server_ci->remote_key() == ustring{reinterpret_cast<const unsigned char*>(defaults::CLIENT_PUBKEY.data()),
-                                                 defaults::CLIENT_PUBKEY.length()});
+
+        CHECK(sp_to_sv(server_ci->remote_key()) == defaults::CLIENT_PUBKEY);
     }
 
     TEST_CASE("001 - Handshaking: Types - IPv6", "[001][ipv6]")
@@ -515,7 +509,7 @@ namespace oxen::quic::test
         auto server_endpoint = test_net.endpoint(server_local, server_established);
         CHECK_NOTHROW(server_endpoint->listen(server_tls));
 
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         auto client_endpoint = test_net.endpoint(client_local, client_established);
         auto client_ci = client_endpoint->connect(client_remote, client_tls);
@@ -552,7 +546,7 @@ namespace oxen::quic::test
         auto server_endpoint = test_net.endpoint(server_local, server_established);
         CHECK_NOTHROW(server_endpoint->listen(server_tls));
 
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         auto client_endpoint = test_net.endpoint(client_local, client_established);
         auto client_ci = client_endpoint->connect(client_remote, client_tls);
@@ -657,15 +651,14 @@ namespace oxen::quic::test
             return defer_to_incoming;
         };
 
-        server_tls->set_key_verify_callback([&](const ustring_view& key, const ustring_view&) {
+        server_tls->set_key_verify_callback([&](uspan key, std::string_view) {
             std::lock_guard lock{ci_mutex};
             return defer_hook({reinterpret_cast<const char*>(key.data()), key.size()}, S_PUBKEY, C_PUBKEY, server_ci);
         });
 
-        client_tls->set_key_verify_callback([&](const ustring_view& key, const ustring_view&) {
+        client_tls->set_key_verify_callback([&](uspan key, std::string_view) {
             std::lock_guard lock{ci_mutex};
-            return defer_hook(
-                    std::string{reinterpret_cast<const char*>(key.data()), key.size()}, C_PUBKEY, S_PUBKEY, client_ci);
+            return defer_hook(sp_to_sv(key), C_PUBKEY, S_PUBKEY, client_ci);
         });
 
         Address server_local{};
@@ -685,11 +678,11 @@ namespace oxen::quic::test
 
             auto server_endpoint = test_net.endpoint(server_local, server_established, server_closed_ep_level);
 
-            RemoteAddress client_remote{S_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+            RemoteAddress client_remote{S_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
             auto client_endpoint = test_net.endpoint(client_local, client_established);
 
-            RemoteAddress server_remote{C_PUBKEY, "127.0.0.1"s, client_endpoint->local().port()};
+            RemoteAddress server_remote{C_PUBKEY, LOCALHOST, client_endpoint->local().port()};
 
             server_endpoint->listen(server_tls);
             client_endpoint->listen(client_tls);
@@ -718,11 +711,11 @@ namespace oxen::quic::test
 
             auto server_endpoint = test_net.endpoint(server_local, server_established);
 
-            RemoteAddress client_remote{S_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+            RemoteAddress client_remote{S_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
             auto client_endpoint = test_net.endpoint(client_local, client_established);
 
-            RemoteAddress server_remote{C_PUBKEY, "127.0.0.1"s, client_endpoint->local().port()};
+            RemoteAddress server_remote{C_PUBKEY, LOCALHOST, client_endpoint->local().port()};
 
             server_endpoint->listen(server_tls);
             client_endpoint->listen(client_tls);
@@ -772,7 +765,7 @@ namespace oxen::quic::test
         auto server_endpoint = net.endpoint(server_local, server_conn_closed);
         auto client_endpoint = net.endpoint(client_local, client_conn_closed);
 
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         SECTION("Client fast timeout")
         {
@@ -817,9 +810,9 @@ namespace oxen::quic::test
         server_tls->set_key_verify_callback([](const ustring_view&, const ustring_view&) {
             // This stalls the entire network object; this is a really terrible thing to do outside
             // of test code, but will let us simulate a slow handshake.
-            log::critical(log_cat, "key verify sleeping...");
+            log::critical(test_cat, "key verify sleeping...");
             std::this_thread::sleep_for(30s);
-            log::critical(log_cat, "key verify done sleeping");
+            log::critical(test_cat, "key verify done sleeping");
             return true;
         });
 #endif
@@ -834,7 +827,7 @@ namespace oxen::quic::test
         std::shared_ptr<connection_interface> client_ci;
 
         auto server_endpoint = net1->endpoint(server_local);
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         server_endpoint.reset();
         net1.reset();  // kill the server
@@ -883,7 +876,7 @@ namespace oxen::quic::test
         std::shared_ptr<connection_interface> client_ci;
 
         auto server_endpoint = net1->endpoint(server_local);
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         server_endpoint.reset();
         net1.reset();  // kill the server

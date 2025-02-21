@@ -1,5 +1,7 @@
 #pragma once
 
+#include "loop.hpp"
+
 #include <event2/event.h>
 
 #include <atomic>
@@ -7,8 +9,6 @@
 #include <future>
 #include <memory>
 #include <thread>
-
-#include "loop.hpp"
 
 namespace oxen::quic
 {
@@ -36,7 +36,7 @@ namespace oxen::quic
         Network();
         explicit Network(std::shared_ptr<Loop> ev_loop);
 
-        Network(const Network& n) : Network{n._loop} {};
+        Network(const Network& n) : Network{n._loop} {}
 
         Network& operator=(Network) = delete;
         Network& operator=(Network&&) = delete;
@@ -52,11 +52,23 @@ namespace oxen::quic
         template <typename... Opt>
         std::shared_ptr<Endpoint> endpoint(const Address& local_addr, Opt&&... opts)
         {
-            auto [it, added] =
-                    endpoint_map.emplace(std::make_shared<Endpoint>(*this, local_addr, std::forward<Opt>(opts)...));
+            auto [it, added] = endpoints.emplace(std::make_shared<Endpoint>(*this, local_addr, std::forward<Opt>(opts)...));
 
             return *it;
         }
+
+        // Shuts down an endpoint, closing all connections and sockets in the process, and blocks
+        // until the endpoint is fully destroyed.  This happens automatically upon Network
+        // destruction, but can also be done in cases where the Network object is doing other
+        // things.
+        //
+        // An application calling this is expected to call this as `close(std::move(endpoint))` to
+        // give up ownership of its endpoint as part of the call.
+        void close(std::shared_ptr<Endpoint>&& endpoint);
+
+        // Same as close(std::move(endpoint)), except that this does not wait for shutdown to
+        // complete.
+        void close_soon(std::shared_ptr<Endpoint>&& endpoint);
 
         template <typename T, typename... Args>
         std::shared_ptr<T> make_shared(Args&&... args)
@@ -88,17 +100,17 @@ namespace oxen::quic
 
             Configurable parameters:
                 - start_immediately : will call ::event_add() before returning the ticker
-                - fixed_interval :
-                        - if FALSE (default behavior), will attempt to execute every `interval`, regardless of how long the
-                            event itself takes
-                        - if TRUE, will wait the entire `interval` after finishing execution of the event before attempting
-                            execution again
+                - wait :
+                    - if FALSE (default behavior), the interval will not wait for the event to complete. will attempt to
+                        execute every `interval`, regardless of how long the event itself takes.
+                    - if TRUE, the interval will wait for the event to complete before beginning. It will wait the entire
+                        `interval` after finishing execution of the event before attempting execution again.
         */
         template <typename Callable>
         [[nodiscard]] std::shared_ptr<Ticker> call_every(
-                std::chrono::microseconds interval, Callable&& f, bool start_immediately = true, bool fixed_interval = false)
+                std::chrono::microseconds interval, Callable&& f, bool start_immediately = true, bool wait = false)
         {
-            return _loop->_call_every(interval, std::forward<Callable>(f), net_id, start_immediately, fixed_interval);
+            return _loop->_call_every(interval, std::forward<Callable>(f), net_id, start_immediately, wait);
         }
 
         template <typename Callable>
@@ -110,7 +122,7 @@ namespace oxen::quic
       private:
         std::shared_ptr<Loop> _loop;
         std::atomic<bool> shutdown_immediate{false};
-        std::unordered_set<std::shared_ptr<Endpoint>> endpoint_map;
+        std::unordered_set<std::shared_ptr<Endpoint>> endpoints;
 
         friend class Endpoint;
         friend class Connection;

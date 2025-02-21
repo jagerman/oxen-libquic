@@ -7,7 +7,7 @@ namespace oxen::quic
     ipv4::ipv4(const std::string& str)
     {
         in_addr sin;
-        parse_addr(sin, str);
+        detail::parse_addr(sin, str);
         addr = oxenc::big_to_host(sin.s_addr);
     }
 
@@ -43,7 +43,7 @@ namespace oxen::quic
     ipv6::ipv6(const std::string& str)
     {
         in6_addr sin6;
-        parse_addr(sin6, str);
+        detail::parse_addr(sin6, str);
 
         hi = oxenc::load_big_to_host<uint64_t>(&sin6.s6_addr[0]);
         lo = oxenc::load_big_to_host<uint64_t>(&sin6.s6_addr[8]);

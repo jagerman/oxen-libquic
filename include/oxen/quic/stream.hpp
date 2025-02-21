@@ -1,5 +1,12 @@
 #pragma once
 
+#include "connection_ids.hpp"
+#include "error.hpp"
+#include "iochannel.hpp"
+#include "opt.hpp"
+#include "types.hpp"
+#include "utils.hpp"
+
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -10,13 +17,6 @@
 #include <variant>
 #include <vector>
 
-#include "connection_ids.hpp"
-#include "error.hpp"
-#include "iochannel.hpp"
-#include "opt.hpp"
-#include "types.hpp"
-#include "utils.hpp"
-
 namespace oxen::quic
 {
     class Stream;
@@ -25,7 +25,7 @@ namespace oxen::quic
     struct quic_cid;
 
     // Stream callbacks
-    using stream_data_callback = std::function<void(Stream&, bstring_view)>;
+    using stream_data_callback = std::function<void(Stream&, bspan)>;
     using stream_close_callback = std::function<void(Stream&, uint64_t error_code)>;
     using stream_constructor_callback =
             std::function<std::shared_ptr<Stream>(Connection&, Endpoint&, std::optional<int64_t>)>;
@@ -35,6 +35,12 @@ namespace oxen::quic
 
     void _chunk_sender_trace(const char* file, int lineno, std::string_view message);
     void _chunk_sender_trace(const char* file, int lineno, std::string_view message, size_t val);
+
+    inline namespace concepts
+    {
+        template <typename T>
+        concept stream_derived_type = std::derived_from<T, Stream>;
+    }
 
     class Stream : public IOChannel, public std::enable_shared_from_this<Stream>
     {
@@ -91,9 +97,16 @@ namespace oxen::quic
 
         bool is_paused() const;
 
-        // These public methods are synchronized so that they can be safely called from outside the
-        // libquic main loop thread.
+        // Returns true if the stream is usable, i.e. not closing or shutdown.
         bool available() const;
+
+        // Returns true if the stream is ready, that is, has an assigned stream ID and can send data
+        // to the other side.  Note that, when a connection is established using 0-RTT, new streams
+        // will be instantly ready (up to the server's stream limit as contained in the stored 0-RTT
+        // data), but if 0-RTT fails, they will temporarily become unready again until the new, full
+        // 1-RTT connection re-admits them as new streams.  Typically this is momentary, but it
+        // could be prolonged if the server changed transport parameters to reduce the number of
+        // available streams.
         bool is_ready() const;
 
         std::shared_ptr<Stream> get_stream() override;
@@ -107,7 +120,7 @@ namespace oxen::quic
         stream_close_callback close_callback;
 
       protected:
-        virtual void receive(bstring_view data)
+        virtual void receive(bspan data)
         {
             if (data_callback)
                 data_callback(*this, data);
@@ -117,14 +130,26 @@ namespace oxen::quic
 
         // Called immediately after set_ready so that a subclass can do thing as soon as the stream
         // becomes ready. The default does nothing.
+        //
+        // Note that when using 0-RTT, this will be fired *twice* if 0-RTT is attempted but fails:
+        // once immediately upon stream construction (if the cached 0-RTT transport data allows the
+        // stream to be opened), but then the 0-RTT failure will momentarily "un-ready" it
+        // (`on_unready()` is called) if 0-RTT is rejected.  Typically it will then become ready
+        // again almost immediately as the connection reopens as many 0-RTT streams as it can, but
+        // note that this might not possible (for instance, if the server max streams values has
+        // been reduced).
         virtual void on_ready() {}
+
+        // Called when 0-RTT is rejected and the stream is returned to pending status, which may
+        // only be momentary.  See above.
+        virtual void on_unready() {}
 
         /// Called periodically to check if anything needs to be timed out.  The default does
         /// nothing, but subclasses can override to not do nothing if it's not the case that nothing
         /// ain't not good enough isn't false.
         virtual void check_timeouts() {}
 
-        void send_impl(bstring_view data, std::shared_ptr<void> keep_alive = nullptr) override;
+        void send_impl(bspan data, std::shared_ptr<void> keep_alive) override;
 
         stream_buffer user_buffers;
 
@@ -137,6 +162,9 @@ namespace oxen::quic
         size_t unsent_impl() const override;
 
       private:
+        // Called if 0-RTT early data was rejected; marks all sent data as unsent
+        void revert_stream();
+
         std::vector<ngtcp2_vec> pending() override;
 
         size_t _unacked_size{0};
@@ -162,7 +190,7 @@ namespace oxen::quic
 
         void wrote(size_t bytes) override;
 
-        void append_buffer(bstring_view buffer, std::shared_ptr<void> keep_alive);
+        void append_buffer(bspan buffer, std::shared_ptr<void> keep_alive);
 
         void acknowledge(size_t bytes);
 
@@ -218,7 +246,7 @@ namespace oxen::quic
                 single_chunk(chunk_sender& cs, Container&& d) : _chunks{cs.shared_from_this()}, _data{std::move(d)} {}
                 ~single_chunk() { _chunks->queue_next_chunk(); }
 
-                bstring_view view() const
+                bspan view() const
                 {
                     if constexpr (is_pointer)
                     {
@@ -278,7 +306,7 @@ namespace oxen::quic
             }
         };
 
-        prepared_datagram pending_datagram(bool) override;
+        std::optional<prepared_datagram> pending_datagram(bool) override;
 
       public:
         /// Sends data in chunks: `next_chunk` is some callable (e.g. lambda) that will be called
@@ -314,6 +342,6 @@ namespace oxen::quic
             chunk_sender<T>::make(simultaneous, *this, std::move(next_chunk), std::move(done));
         }
 
-        void set_ready();
+        void set_ready(bool ready = true);
     };
 }  // namespace oxen::quic

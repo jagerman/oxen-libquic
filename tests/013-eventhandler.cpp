@@ -1,11 +1,4 @@
-#include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers.hpp>
-#include <future>
-#include <oxen/quic.hpp>
-#include <oxen/quic/gnutls_crypto.hpp>
-#include <thread>
-
-#include "utils.hpp"
+#include "unit_test.hpp"
 
 namespace oxen::quic::test
 {
@@ -19,7 +12,7 @@ namespace oxen::quic::test
     TEST_CASE("013 - EventHandler event repeater: EventHandler managed lifetime", "[013][repeater][managed]")
     {
         Network test_net{};
-        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsv;
+        constexpr auto msg = "hello from the other siiiii-iiiiide"_bsp;
 
         std::promise<void> prom_a, prom_b;
         std::future<void> fut_a = prom_a.get_future(), fut_b = prom_b.get_future();
@@ -28,7 +21,7 @@ namespace oxen::quic::test
 
         std::shared_ptr<Ticker> handler;
 
-        stream_data_callback server_data_cb = [&](Stream&, bstring_view) {
+        stream_data_callback server_data_cb = [&](Stream&, bspan) {
             recv_counter += 1;
             if (recv_counter == NUM_ITERATIONS)
             {
@@ -44,7 +37,7 @@ namespace oxen::quic::test
         auto server_endpoint = test_net.endpoint(server_local);
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls, server_data_cb));
 
-        RemoteAddress client_remote{defaults::SERVER_PUBKEY, "127.0.0.1"s, server_endpoint->local().port()};
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
         auto client_endpoint = test_net.endpoint(client_local);
         auto conn_interface = client_endpoint->connect(client_remote, client_tls);
@@ -56,7 +49,7 @@ namespace oxen::quic::test
             if (send_counter <= NUM_ITERATIONS)
             {
                 send_counter += 1;
-                client_stream->send(msg);
+                client_stream->send(msg, nullptr);
             }
         });
 
