@@ -6,6 +6,9 @@ namespace oxen::quic::test
 
     TEST_CASE("014 - 0-RTT", "[014][0rtt]")
     {
+        if (disable_0rtt)
+            SKIP("0-RTT tests not enabled for this test iteration!");
+
         // This case checks that, even if we enable 0-RTT, without having the needed ticket on hand
         // we fall back to the expected 1-RTT.
 
