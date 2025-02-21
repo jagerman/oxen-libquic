@@ -199,9 +199,9 @@ namespace oxen::quic::test
 #endif
 
 #ifndef NDEBUG
-        // Debug builds take longer too
-        SIMULATED_RTT *= 2;
-        RTT_BUFFER *= 2;
+        // Debug builds can take way longer, especially with trace logging
+        SIMULATED_RTT *= 4;
+        RTT_BUFFER *= 4;
 #endif
 
         delayer->delay = SIMULATED_RTT / 2;
