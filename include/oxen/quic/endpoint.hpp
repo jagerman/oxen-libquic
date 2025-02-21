@@ -345,7 +345,7 @@ namespace oxen::quic
         /// of time to allow for any lagging packets to be caught. The unique reference ID is keyed to removal time formatted
         /// as a time point
         ///
-        std::map<ConnectionID, std::shared_ptr<Connection>> conns;
+        std::unordered_map<ConnectionID, std::shared_ptr<Connection>> conns;
 
         std::unordered_map<quic_cid, ConnectionID> conn_lookup;
 
