@@ -5,6 +5,8 @@
 
 #include <oxenc/endian.h>
 
+#include <event2/event.h>
+
 #include <atomic>
 #include <chrono>
 #include <stdexcept>

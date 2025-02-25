@@ -2,8 +2,6 @@
 
 #include "loop.hpp"
 
-#include <event2/event.h>
-
 #include <atomic>
 #include <cstdint>
 #include <future>

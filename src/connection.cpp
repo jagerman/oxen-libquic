@@ -9,6 +9,8 @@
 #include "stream.hpp"
 #include "utils.hpp"
 
+#include <event2/event.h>
+
 #include <cassert>
 #include <chrono>
 #include <cstdint>

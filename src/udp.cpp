@@ -21,6 +21,8 @@ extern "C"
 #include "internal.hpp"
 #include "udp.hpp"
 
+#include <event2/event.h>
+
 #include <system_error>
 
 #ifdef _WIN32

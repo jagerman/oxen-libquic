@@ -16,8 +16,6 @@ extern "C"
 #include "types.hpp"
 #include "utils.hpp"
 
-#include <event2/event.h>
-
 #include <cstdint>
 #include <variant>
 

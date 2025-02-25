@@ -16,6 +16,8 @@ extern "C"
 #include "types.hpp"
 #include "utils.hpp"
 
+#include <event2/event.h>
+
 #include <cstddef>
 #include <list>
 #include <optional>

@@ -17,8 +17,6 @@ extern "C"
 #include <oxenc/endian.h>
 #include <oxenc/hex.h>
 
-#include <event2/event.h>
-
 #include <algorithm>
 #include <cassert>
 #include <charconv>
@@ -38,6 +36,9 @@ extern "C"
 #include <string>
 #include <string_view>
 #include <unordered_set>
+
+struct event;
+struct event_base;
 
 namespace oxen::quic
 {
