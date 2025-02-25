@@ -1,15 +1,16 @@
 #pragma once
 
-#include "context.hpp"
-#include "crypto.hpp"
 #include "utils.hpp"
 
 #include <atomic>
 #include <cstdint>
-#include <forward_list>
 #include <future>
+#include <list>
 #include <memory>
+#include <queue>
 #include <thread>
+
+struct event_base;
 
 namespace oxen::quic
 {

@@ -10,16 +10,16 @@ add_library(quic
     context.cpp
     datagram.cpp
     endpoint.cpp
-    error.cpp
     format.cpp
-    gnutls_crypto.cpp
     gnutls_creds.cpp
+    gnutls_crypto.cpp
     gnutls_session.cpp
     iochannel.cpp
     ip.cpp
     loop.cpp
     messages.cpp
     network.cpp
+    result.cpp
     stream.cpp
     udp.cpp
     utils.cpp
