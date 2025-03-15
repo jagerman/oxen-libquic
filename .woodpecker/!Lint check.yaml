@@ -1,0 +1,9 @@
+when:
+  - event: [push, pull_request, tag, release, cron, manual]
+
+steps:
+  - name: "Lint check"
+    image: registry.oxen.rocks/lint
+    commands:
+      - .woodpecker/debian-init.sh git clang-format-19 jsonnet
+      - utils/ci/lint-check.sh

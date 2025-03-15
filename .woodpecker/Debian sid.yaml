@@ -1,0 +1,18 @@
+when:
+  - event: [push, pull_request, tag, release, cron, manual]
+
+matrix:
+  ARCH:
+    - amd64
+    - arm64
+
+labels:
+  platform: linux/${ARCH}
+
+steps:
+  - name: build
+    image: registry.oxen.rocks/debian-sid
+    commands: 
+      - .woodpecker/debian-init.sh
+      - .woodpecker/generic-build.sh
+      - .woodpecker/run-tests.sh
