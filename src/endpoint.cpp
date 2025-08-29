@@ -195,10 +195,12 @@ namespace oxen::quic
                             std::nullopt,
                             nullptr,
                             _disable_mtu_discovery);
+                    log::warning(log_cat, "MADE OUTBOUND CONN {} WITH SCID={}", it_a->second, it_a->first);
                     return it_b->second;
                 }
-                catch (...)
+                catch (const std::exception& e)
                 {
+                    log::error(log_cat, "Exception during outbound connection creation: {}", e.what());
                     conns.erase(it_b);
                     conn_lookup.erase(it_a);
                     throw;
