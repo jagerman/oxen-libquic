@@ -638,7 +638,7 @@ namespace oxen::quic
             }
         }
 
-        log::debug(log_cat, "Could not find connection associated with {}", ccid);
+        log::error(log_cat, "Could not find connection associated with {}", ccid);
 
         return nullptr;
     }
@@ -1163,6 +1163,7 @@ namespace oxen::quic
             if (auto it_b = conns.find(it_a->second); it_b != conns.end())
                 return it_b->second.get();
 
+        log::error(log_cat, "EP::get_conn found no conn for id {}", id);
         return nullptr;
     }
 
