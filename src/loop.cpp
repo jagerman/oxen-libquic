@@ -263,7 +263,14 @@ namespace oxen::quic
         {
             auto job = swapped_queue.front();
             swapped_queue.pop();
-            job();
+            try
+            {
+                job();
+            }
+            catch (const std::exception& e)
+            {
+                log::error(log_cat, "Uncaught exception processing loop event job: {}", e.what());
+            }
         }
     }
 
