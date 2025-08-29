@@ -905,8 +905,13 @@ namespace oxen::quic
         auto data = pkt.data<uint8_t>();
         auto rv = ngtcp2_accept(&hdr, data.data(), data.size());
 
-        if (rv < 0 || hdr.type != NGTCP2_PKT_INITIAL)
+        if (rv < 0 || hdr.type != NGTCP2_PKT_INITIAL) {
+            log::critical(log_cat, "declined initial packet");
             return {nullptr, false};
+        } else {
+            log::critical(log_cat, "Accepted (rv={}) initial packet dcid={}, scid={}, pkt_num={}, token={}, len={}, version={}, type={}, flags={}",
+                    rv, quic_cid{hdr.dcid}, quic_cid{hdr.scid}, hdr.pkt_num, oxenc::to_hex(hdr.token, hdr.token + hdr.tokenlen), hdr.len, hdr.version, hdr.type, hdr.flags);
+        }
 
         ngtcp2_cid original_cid;
         ngtcp2_cid* pkt_original_cid = nullptr;
