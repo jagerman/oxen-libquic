@@ -600,9 +600,15 @@ namespace oxen::quic
         log::warning(
                 log_cat, "{} associating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
         log::warning(log_cat, "conn_lookup has {} entries", conn_lookup.size());
-        log::warning(log_cat, "entries: {}", fmt::join(std::views::keys(conn_lookup), ","));
+        quic_cid biggest{};
+        for (auto& e : std::views::keys(conn_lookup))
+        {
+            if (e._hashed() > biggest._hashed())
+            {
+                biggest = e;
+            }
+        }
         conn.fixme_log_ass_cids();
-                
 
         auto inserted = conn_lookup.emplace(qcid, conn.reference_id()).second;
         if (inserted || !weakly)
@@ -621,6 +627,20 @@ namespace oxen::quic
         assert(loop.inside());
         log::trace(
                 log_cat, "{} dissociating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
+
+        log::warning(
+                log_cat, "{} dissociating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
+        log::warning(log_cat, "conn_lookup has {} entries", conn_lookup.size());
+        quic_cid biggest{};
+        for (auto& e : std::views::keys(conn_lookup))
+        {
+            if (e._hashed() > biggest._hashed())
+            {
+                biggest = e;
+            }
+        }
+        log::warning(log_cat, "entry with biggest hash: {}", biggest);
+        conn.fixme_log_ass_cids();
 
         conn_lookup.erase(qcid);
         conn.delete_associated_cid(qcid);
@@ -912,12 +932,26 @@ namespace oxen::quic
         auto data = pkt.data<uint8_t>();
         auto rv = ngtcp2_accept(&hdr, data.data(), data.size());
 
-        if (rv < 0 || hdr.type != NGTCP2_PKT_INITIAL) {
+        if (rv < 0 || hdr.type != NGTCP2_PKT_INITIAL)
+        {
             log::critical(log_cat, "declined initial packet");
             return {nullptr, false};
-        } else {
-            log::critical(log_cat, "Accepted (rv={}) initial packet dcid={}, scid={}, pkt_num={}, token={}, len={}, version={}, type={}, flags={}",
-                    rv, quic_cid{hdr.dcid}, quic_cid{hdr.scid}, hdr.pkt_num, oxenc::to_hex(hdr.token, hdr.token + hdr.tokenlen), hdr.len, hdr.version, hdr.type, hdr.flags);
+        }
+        else
+        {
+            log::critical(
+                    log_cat,
+                    "Accepted (rv={}) initial packet dcid={}, scid={}, pkt_num={}, token={}, len={}, version={}, type={}, "
+                    "flags={}",
+                    rv,
+                    quic_cid{hdr.dcid},
+                    quic_cid{hdr.scid},
+                    hdr.pkt_num,
+                    oxenc::to_hex(hdr.token, hdr.token + hdr.tokenlen),
+                    hdr.len,
+                    hdr.version,
+                    hdr.type,
+                    hdr.flags);
         }
 
         ngtcp2_cid original_cid;
