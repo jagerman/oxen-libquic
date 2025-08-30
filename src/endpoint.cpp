@@ -608,6 +608,7 @@ namespace oxen::quic
                 biggest = e;
             }
         }
+        log::warning(log_cat, "entry with biggest hash: {}", biggest);
         conn.fixme_log_ass_cids();
 
         auto inserted = conn_lookup.emplace(qcid, conn.reference_id()).second;
