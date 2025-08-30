@@ -15,6 +15,7 @@
 
 #include <event2/event.h>
 
+#include <fmt/ranges.h>
 #include <gnutls/crypto.h>
 
 #include <cassert>
@@ -2073,6 +2074,12 @@ namespace oxen::quic
     Connection::~Connection()
     {
         log::trace(log_cat, "Connection @{} destroyed", (void*)this);
+    }
+
+    void Connection::fixme_log_ass_cids()
+    {
+        log::warning(log_cat, "FIXME LOG ASS CIDS:");
+        log::warning(log_cat, "{}", fmt::join(_associated_cids, ","));
     }
 
 }  // namespace oxen::quic

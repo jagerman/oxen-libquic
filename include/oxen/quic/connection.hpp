@@ -12,6 +12,8 @@
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 
+#include <fmt/ranges.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -197,6 +199,8 @@ namespace oxen::quic
         /// maximum number of streams, *or* when an existing stream closes, opening a stream slot on
         /// the connection.
         size_t num_streams_pending() const;
+
+        void fixme_log_ass_cids();
 
         /// Returns the maximum number of active streams that the connection currently allows.
         uint64_t get_max_streams() const;

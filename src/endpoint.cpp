@@ -23,6 +23,7 @@
 #include <list>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <string_view>
 #include <tuple>
 
@@ -596,8 +597,12 @@ namespace oxen::quic
     void Endpoint::associate_cid(const quic_cid& qcid, Connection& conn, bool weakly)
     {
         assert(loop.inside());
-        log::trace(
+        log::warning(
                 log_cat, "{} associating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
+        log::warning(log_cat, "conn_lookup has {} entries", conn_lookup.size());
+        log::warning(log_cat, "entries: {}", fmt::join(std::views::keys(conn_lookup), ","));
+        conn.fixme_log_ass_cids();
+                
 
         auto inserted = conn_lookup.emplace(qcid, conn.reference_id()).second;
         if (inserted || !weakly)
