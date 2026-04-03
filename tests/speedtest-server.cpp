@@ -247,9 +247,9 @@ int main(int argc, char* argv[])
     std::shared_ptr<Endpoint> server;
     try
     {
-        std::optional<opt::disable_mtu_discovery> mtu;
+        std::optional<opt::max_udp_payload> mtu;
         if (disable_pmtud)
-            mtu.emplace();
+            mtu.emplace(opt::max_udp_payload::minimum());
 
         log::debug(test_cat, "Starting up endpoint");
         server = Endpoint::endpoint(
