@@ -1721,7 +1721,7 @@ namespace oxen::quic
             ngtcp2_transport_params& params,
             ngtcp2_callbacks& callbacks,
             std::chrono::nanoseconds handshake_timeout,
-            bool disable_mtu_discovery)
+            std::optional<size_t> max_udp_payload)
     {
         callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
         callbacks.path_validation = connection_callbacks::on_path_validation;
@@ -1762,10 +1762,10 @@ namespace oxen::quic
 
         ngtcp2_transport_params_default(&params);
 
-        if (disable_mtu_discovery)
+        if (max_udp_payload)
         {
-            settings.no_pmtud = true;
-            params.max_udp_payload_size = NGTCP2_MAX_UDP_PAYLOAD_SIZE;
+            settings.max_tx_udp_payload_size = *max_udp_payload;
+            params.max_udp_payload_size = *max_udp_payload;
         }
 
         // Connection flow level control window
@@ -1821,7 +1821,7 @@ namespace oxen::quic
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
             ngtcp2_cid* ocid,
-            bool disable_mtu_discovery) :
+            std::optional<size_t> max_udp_payload) :
             _endpoint{ep},
             _loop{_endpoint.loop},
             context{std::move(ctx)},
@@ -1877,7 +1877,7 @@ namespace oxen::quic
 
         auto handshake_timeout = context->config.handshake_timeout.value_or(default_handshake_timeout);
 
-        init(settings, params, callbacks, handshake_timeout, disable_mtu_discovery);
+        init(settings, params, callbacks, handshake_timeout, max_udp_payload);
 
         // Clients should be the ones providing a remote pubkey here. This way we can emplace it into
         // the gnutlssession object to be verified. Servers should be verifying via callback
@@ -2056,7 +2056,7 @@ namespace oxen::quic
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
             ngtcp2_cid* ocid,
-            bool disable_mtu_discovery)
+            std::optional<size_t> max_udp_payload)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         std::shared_ptr<Connection> conn{new Connection{
@@ -2072,7 +2072,7 @@ namespace oxen::quic
                 hdr,
                 token_type,
                 ocid,
-                disable_mtu_discovery}};
+                max_udp_payload}};
 
         conn->packet_io_ready();
 

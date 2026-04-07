@@ -100,9 +100,9 @@ namespace oxen::quic
         _manual_routing = std::move(mrouting);
     }
 
-    void Endpoint::handle_ep_opt([[maybe_unused]] opt::disable_mtu_discovery)
+    void Endpoint::handle_ep_opt(opt::max_udp_payload mup)
     {
-        _disable_mtu_discovery = true;
+        _max_udp_payload = mup.size;
     }
 
     void Endpoint::handle_ep_opt([[maybe_unused]] opt::allow_gso)
@@ -186,7 +186,7 @@ namespace oxen::quic
                             nullptr,
                             std::nullopt,
                             nullptr,
-                            _disable_mtu_discovery);
+                            _max_udp_payload);
                     return it_b->second;
                 }
                 catch (...)
@@ -992,7 +992,7 @@ namespace oxen::quic
                             &hdr,
                             token_type,
                             pkt_original_cid,
-                            _disable_mtu_discovery);
+                            _max_udp_payload);
 
                     conn = it_b->second.get();
                     break;
