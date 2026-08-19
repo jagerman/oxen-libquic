@@ -153,9 +153,15 @@ namespace oxen::quic
         return endpoint.job_queue.call_get([this] { return _unacked_size; });
     }
 
-    std::tuple<uint64_t, size_t, size_t> Stream::get_stats() const
+    size_t Stream::retained_bytes() const
     {
-        return endpoint.job_queue.call_get([this] { return std::tuple{_acked_bytes, _unacked_size, _unsent_size}; });
+        return endpoint.job_queue.call_get([this] { return retained_impl(); });
+    }
+
+    std::tuple<uint64_t, size_t, size_t, size_t> Stream::get_stats() const
+    {
+        return endpoint.job_queue.call_get(
+                [this] { return std::tuple{_acked_bytes, _unacked_size, _unsent_size, retained_impl()}; });
     }
 
     bool Stream::writable() const
@@ -293,7 +299,6 @@ namespace oxen::quic
         assert(_conn);
 
         _unsent_size += buffer.size();
-        _total_buffer_size += buffer.size();
         user_buffers.emplace_back(buffer, std::move(keep_alive));
         if (_watermarking)
             check_watermark();
@@ -307,7 +312,7 @@ namespace oxen::quic
     void Stream::acknowledge(size_t bytes)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-        log::trace(log_cat, "Acking {} bytes of {}/{} unacked/size", bytes, _unacked_size, _total_buffer_size);
+        log::trace(log_cat, "Acking {} bytes of {}/{} unacked/unsent", bytes, _unacked_size, _unsent_size);
 
         assert(bytes <= _unacked_size);
         _unacked_size -= bytes;
@@ -316,9 +321,11 @@ namespace oxen::quic
         // Drop all fully-acked buffers that are no longer needed
         while (bytes && bytes >= user_buffers.front().first.size())
         {
-            _total_buffer_size -= user_buffers.front().first.size();
             bytes -= user_buffers.front().first.size();
             user_buffers.pop_front();
+            // Whatever had been trimmed off the old front is released along with it, and the new
+            // front (if any) has never been trimmed:
+            _front_trimmed = 0;
             assert(_current_buffer_index > 0);
             _current_buffer_index -= 1;
             log::trace(log_cat, "bytes: {}", bytes);
@@ -329,6 +336,7 @@ namespace oxen::quic
         {
             auto& front = user_buffers.front().first;
             front = front.subspan(bytes);
+            _front_trimmed += bytes;
             if (_current_buffer_index == 0)
             {
                 assert(_current_buffer_offset >= bytes);
@@ -336,7 +344,7 @@ namespace oxen::quic
             }
         }
 
-        log::trace(log_cat, "{} bytes acked, {} unacked remaining", bytes, _total_buffer_size);
+        log::trace(log_cat, "{} bytes acked, {} unacked remaining", bytes, _unacked_size);
     }
 
     void Stream::wrote(size_t bytes)
@@ -381,13 +389,13 @@ namespace oxen::quic
     {
         assert(endpoint.job_queue.inside());
         log::trace(log_cat, "Stream (ID:{}) reverting after early data rejected...", _stream_id);
+        _unsent_size += _unacked_size;
         _unacked_size = 0;
         _current_buffer_index = 0;
         _current_buffer_offset = 0;
-        _unsent_size = _total_buffer_size;
         if (_had_notify)
             _notify = true;
-        log::debug(log_cat, "Stream (ID:{}) has {}B in buffer, 0B unacked...", _stream_id, _total_buffer_size);
+        log::debug(log_cat, "Stream (ID:{}) has {}B in buffer, 0B unacked...", _stream_id, _unsent_size);
     }
 
     std::pair<std::vector<ngtcp2_vec>, bool> Stream::pending(size_t bytes)
