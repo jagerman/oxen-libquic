@@ -266,24 +266,20 @@ namespace oxen::quic
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
         const auto& [alarm_thresh, clear_thresh] = *_watermarking;
-        const size_t threshold = _unacked_size + (_watermark_alarm ? clear_thresh + 1 : alarm_thresh);
-        size_t sum = 0;
-        for (auto it = user_buffers.begin(); sum < threshold && it != user_buffers.end(); ++it)
-            sum += it->first.size();
         if (_watermark_alarm)
         {
-            if (sum < threshold)
+            if (_unsent_size <= clear_thresh)
             {
-                log::debug(log_cat, "Watermark ({} unsent) dropped <= clear threshold ({})", sum, clear_thresh);
+                log::debug(log_cat, "Watermark ({} unsent) dropped <= clear threshold ({})", _unsent_size, clear_thresh);
                 _watermark_alarm = false;
                 if (_watermark_on_clear)
                     _watermark_on_clear(*this);
             }
         }
-        else if (sum >= threshold)
+        else if (_unsent_size >= alarm_thresh)
         {
-            // "at least" because the sum above terminates early if we met the threshold
-            log::debug(log_cat, "Watermark triggered alarm threshold ({}+ unsent >= alarm threshold {})", sum, alarm_thresh);
+            log::debug(
+                    log_cat, "Watermark triggered alarm threshold ({} unsent >= alarm threshold {})", _unsent_size, alarm_thresh);
             _watermark_alarm = true;
             if (_watermark_on_alarm)
                 _watermark_on_alarm(*this);
