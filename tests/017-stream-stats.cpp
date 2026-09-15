@@ -99,6 +99,17 @@ namespace oxen::quic::test
             // the loop thread (where it is written); resume() itself is safe to call from here.
             auto srv = loop.call_get([&] { return server_stream.lock(); });
             REQUIRE(srv);
+            // Deliberate, and the reason this section catches anything.  The receiver usually still
+            // has a delayed-ACK timer pending (25ms by default), and the flow control credit that
+            // resume() grants rides out on that ACK whether or not resume() prompts a write of its
+            // own.  Sleeping past it removes that crutch, so this exercises resume() actually
+            // waking the connection; without that the transfer stalls until the sender's PTO,
+            // seconds later.  It is a race either way -- one that is lost rarely rather than never.
+            //
+            // Sized from measurement: with the resume() fix reverted, 50ms caught it 2 runs in 5,
+            // 75ms and 100ms 5 in 5.  100ms leaves margin for a slow machine, where the ACK timer
+            // being waited past is itself late.
+            std::this_thread::sleep_for(100ms);
             srv->resume();
             REQUIRE(wait_for([&] { return server_received.load() >= big.size(); }, 20s));
             REQUIRE(wait_for(

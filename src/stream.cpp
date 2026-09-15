@@ -124,13 +124,22 @@ namespace oxen::quic
             if (_paused)
             {
                 log::debug(log_cat, "Resuming stream ID:{}", _stream_id);
-                if (_paused_offset)
-                {
-                    ngtcp2_conn_extend_max_stream_offset(*_conn, _stream_id, _paused_offset);
-                    _paused_offset = 0;
-                }
-
                 _paused = false;
+                if (_conn)
+                {
+                    if (_paused_offset)
+                        ngtcp2_conn_extend_max_stream_offset(*_conn, _stream_id, _paused_offset);
+
+                    // Extending the offset only credits the peer inside ngtcp2; it cannot send
+                    // again until a MAX_STREAM_DATA frame actually reaches it, and nothing here is
+                    // otherwise about to write.  (The unpaused path gets this for free by extending
+                    // from inside packet processing, where a write follows anyway.)  Without this
+                    // the credit waits for an unrelated timer: the peer is flow-control blocked so
+                    // it sends nothing to prompt us, leaving a delayed ACK if one happens to still
+                    // be pending, and otherwise the peer's PTO -- seconds, not milliseconds.
+                    _conn->packet_io_ready();
+                }
+                _paused_offset = 0;
             }
             else
                 log::debug(log_cat, "Stream ID:{} is not paused!", _stream_id);
