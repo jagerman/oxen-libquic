@@ -2,6 +2,15 @@
 
 namespace oxen::quic::test
 {
+    // How long the 10 MiB below is allowed to take over loopback.  This is an assertion, not a
+    // safety margin: the transfer runs in tens of milliseconds on a development machine and around
+    // a second on our slowest CI builder (Rasp Pi 4, with a debug build), so anything approaching
+    // this bound means something is waiting on a timer rather than moving data -- which is the
+    // resume() stall this test exists to catch -- and that should fail rather than quietly pass
+    // late.  Don't "fix" a failure here by reaching for tens of seconds; at that point the test has
+    // stopped testing anything.
+    constexpr auto TRANSFER_LIMIT{3s};
+
     TEST_CASE("017 - Stream byte accounting", "[017][stats][streams]")
     {
         Loop loop;
@@ -81,7 +90,7 @@ namespace oxen::quic::test
                         auto [acked, unacked, unsent, retained] = client_stream->get_stats();
                         return acked >= (4 << 20) && unsent > 0;
                     },
-                    10s,
+                    TRANSFER_LIMIT,
                     5ms));
 
             auto [acked, unacked, unsent, retained] = client_stream->get_stats();
@@ -111,13 +120,13 @@ namespace oxen::quic::test
             // being waited past is itself late.
             std::this_thread::sleep_for(100ms);
             srv->resume();
-            REQUIRE(wait_for([&] { return server_received.load() >= big.size(); }, 20s));
+            REQUIRE(wait_for([&] { return server_received.load() >= big.size(); }, TRANSFER_LIMIT));
             REQUIRE(wait_for(
                     [&] {
                         auto [a, u, s, r] = client_stream->get_stats();
                         return a == big.size() && u == 0 && s == 0 && r == 0;
                     },
-                    5s));
+                    TRANSFER_LIMIT));
         }
 
         SECTION("retained never drops below unacked + unsent")
@@ -126,7 +135,11 @@ namespace oxen::quic::test
 
             bool invariant_held = true;
             bool saw_in_flight = false;
-            wait_for(
+            // Polls finer than the waits elsewhere in this file because it is sampling for a
+            // transient violation rather than waiting for an end state -- but not so fine that the
+            // sampling perturbs what it measures: each get_stats() is a call_get round trip through
+            // the event loop doing the transfer.
+            REQUIRE(wait_for(
                     [&] {
                         auto [acked, unacked, unsent, retained] = client_stream->get_stats();
                         if (retained < unacked + unsent)
@@ -137,12 +150,12 @@ namespace oxen::quic::test
                             saw_in_flight = true;
                         return server_received.load() >= big.size();
                     },
-                    20s,
-                    1ms);
+                    TRANSFER_LIMIT,
+                    2ms));
 
             CHECK(invariant_held);
             CHECK(saw_in_flight);
-            REQUIRE(wait_for([&] { return client_stream->retained_bytes() == 0; }, 5s));
+            REQUIRE(wait_for([&] { return client_stream->retained_bytes() == 0; }, TRANSFER_LIMIT));
         }
     }
 }  //  namespace oxen::quic::test
