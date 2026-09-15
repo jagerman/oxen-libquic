@@ -107,7 +107,7 @@ namespace oxen::quic::test
         REQUIRE_NOTHROW(client_stream->send(std::string{payload}));
 
         require_future(d_future, 30s);
-        CHECK(received == payload);
+        CHECK(bytes_diff(received, payload) == "");
     }
 
     // Checks the actual claim rather than a side effect of it: that stream data appears verbatim in
