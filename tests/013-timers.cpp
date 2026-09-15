@@ -9,6 +9,19 @@ namespace oxen::quic::test
     constexpr auto INTERVAL{10ms};
     constexpr auto DELAY{2 * NUM_ITERATIONS * INTERVAL};
 
+    // Polls until `cond` holds, or gives up after `timeout`.  CI machines can stall for far longer
+    // than any interval these tests use, so anything asserting that something *did* happen has to
+    // wait for it rather than assume a fixed sleep was generous enough.  (Asserting that something
+    // did *not* happen is fine with a plain sleep: a stall only makes that more true.)
+    template <typename Cond>
+    static bool poll_until(Cond cond, std::chrono::milliseconds timeout = 5s)
+    {
+        for (auto giveup = std::chrono::steady_clock::now() + timeout;
+             not cond() and std::chrono::steady_clock::now() < giveup;)
+            std::this_thread::sleep_for(1ms);
+        return cond();
+    }
+
 // Ticker and Wakeable are deprecated in favour of JobQueue::add_timer(), but are still tested until
 // they are removed.  Delete this block, and the two cases below it, along with the classes.
 #pragma GCC diagnostic push
@@ -143,8 +156,7 @@ namespace oxen::quic::test
 
         // A stopped job is paused, not removed: it can be restarted.
         loop.repeat(id, 10ms);
-        std::this_thread::sleep_for(50ms);
-        REQUIRE(i > stopped_at);
+        REQUIRE(poll_until([&] { return i > stopped_at; }));
 
         REQUIRE(loop.remove(id));
         REQUIRE_FALSE(loop.remove(id));
@@ -165,10 +177,12 @@ namespace oxen::quic::test
             for (int n = 0; n < 100; n++)
                 loop.wake(id);
         });
+        REQUIRE(poll_until([&] { return i >= 1; }));
         std::this_thread::sleep_for(25ms);
         REQUIRE(i == 1);
 
         loop.wake(id);
+        REQUIRE(poll_until([&] { return i >= 2; }));
         std::this_thread::sleep_for(25ms);
         REQUIRE(i == 2);
 
@@ -201,10 +215,12 @@ namespace oxen::quic::test
         REQUIRE(i == stopped_at);
 
         loop.wake(id);
+        REQUIRE(poll_until([&] { return i >= stopped_at + 1; }));
         std::this_thread::sleep_for(25ms);
         REQUIRE(i == stopped_at + 1);
 
         loop.wake(id);
+        REQUIRE(poll_until([&] { return i >= stopped_at + 2; }));
         std::this_thread::sleep_for(25ms);
         REQUIRE(i == stopped_at + 2);
 
@@ -220,21 +236,48 @@ namespace oxen::quic::test
     {
         Loop loop;
 
-        std::atomic<int> i = 0;
-        auto id = loop.add_timer(80ms, [&] { ++i; });
+        constexpr auto CYCLE{200ms};
 
-        // Fire it manually well before the first tick is due; the tick should then be rescheduled a
-        // full interval from now rather than firing at its original time.
-        std::this_thread::sleep_for(20ms);
-        loop.wake(id);
-        std::this_thread::sleep_for(20ms);
-        REQUIRE(i == 1);
+        std::atomic<size_t> fires{0};
+        std::promise<void> prom;
 
-        // Original tick would have been due around here had the wake not re-phased it.
-        std::this_thread::sleep_for(40ms);
-        REQUIRE(i == 1);
+        // Only ever touched from the loop thread (in the callback and in the call_get below), and
+        // read here only after the promise has been fulfilled, so they need no synchronisation.
+        size_t want{0};
+        std::chrono::steady_clock::time_point manual{}, scheduled{};
+
+        auto id = loop.add_timer(CYCLE, [&] {
+            auto now = std::chrono::steady_clock::now();
+            auto n = ++fires;
+            if (want == 0)
+                return;
+            if (n == want - 1)
+                manual = now;
+            else if (n == want)
+            {
+                scheduled = now;
+                prom.set_value();
+            }
+        });
+
+        std::this_thread::sleep_for(CYCLE * 2 / 5);
+
+        // Take the count and fire in one trip through the loop so no dispatch can land between the
+        // two.  Ticks before this point are irrelevant: what is being measured is the gap between
+        // the manual fire and the next scheduled one, which is a full cycle only if waking re-phased
+        // the timer.  That makes the test independent of how promptly the sleep above returned --
+        // an overrun can only make the gap larger, never smaller.
+        loop.call_get([&] {
+            want = fires + 2;
+            loop.wake(id);
+        });
+
+        auto fut = prom.get_future();
+        require_future(fut, 5s);
 
         loop.remove(id);
+
+        REQUIRE(scheduled - manual >= CYCLE * 4 / 5);
     }
 
     TEST_CASE("013 - Timer: removal from inside its own callback", "[013][timer][remove]")
