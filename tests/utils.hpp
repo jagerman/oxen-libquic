@@ -188,6 +188,15 @@ namespace oxen::quic
         {}
     };
 
+    // Multiplier for timing-sensitive intervals in tests.  Apple's scheduling overruns sleeps and
+    // timers badly enough on CI that durations tuned anywhere else are useless there; scale both
+    // the thing being waited for and the waiting by this.
+#ifdef __APPLE__
+    inline constexpr int apple_sucks_factor = 5;
+#else
+    inline constexpr int apple_sucks_factor = 1;
+#endif
+
 #define _require_future2(f, timeout) REQUIRE((f).wait_for(timeout) == std::future_status::ready)
 #define _require_future1(f) _require_future2((f), 1s)
 #define GET_REQUIRE_FUTURE_MACRO(_1, _2, NAME, ...) NAME

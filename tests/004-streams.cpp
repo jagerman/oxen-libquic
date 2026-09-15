@@ -1166,11 +1166,6 @@ namespace oxen::quic::test
                 b_resp = m.body();
         }};
 
-#ifdef __APPLE__
-        int apple_sucks_factor = 5;
-#else
-        int apple_sucks_factor = 1;
-#endif
         stream->command("null", "", apple_sucks_factor * 50ms, a_cb);
 
         // Should do nothing yet:

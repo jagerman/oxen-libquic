@@ -9,12 +9,19 @@ namespace oxen::quic::test
     constexpr auto INTERVAL{10ms};
     constexpr auto DELAY{2 * NUM_ITERATIONS * INTERVAL};
 
+    // Timings for the timer tests below, scaled by apple_sucks_factor: TICK is a repeat interval,
+    // SETTLE is how long to wait before concluding that nothing further is going to fire, and
+    // PATIENCE is the outer limit on waiting for something that should happen promptly.
+    constexpr auto TICK{apple_sucks_factor * 10ms};
+    constexpr auto SETTLE{apple_sucks_factor * 25ms};
+    constexpr auto PATIENCE{apple_sucks_factor * 1s};
+
     // Polls until `cond` holds, or gives up after `timeout`.  CI machines can stall for far longer
     // than any interval these tests use, so anything asserting that something *did* happen has to
     // wait for it rather than assume a fixed sleep was generous enough.  (Asserting that something
     // did *not* happen is fine with a plain sleep: a stall only makes that more true.)
     template <typename Cond>
-    static bool poll_until(Cond cond, std::chrono::milliseconds timeout = 5s)
+    static bool poll_until(Cond cond, std::chrono::milliseconds timeout = apple_sucks_factor * 5s)
     {
         for (auto giveup = std::chrono::steady_clock::now() + timeout;
              not cond() and std::chrono::steady_clock::now() < giveup;)
@@ -141,21 +148,21 @@ namespace oxen::quic::test
         std::atomic<int> i = 0;
         std::promise<void> prom;
 
-        auto id = loop.add_timer(10ms, [&] {
+        auto id = loop.add_timer(TICK, [&] {
             if (++i == 4)
                 prom.set_value();
         });
 
         auto fut = prom.get_future();
-        require_future(fut, 1s);
+        require_future(fut, PATIENCE);
 
         REQUIRE(loop.stop(id));
         auto stopped_at = i.load();
-        std::this_thread::sleep_for(50ms);
+        std::this_thread::sleep_for(2 * SETTLE);
         REQUIRE(i == stopped_at);
 
         // A stopped job is paused, not removed: it can be restarted.
-        loop.repeat(id, 10ms);
+        loop.repeat(id, TICK);
         REQUIRE(poll_until([&] { return i > stopped_at; }));
 
         REQUIRE(loop.remove(id));
@@ -170,7 +177,7 @@ namespace oxen::quic::test
         auto id = loop.add_wakeable([&] { ++i; });
 
         // No interval, so nothing should fire on its own.
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == 0);
 
         loop.call_get([&] {
@@ -178,12 +185,12 @@ namespace oxen::quic::test
                 loop.wake(id);
         });
         REQUIRE(poll_until([&] { return i >= 1; }));
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == 1);
 
         loop.wake(id);
         REQUIRE(poll_until([&] { return i >= 2; }));
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == 2);
 
         loop.remove(id);
@@ -196,13 +203,13 @@ namespace oxen::quic::test
         std::atomic<int> i = 0;
         std::promise<void> prom;
 
-        auto id = loop.add_timer(10ms, [&] {
+        auto id = loop.add_timer(TICK, [&] {
             if (++i == 3)
                 prom.set_value();
         });
 
         auto fut = prom.get_future();
-        require_future(fut, 1s);
+        require_future(fut, PATIENCE);
 
         REQUIRE(loop.armed(id));
 
@@ -211,22 +218,22 @@ namespace oxen::quic::test
         REQUIRE(loop.stop(id));
         REQUIRE_FALSE(loop.armed(id));
         auto stopped_at = i.load();
-        std::this_thread::sleep_for(50ms);
+        std::this_thread::sleep_for(2 * SETTLE);
         REQUIRE(i == stopped_at);
 
         loop.wake(id);
         REQUIRE(poll_until([&] { return i >= stopped_at + 1; }));
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == stopped_at + 1);
 
         loop.wake(id);
         REQUIRE(poll_until([&] { return i >= stopped_at + 2; }));
-        std::this_thread::sleep_for(25ms);
+        std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == stopped_at + 2);
 
         // Still not repeating on its own: waking does not arm it.
         REQUIRE_FALSE(loop.armed(id));
-        std::this_thread::sleep_for(50ms);
+        std::this_thread::sleep_for(2 * SETTLE);
         REQUIRE(i == stopped_at + 2);
 
         loop.remove(id);
@@ -236,7 +243,7 @@ namespace oxen::quic::test
     {
         Loop loop;
 
-        constexpr auto CYCLE{200ms};
+        constexpr auto CYCLE{apple_sucks_factor * 200ms};
 
         std::atomic<size_t> fires{0};
         std::promise<void> prom;
@@ -273,7 +280,7 @@ namespace oxen::quic::test
         });
 
         auto fut = prom.get_future();
-        require_future(fut, 5s);
+        require_future(fut, 5 * PATIENCE);
 
         loop.remove(id);
 
@@ -289,7 +296,7 @@ namespace oxen::quic::test
         TimerID id;
 
         loop.call_get([&] {
-            id = loop.add_timer(5ms, [&] {
+            id = loop.add_timer(TICK, [&] {
                 if (++i == 3)
                 {
                     loop.remove(id);
@@ -299,9 +306,9 @@ namespace oxen::quic::test
         });
 
         auto fut = prom.get_future();
-        require_future(fut, 1s);
+        require_future(fut, PATIENCE);
 
-        std::this_thread::sleep_for(50ms);
+        std::this_thread::sleep_for(2 * SETTLE);
         REQUIRE(i == 3);
         REQUIRE_FALSE(loop.remove(id));
     }
@@ -328,15 +335,15 @@ namespace oxen::quic::test
         std::atomic<int> i = 0;
         std::promise<void> prom;
 
-        loop.call_later(10ms, [&] {
+        loop.call_later(TICK, [&] {
             ++i;
             prom.set_value();
         });
 
         auto fut = prom.get_future();
-        require_future(fut, 1s);
+        require_future(fut, PATIENCE);
 
-        std::this_thread::sleep_for(50ms);
+        std::this_thread::sleep_for(2 * SETTLE);
         REQUIRE(i == 1);
     }
 
