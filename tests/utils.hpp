@@ -88,6 +88,12 @@ namespace oxen::quic
 
         static Connection* get_conn(std::shared_ptr<Endpoint>& ep, std::shared_ptr<Connection>& conn);
 
+        // Tears the connection down *synchronously*, rather than scheduling it the way
+        // Endpoint::drop_connection does.  Call it from inside a job already running on the loop to
+        // pin down the interleaving between teardown and other queued jobs, which is otherwise at
+        // the mercy of the order libevent happens to run two activated wakers in.
+        static void drop_connection_now(Endpoint& ep, Connection& conn, uint64_t ec);
+
         static UDPSocket::socket_t get_sock(Endpoint& ep);
     };
 
