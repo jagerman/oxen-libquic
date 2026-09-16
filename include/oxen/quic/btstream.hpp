@@ -282,7 +282,7 @@ namespace oxen::quic
             auto req = std::make_shared<sent_request>(*this, encode_command(ep, rid, body), rid, std::forward<Opt>(opts)...);
 
             if (req->cb)
-                job_queue.call([this, r = std::move(req)]() mutable {
+                job_queue.call([this, keepalive = keepalive_if_deferred(), r = std::move(req)]() mutable {
                     if (auto* req = add_sent_request(std::move(r)))
                         send(std::move(req->data));
                 });
@@ -344,6 +344,14 @@ namespace oxen::quic
         std::string encode_response(int64_t rid, std::span<const std::byte> body, bool error);
 
         sent_request* add_sent_request(std::shared_ptr<sent_request> req);
+
+        // Returns a shared_ptr that keeps this stream alive, or nullptr if we are already on the
+        // event loop thread.  A job lambda that captures a raw `this` needs one of these whenever
+        // the call can be deferred: the stream can be destroyed before the job runs (e.g. its
+        // connection drops and Connection::drop_streams releases the last reference), and the
+        // lambda would then be operating on freed memory.  When already inside the loop the call
+        // fires immediately, so the refcount round-trip is skipped.
+        std::shared_ptr<Stream> keepalive_if_deferred() { return job_queue.inside() ? nullptr : shared_from_this(); }
 
         size_t num_pending_impl() const { return user_buffers.size(); }
 
