@@ -138,7 +138,6 @@ namespace oxen::quic
         // parsed request data
         int64_t req_id;
         std::string data;
-        std::function<void(message)> cb = nullptr;
 
         // Weak, and paired with our own copy of the connection id, so that a timeout message can
         // still be built after the stream is gone.
@@ -160,9 +159,27 @@ namespace oxen::quic
 
         bool is_expired(time_point now) const { return expiry < now; }
 
-        message to_timeout() && { return {return_sender, conn_rid, {}, true}; }
+        // True if the caller is owed a response.  Becomes false once one has been delivered: every
+        // sent_request that starts out needing a response gets exactly one, because if nothing else
+        // has delivered one by the time we are destroyed then the destructor does.
+        bool needs_response() const { return (bool)cb; }
+
+        // Hands `m` to the response callback, if it hasn't already been answered.  Exceptions from
+        // the callback are caught and logged: this is reachable from a destructor.
+        void deliver(message m);
+
+        // Answers the request as a timeout, if it hasn't been answered already.  "Timeout" covers
+        // any failure to complete, including the stream being torn down long before the expiry.
+        void time_out();
+
+        // Nothing else answered it, so it failed.
+        ~sent_request() { time_out(); }
 
       private:
+        std::function<void(message)> cb;
+
+        message to_timeout() && { return {return_sender, conn_rid, {}, true}; }
+
         void handle_req_opts(std::function<void(message)> func) { cb = std::move(func); }
         void handle_req_opts(std::chrono::milliseconds exp) { timeout = exp; }
 
@@ -283,8 +300,8 @@ namespace oxen::quic
             auto rid = next_rid++;
             auto req = std::make_shared<sent_request>(*this, encode_command(ep, rid, body), rid, std::forward<Opt>(opts)...);
 
-            if (req->cb)
-                job_queue.call([this, keepalive = keepalive_if_deferred(), r = std::move(req)]() mutable {
+            if (req->needs_response())
+                job_queue.call([this, r = std::move(req)]() mutable {
                     if (auto* req = add_sent_request(std::move(r)))
                         send(std::move(req->data));
                 });
@@ -346,13 +363,6 @@ namespace oxen::quic
         std::string encode_response(int64_t rid, std::span<const std::byte> body, bool error);
 
         sent_request* add_sent_request(std::shared_ptr<sent_request> req);
-
-        // Returns a shared_ptr that keeps this stream alive, or nullptr if we are already on the
-        // event loop thread.  This is not about `this` dangling -- our own job queue takes care of
-        // that -- but about making sure a deferred command job *runs* rather than being discarded
-        // with the queue: only add_sent_request can fail the request and so fire the caller's
-        // callback, and a silently dropped job would leave the caller waiting forever.
-        std::shared_ptr<Stream> keepalive_if_deferred() { return job_queue.inside() ? nullptr : shared_from_this(); }
 
         size_t num_pending_impl() const { return user_buffers.size(); }
 

@@ -57,8 +57,45 @@ namespace oxen::quic
 
     BTRequestStream::~BTRequestStream()
     {
-        // Must precede destruction of the members our queued jobs reference; see IOChannel.
+        // Must precede destruction of the members our queued jobs reference; see IOChannel.  Any
+        // command job discarded here fails its own request as it is destroyed.
         job_queue.stop();
+
+        // Fail anything still outstanding.  Normally `closed()` will already have done this, but
+        // not on every teardown path: a connection closing quietly skips close_all_streams() and
+        // goes straight to drop_streams().  Moved out first so that a callback reaching back into
+        // us can't insert into the container we are clearing.
+        req_expiries.clear();
+        auto reqs = std::exchange(sent_reqs, {});
+        reqs.clear();
+    }
+
+    void sent_request::deliver(message m)
+    {
+        auto f = std::exchange(cb, nullptr);
+        if (!f)
+            return;
+
+        // Nothing may escape: we are reachable from ~sent_request, and so from destructors all the
+        // way up, where an escaping exception would terminate.
+        try
+        {
+            f(std::move(m));
+        }
+        catch (const std::exception& e)
+        {
+            log::error(log_cat, "Uncaught exception from sent request response handler: {}", e.what());
+        }
+        catch (...)
+        {
+            log::error(log_cat, "Uncaught non-standard exception from sent request response handler");
+        }
+    }
+
+    void sent_request::time_out()
+    {
+        if (cb)
+            deliver(std::move(*this).to_timeout());
     }
 
     void BTRequestStream::handle_opt(std::function<void(message m)> request_handler)
@@ -92,17 +129,7 @@ namespace oxen::quic
         req_expiries.erase(req_expiries.begin(), it);
 
         for (auto& sr : expired)
-        {
-            auto& f = *sr;
-            try
-            {
-                f.cb(std::move(f).to_timeout());
-            }
-            catch (const std::exception& e)
-            {
-                log::error(log_cat, "Uncaught exception from timeout response handler: {}", e.what());
-            }
-        }
+            sr->time_out();
     }
 
     void BTRequestStream::update_timeout()
@@ -230,14 +257,7 @@ namespace oxen::quic
             // otherwise we didn't find it, or it wasn't at the front, so we don't need to reset
             // the timer (because the timer is synced with the first element).
 
-            try
-            {
-                req->cb(std::move(msg));
-            }
-            catch (const std::exception& e)
-            {
-                log::error(log_cat, "Uncaught exception from response handler: {}", e.what());
-            }
+            req->deliver(std::move(msg));
             return;
         }
 
@@ -390,24 +410,12 @@ namespace oxen::quic
     {
         if (is_closing())
         {
-            // The stream is already dead, so fire the failure callback as a timeout right away and
-            // drop the request, since we know it can never complete.  (This isn't necessarily the
-            // application's fault: the closing could have started while queuing this new command
-            // for the event loop).
-            auto& f = *req;
-            if (f.cb)
-            {
-                try
-                {
-                    f.cb(std::move(f).to_timeout());
-                }
-                catch (const std::exception& e)
-                {
-                    log::error(log_cat, "Uncaught exception from closed-stream sent request response handler: {}", e.what());
-                }
-            }
+            // The stream is already dead, so drop the request: it can never complete.  (This isn't
+            // necessarily the application's fault: the closing could have started while queuing
+            // this new command for the event loop.)  ~sent_request fails the callback for us.
             return nullptr;
         }
+
         auto req_id = req->req_id;
         auto& sent_req = sent_reqs[req_id];
         sent_req = std::move(req);
