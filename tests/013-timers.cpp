@@ -2,9 +2,6 @@
 
 namespace oxen::quic::test
 {
-    struct lifetime
-    {};
-
     constexpr int NUM_ITERATIONS{4};
     constexpr auto INTERVAL{10ms};
     constexpr auto DELAY{2 * NUM_ITERATIONS * INTERVAL};
@@ -12,22 +9,16 @@ namespace oxen::quic::test
     // Timings for the timer tests below, scaled by apple_sucks_factor: TICK is a repeat interval,
     // SETTLE is how long to wait before concluding that nothing further is going to fire, and
     // PATIENCE is the outer limit on waiting for something that should happen promptly.
+    //
+    // Anything asserting that something *did* happen waits for it via wait_for() rather than
+    // sleeping and hoping; only the "and then nothing further happened" checks sleep, and a slow
+    // machine can only make those more true.
     constexpr auto TICK{apple_sucks_factor * 10ms};
     constexpr auto SETTLE{apple_sucks_factor * 25ms};
     constexpr auto PATIENCE{apple_sucks_factor * 1s};
-
-    // Polls until `cond` holds, or gives up after `timeout`.  CI machines can stall for far longer
-    // than any interval these tests use, so anything asserting that something *did* happen has to
-    // wait for it rather than assume a fixed sleep was generous enough.  (Asserting that something
-    // did *not* happen is fine with a plain sleep: a stall only makes that more true.)
-    template <typename Cond>
-    static bool poll_until(Cond cond, std::chrono::milliseconds timeout = apple_sucks_factor * 5s)
-    {
-        for (auto giveup = std::chrono::steady_clock::now() + timeout;
-             not cond() and std::chrono::steady_clock::now() < giveup;)
-            std::this_thread::sleep_for(1ms);
-        return cond();
-    }
+    // Poll interval for those waits.  Scaled like everything else here: the platform that needs the
+    // longest timeouts is also the one least able to afford frequent wakeups.
+    constexpr auto POLL{apple_sucks_factor * 5ms};
 
 // Ticker and Wakeable are deprecated in favour of JobQueue::add_timer(), but are still tested until
 // they are removed.  Delete this block, and the two cases below it, along with the classes.
@@ -163,7 +154,7 @@ namespace oxen::quic::test
 
         // A stopped job is paused, not removed: it can be restarted.
         loop.repeat(id, TICK);
-        REQUIRE(poll_until([&] { return i > stopped_at; }));
+        REQUIRE(wait_for([&] { return i > stopped_at; }, PATIENCE, POLL));
 
         REQUIRE(loop.remove(id));
         REQUIRE_FALSE(loop.remove(id));
@@ -184,12 +175,12 @@ namespace oxen::quic::test
             for (int n = 0; n < 100; n++)
                 loop.wake(id);
         });
-        REQUIRE(poll_until([&] { return i >= 1; }));
+        REQUIRE(wait_for([&] { return i >= 1; }, PATIENCE, POLL));
         std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == 1);
 
         loop.wake(id);
-        REQUIRE(poll_until([&] { return i >= 2; }));
+        REQUIRE(wait_for([&] { return i >= 2; }, PATIENCE, POLL));
         std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == 2);
 
@@ -222,12 +213,12 @@ namespace oxen::quic::test
         REQUIRE(i == stopped_at);
 
         loop.wake(id);
-        REQUIRE(poll_until([&] { return i >= stopped_at + 1; }));
+        REQUIRE(wait_for([&] { return i >= stopped_at + 1; }, PATIENCE, POLL));
         std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == stopped_at + 1);
 
         loop.wake(id);
-        REQUIRE(poll_until([&] { return i >= stopped_at + 2; }));
+        REQUIRE(wait_for([&] { return i >= stopped_at + 2; }, PATIENCE, POLL));
         std::this_thread::sleep_for(SETTLE);
         REQUIRE(i == stopped_at + 2);
 
