@@ -55,6 +55,12 @@ namespace oxen::quic
             log::debug(log_cat, "Dropping response: stream has gone away");
     }
 
+    BTRequestStream::~BTRequestStream()
+    {
+        // Must precede destruction of the members our queued jobs reference; see IOChannel.
+        job_queue.stop();
+    }
+
     void BTRequestStream::handle_opt(std::function<void(message m)> request_handler)
     {
         log::debug(log_cat, "BTRequestStream set generic request handler");
@@ -169,7 +175,7 @@ namespace oxen::quic
 
     void BTRequestStream::register_handler(std::string ep, std::function<void(message)> func)
     {
-        job_queue.call([this, keepalive = keepalive_if_deferred(), ep = std::move(ep), func = std::move(func)]() mutable {
+        job_queue.call([this, ep = std::move(ep), func = std::move(func)]() mutable {
             registered_endpoints[std::move(ep)] = std::move(func);
         });
     }
@@ -177,9 +183,7 @@ namespace oxen::quic
     void BTRequestStream::register_generic_handler(std::function<void(message)> request_handler)
     {
         log::debug(log_cat, "BTRequestStream set generic request handler");
-        job_queue.call([this, keepalive = keepalive_if_deferred(), func = std::move(request_handler)]() mutable {
-            generic_handler = std::move(func);
-        });
+        job_queue.call([this, func = std::move(request_handler)]() mutable { generic_handler = std::move(func); });
     }
 
     void BTRequestStream::handle_input(message msg)

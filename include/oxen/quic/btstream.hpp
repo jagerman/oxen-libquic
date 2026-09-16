@@ -257,6 +257,8 @@ namespace oxen::quic
         }
 
       public:
+        ~BTRequestStream() override;
+
         std::weak_ptr<BTRequestStream> weak_from_this()
         {
             return std::dynamic_pointer_cast<BTRequestStream>(shared_from_this());
@@ -346,11 +348,10 @@ namespace oxen::quic
         sent_request* add_sent_request(std::shared_ptr<sent_request> req);
 
         // Returns a shared_ptr that keeps this stream alive, or nullptr if we are already on the
-        // event loop thread.  A job lambda that captures a raw `this` needs one of these whenever
-        // the call can be deferred: the stream can be destroyed before the job runs (e.g. its
-        // connection drops and Connection::drop_streams releases the last reference), and the
-        // lambda would then be operating on freed memory.  When already inside the loop the call
-        // fires immediately, so the refcount round-trip is skipped.
+        // event loop thread.  This is not about `this` dangling -- our own job queue takes care of
+        // that -- but about making sure a deferred command job *runs* rather than being discarded
+        // with the queue: only add_sent_request can fail the request and so fire the caller's
+        // callback, and a silently dropped job would leave the caller waiting forever.
         std::shared_ptr<Stream> keepalive_if_deferred() { return job_queue.inside() ? nullptr : shared_from_this(); }
 
         size_t num_pending_impl() const { return user_buffers.size(); }
