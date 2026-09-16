@@ -66,14 +66,17 @@ namespace oxen::quic
         substr_location ep{};
         substr_location req_body{};
 
-        std::weak_ptr<BTRequestStream> return_sender;
+        // Held as a weak Stream rather than a weak BTRequestStream so that constructing a message
+        // never needs a live sender: a timeout is built by sent_request, which outlives the stream.
+        // The downcast happens in stream(), on lock.
+        std::weak_ptr<Stream> return_sender;
         ConnectionID _rid;
 
         // - `is_timeout` should be true if this is being constructed as a non-response because we
         //   didn't get any reply from the other side in time.  This *can* happen earlier than the
         //   requested timeout in cases where we detect early that the response cannot arrive, such
         //   as the connection closing.
-        message(BTRequestStream& bp, std::vector<std::byte> req, bool is_timeout = false);
+        message(std::weak_ptr<Stream> sender, ConnectionID rid, std::vector<std::byte> req, bool is_timeout = false);
 
       public:
         inline static constexpr auto TYPE_REPLY = "R"sv;
@@ -123,7 +126,7 @@ namespace oxen::quic
 
         std::shared_ptr<BTRequestStream> stream() const
         {
-            if (auto ptr = return_sender.lock())
+            if (auto ptr = std::dynamic_pointer_cast<BTRequestStream>(return_sender.lock()))
                 return ptr;
 
             throw std::runtime_error{"Cannot access expired pointer to BT stream!"};
@@ -136,7 +139,11 @@ namespace oxen::quic
         int64_t req_id;
         std::string data;
         std::function<void(message)> cb = nullptr;
-        BTRequestStream& return_sender;
+
+        // Weak, and paired with our own copy of the connection id, so that a timeout message can
+        // still be built after the stream is gone.
+        std::weak_ptr<Stream> return_sender;
+        ConnectionID conn_rid;
 
         // total length of the request; is at the beginning of the request
         size_t total_len;
@@ -147,25 +154,13 @@ namespace oxen::quic
 
         bool is_empty() const { return data.empty() && total_len == 0; }
 
+        // Defined below, once BTRequestStream is complete.
         template <typename... Opt>
-        sent_request(BTRequestStream& bp, std::string_view d, int64_t rid, Opt&&... opts) :
-                req_id{rid},
-                data{oxenc::bt_serialize(d)},
-                return_sender{bp},
-                total_len{data.size()},
-                req_time{get_time()},
-                expiry{req_time}
-        {
-            if (total_len > MAX_REQ_LEN)
-                throw std::invalid_argument{"Request body too long!"};
-
-            ((void)handle_req_opts(std::forward<Opt>(opts)), ...);
-            expiry += timeout.value_or(DEFAULT_TIMEOUT);
-        }
+        sent_request(BTRequestStream& bp, std::string_view d, int64_t rid, Opt&&... opts);
 
         bool is_expired(time_point now) const { return expiry < now; }
 
-        message to_timeout() && { return {return_sender, {}, true}; }
+        message to_timeout() && { return {return_sender, conn_rid, {}, true}; }
 
       private:
         void handle_req_opts(std::function<void(message)> func) { cb = std::move(func); }
@@ -264,6 +259,11 @@ namespace oxen::quic
             return std::dynamic_pointer_cast<BTRequestStream>(shared_from_this());
         }
 
+        // The base class's non-throwing weak_from_this, which the override above hides.  The
+        // override goes through shared_from_this() and so throws once the last reference is gone --
+        // exactly when a sent_request still needs to build a timeout message to fail its callback.
+        std::weak_ptr<Stream> weak_stream() { return std::enable_shared_from_this<Stream>::weak_from_this(); }
+
         /** API: ::command
 
             Invokes a remote RPC endpoint. The user can provide a callback if they are expecting
@@ -358,4 +358,22 @@ namespace oxen::quic
 
         size_t num_awaiting_response_impl() const { return sent_reqs.size(); }
     };
+
+    template <typename... Opt>
+    sent_request::sent_request(BTRequestStream& bp, std::string_view d, int64_t rid, Opt&&... opts) :
+            req_id{rid},
+            data{oxenc::bt_serialize(d)},
+            return_sender{bp.weak_stream()},
+            conn_rid{bp.reference_id},
+            total_len{data.size()},
+            req_time{get_time()},
+            expiry{req_time}
+    {
+        if (total_len > MAX_REQ_LEN)
+            throw std::invalid_argument{"Request body too long!"};
+
+        ((void)handle_req_opts(std::forward<Opt>(opts)), ...);
+        expiry += timeout.value_or(DEFAULT_TIMEOUT);
+    }
+
 }  // namespace oxen::quic

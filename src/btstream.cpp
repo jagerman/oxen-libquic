@@ -26,8 +26,8 @@ namespace oxen::quic
         return {bsubstr - data.data(), substr.size()};
     }
 
-    message::message(BTRequestStream& bp, std::vector<std::byte> req, bool is_timeout) :
-            data{std::move(req)}, return_sender{bp.weak_from_this()}, _rid{bp.reference_id}, timed_out{is_timeout}
+    message::message(std::weak_ptr<Stream> sender, ConnectionID rid, std::vector<std::byte> req, bool is_timeout) :
+            data{std::move(req)}, return_sender{std::move(sender)}, _rid{std::move(rid)}, timed_out{is_timeout}
     {
         if (!is_timeout)
         {
@@ -49,7 +49,7 @@ namespace oxen::quic
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
-        if (auto ptr = return_sender.lock())
+        if (auto ptr = std::dynamic_pointer_cast<BTRequestStream>(return_sender.lock()))
             ptr->respond(req_id, body, error);
         else
             log::debug(log_cat, "Dropping response: stream has gone away");
@@ -353,7 +353,7 @@ namespace oxen::quic
 
             if (data_accumulator(buf, req, current_len))
             {
-                handle_input(message{*this, std::move(buf)});
+                handle_input(message{weak_stream(), reference_id, std::move(buf)});
                 buf.clear();
 
                 // Back to the top to try processing another request that might have arrived in
