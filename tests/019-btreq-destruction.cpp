@@ -29,6 +29,7 @@ namespace oxen::quic::test
         {
             std::atomic<int> calls{0};
             std::atomic<bool> timed_out{false};
+            std::atomic<bool> stream_accessible{false};
             std::promise<void> first;
             std::future<void> fired{first.get_future()};
 
@@ -36,6 +37,15 @@ namespace oxen::quic::test
             {
                 return [this](message m) {
                     timed_out = m.timed_out;
+                    try
+                    {
+                        m.stream();
+                        stream_accessible = true;
+                    }
+                    catch (const std::runtime_error&)
+                    {
+                        stream_accessible = false;
+                    }
                     if (++calls == 1)
                         first.set_value();
                 };
@@ -121,6 +131,11 @@ namespace oxen::quic::test
         REQUIRE(resp.wait());
         CHECK(resp.timed_out);
         CHECK(resp.calls == 1);
+
+        // The stream is mid-destruction when this fires, so message::stream() throws rather than
+        // returning it.  Applications must not reach back through the message on a failure: get at
+        // the endpoint (or anything else still alive) some other way.
+        CHECK_FALSE(resp.stream_accessible);
     }
 
     TEST_CASE("019 - registered request failed on quiet close", "[019][btreq][destruction]")
