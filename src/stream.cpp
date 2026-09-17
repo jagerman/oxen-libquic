@@ -56,6 +56,7 @@ namespace oxen::quic
     Stream::~Stream()
     {
         log::trace(log_cat, "Destroying stream {}", _stream_id);
+        job_queue.stop();
     }
 
     void Stream::enable_watermarks(
@@ -434,33 +435,9 @@ namespace oxen::quic
         if (data.empty())
             return;
 
-        // If we aren't currently in the event loop then we need to keep a weak pointer to the
-        // stream so that, when the below lambda gets processed, we can tell whether the stream is
-        // still actually alive.  (But if we're already in the event loop the lambda fires
-        // immediately and we don't want to have to do an extra refcount increment/decrement).
-        std::optional<std::weak_ptr<Stream>> wself;
-        if (!job_queue.inside())
-            wself = weak_from_this();
-
-        // In theory, `endpoint` that we use here might be inaccessible as well, but unlike conn
-        // (which we have to check because it could have been closed by remote actions or network
-        // events) the application has control and responsibility for keeping the network/endpoint
-        // alive at least as long as all the Connections/Streams that instances that were attached
-        // to it.
-        job_queue.call([this, wself = std::move(wself), data, ka = std::move(keep_alive)]() {
-            std::shared_ptr<Stream> sself;
-            if (wself)
-            {
-                // send() was called from outside the event loop, so check to make sure the stream
-                // is still alive (and thus `this` is still valid):
-                if (!(sself = wself->lock()))
-                {
-                    log::debug(log_cat, "Stream has gone away, dropping send data");
-                    return;
-                }
-            }
-            // else send() was already inside the event loop and thus `this` is still valid
-
+        // `this` needs no lifetime guard: the job queue is our own, so if the stream is destroyed
+        // before this job runs then the job is discarded along with it.
+        job_queue.call([this, data, ka = std::move(keep_alive)]() {
             if (_is_closing || _send_fin || _sent_fin)
             {
                 log::debug(log_cat, "Stream {} is already finalized, dropping send data", _stream_id);

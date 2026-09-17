@@ -240,17 +240,23 @@ namespace oxen::quic
         }
 
         {
-            std::lock_guard l{job_queue_mutex};
-            if (!job_waker)
-                return;
+            // Destroying a dropped job runs arbitrary code -- a captured callback's destructor,
+            // for instance -- which may want to touch this queue, so the jobs must be destroyed
+            // outside both of our mutexes.  (Why does std::queue not have a clear() method?)
+            std::queue<Job> dropped;
 
-            log::debug(log_cat, "Stopping/cancelling job queue events");
-            *running = false;
+            {
+                std::lock_guard l{job_queue_mutex};
+                if (!job_waker)
+                    return;
 
-            job_waker.reset();
+                log::debug(log_cat, "Stopping/cancelling job queue events");
+                *running = false;
 
-            // Why does std::queue not have a clear() method?
-            std::queue<Job>{}.swap(job_queue);
+                job_waker.reset();
+
+                job_queue.swap(dropped);
+            }
         }
 
         // Dropping our references requests finalization of each timer's event; libevent runs those

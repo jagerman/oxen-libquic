@@ -44,7 +44,16 @@ namespace oxen::quic
 
         Endpoint& endpoint;
         Loop& loop;
-        JobQueue& job_queue;
+
+        // This channel's own job queue, rather than the endpoint's: jobs queued here are cancelled
+        // when the channel is destroyed, so a deferred job may safely capture a raw `this`.  That
+        // guarantee requires the most-derived destructor to call `job_queue.stop()` before it
+        // touches anything those jobs reference, because this member (being in the base) is
+        // otherwise destroyed last of all.
+        //
+        // Mutable because scheduling work on the loop is not a modification of the channel's own
+        // state: the const accessors below dispatch through it to read that state.
+        mutable JobQueue job_queue;
 
         // The fixed Connection reference_id.  This will be the same as `get_conn()->reference_id`
         // while the connection exists, but persists even if the connection object gets destroyed.

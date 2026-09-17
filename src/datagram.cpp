@@ -22,6 +22,12 @@ namespace oxen::quic
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
     }
 
+    Datagrams::~Datagrams()
+    {
+        // Must precede destruction of the members our queued jobs reference; see IOChannel.
+        job_queue.stop();
+    }
+
     bool Datagrams::is_closing_impl() const
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
