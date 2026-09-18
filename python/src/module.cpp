@@ -1,4 +1,5 @@
 #include "common.hpp"
+#include "wrappers.hpp"
 
 #include <oxen/quic/version.hpp>
 
@@ -15,4 +16,6 @@ PYBIND11_MODULE(_core, m)
 
     seshquic::init_address(m);
     seshquic::init_creds(m);
+    seshquic::init_stream(m);
+    seshquic::init_endpoint(m);
 }

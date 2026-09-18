@@ -3,12 +3,18 @@
 #include <pybind11/pybind11.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace oxen::quic
+{
+    struct Address;
+}
 
 namespace seshquic
 {
@@ -29,6 +35,20 @@ namespace seshquic
                 _release.emplace();
         }
     };
+
+    /// True once the interpreter has started shutting down.
+    ///
+    /// After that point CPython parks any non-main thread that asks for the GIL, permanently, so
+    /// anything running on the event loop thread must check this before trying to take it: the
+    /// alternative is a hang at exit rather than an error.
+    inline bool python_is_finalizing()
+    {
+#if PY_VERSION_HEX >= 0x030d0000
+        return Py_IsFinalizing() != 0;
+#else
+        return _Py_IsFinalizing() != 0;
+#endif
+    }
 
     /// Owns a libquic object on Python's behalf.
     ///
@@ -71,6 +91,37 @@ namespace seshquic
         explicit operator bool() const { return static_cast<bool>(_ptr); }
     };
 
+    /// Holds a libquic object that Python only observes.
+    ///
+    /// libquic already has an owner for each of these: an endpoint owns its connections, and a
+    /// connection owns its streams.  A strong reference from Python would let one outlive that
+    /// owner -- a connection whose endpoint has been closed, say -- and its destructor reaches back
+    /// into the owner it has outlived.  Holding a weak reference leaves the C++ ownership exactly
+    /// as libquic designed it, and turns a stale Python handle into an exception instead of a
+    /// crash.  It also means Python never holds the last reference, so none of the loop-dispatched
+    /// destruction that `loop_owned` exists to handle can happen here.
+    template <typename T>
+    class observed
+    {
+        std::weak_ptr<T> _ptr;
+
+        // Kept only to give Python stable identity and hashing for a handle whose object may since
+        // have gone away; never dereferenced.
+        const void* _identity{nullptr};
+
+      public:
+        observed() = default;
+
+        explicit observed(const std::shared_ptr<T>& ptr) : _ptr{ptr}, _identity{ptr.get()} {}
+
+        /// The object, or nullptr if whatever owned it has gone away.
+        std::shared_ptr<T> lock() const { return _ptr.lock(); }
+
+        const void* identity() const { return _identity; }
+
+        bool operator==(const observed& other) const { return _identity == other._identity; }
+    };
+
     /// Invokes `f` with the GIL released.  Every call into libquic goes through this: most of its
     /// accessors dispatch to the event loop thread and block for the result, which deadlocks
     /// against a loop thread trying to acquire the GIL for a callback.
@@ -100,6 +151,14 @@ namespace seshquic
     {
         return py::bytes{reinterpret_cast<const char*>(data.data()), data.size()};
     }
+
+    /// Builds an Address from the forms a caller might reasonably write: an Address, a "host:port"
+    /// string, or a (host, port) tuple.
+    oxen::quic::Address to_address(const py::object& obj);
+
+    /// Backs the Address constructor: a lone string is parsed as the combined "host:port" form, an
+    /// explicit port is taken as given.
+    oxen::quic::Address make_address(const std::string& addr, std::optional<uint16_t> port);
 
     void init_address(py::module_& m);
     void init_creds(py::module_& m);

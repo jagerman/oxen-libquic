@@ -13,6 +13,8 @@ pybind11_add_module(seshquic_core MODULE
     src/common.cpp
     src/address.cpp
     src/creds.cpp
+    src/endpoint.cpp
+    src/stream.cpp
 )
 
 set_target_properties(seshquic_core PROPERTIES OUTPUT_NAME _core)

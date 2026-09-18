@@ -15,15 +15,45 @@ namespace seshquic
 {
     using oxen::quic::Address;
 
+    Address to_address(const py::object& obj)
+    {
+        if (py::isinstance<Address>(obj))
+            return obj.cast<Address>();
+
+        if (py::isinstance<py::str>(obj))
+            return make_address(obj.cast<std::string>(), std::nullopt);
+
+        if (py::isinstance<py::tuple>(obj) || py::isinstance<py::list>(obj))
+        {
+            auto seq = obj.cast<py::sequence>();
+            if (py::len(seq) != 2)
+                throw py::value_error{"an address tuple must be (host, port)"};
+            return make_address(seq[0].cast<std::string>(), seq[1].cast<uint16_t>());
+        }
+
+        throw py::type_error{"expected an Address, a 'host:port' string, or a (host, port) tuple"};
+    }
+
+    Address make_address(const std::string& addr, std::optional<uint16_t> port)
+    {
+        if (port)
+            return Address{addr, *port};
+        if (addr.empty())
+            return Address{};
+        // A lone string is the combined form, so that "1.2.3.4:5678" and "[::1]:443" work; a bare
+        // host is still accepted and gets the any-port.
+        return Address::parse(addr, 0);
+    }
+
     void init_address(py::module_& m)
     {
         py::class_<Address>{m, "Address", R"(A local or remote socket address.
 
-Constructed from a host string and port; the host may be an IPv4 or IPv6 address, and an empty
-host means "any address" (dual stack, where the platform supports it).  `Address.parse` takes the
-combined `host:port` or `[v6addr]:port` forms instead.
+Takes either a combined "host:port" (or "[v6addr]:port") string, or a host and port separately.
+An empty host means "any address" -- dual stack, where the platform supports it -- and an omitted
+port means "any port", which is what you want for a client or for a server on an ephemeral port.
 )"}
-                .def(py::init<const std::string&, uint16_t>(), py::arg("host") = "", py::arg("port") = 0)
+                .def(py::init(&make_address), py::arg("addr") = "", py::arg("port") = py::none())
                 .def_static(
                         "parse",
                         [](std::string_view addr, std::optional<uint16_t> default_port) {
