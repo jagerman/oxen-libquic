@@ -1,10 +1,10 @@
+#include "common.hpp"
+
 #include <oxen/quic/version.hpp>
 
 #include <pybind11/pybind11.h>
 
 #include <string>
-
-namespace py = pybind11;
 
 PYBIND11_MODULE(_core, m)
 {
@@ -12,4 +12,7 @@ PYBIND11_MODULE(_core, m)
 
     const auto& v = oxen::quic::VERSION;
     m.attr("__version__") = std::to_string(v[0]) + '.' + std::to_string(v[1]) + '.' + std::to_string(v[2]);
+
+    seshquic::init_address(m);
+    seshquic::init_creds(m);
 }
