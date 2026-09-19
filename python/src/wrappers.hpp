@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 
+#include <oxen/quic/btstream.hpp>
 #include <oxen/quic/connection.hpp>
 #include <oxen/quic/endpoint.hpp>
 #include <oxen/quic/loop.hpp>
@@ -78,17 +79,26 @@ namespace seshquic
         template <typename... Args>
         void operator()(Args&&... args) const
         {
+            call(std::forward<Args>(args)...);
+        }
+
+        /// As above, returning what the callback returned; an empty object if it was not set, or
+        /// if it raised (which is reported rather than propagated, as above).
+        template <typename... Args>
+        py::object call(Args&&... args) const
+        {
             if (!_fn || python_is_finalizing())
-                return;
+                return {};
 
             py::gil_scoped_acquire gil;
             try
             {
-                (*_fn)(std::forward<Args>(args)...);
+                return (*_fn)(std::forward<Args>(args)...);
             }
             catch (py::error_already_set& e)
             {
                 e.discard_as_unraisable(*_fn);
+                return {};
             }
         }
     };
@@ -135,6 +145,30 @@ namespace seshquic
         void set_fin_callback(py::object cb);
     };
 
+    /// An incoming request, reply or error.
+    ///
+    /// libquic hands these to callbacks by value and they own their data, so unlike a stream or a
+    /// connection there is nothing here whose lifetime belongs to something else.
+    struct PyMessage
+    {
+        oxen::quic::message msg;
+
+        explicit PyMessage(oxen::quic::message m) : msg{std::move(m)} {}
+    };
+
+    class PyBTStream : public PyStream
+    {
+      public:
+        using PyStream::PyStream;
+
+        /// The stream as a BTRequestStream, or a raised Python exception if it has gone away.
+        std::shared_ptr<oxen::quic::BTRequestStream> bt() const;
+
+        void command(std::string endpoint, const py::object& body, py::object on_response, std::optional<double> timeout);
+        void register_handler(std::string endpoint, py::object handler);
+        void register_generic_handler(py::object handler);
+    };
+
     class PyConnection
     {
         observed<Connection> _c;
@@ -147,6 +181,13 @@ namespace seshquic
         const observed<Connection>& handle() const { return _c; }
 
         py::object open_stream(py::object on_data, py::object on_close, py::object on_fin);
+
+        /// Opens a bt-request stream to the other end, or prepares one for the other end to open.
+        /// Both are available on either side of any connection; they are the two halves of a pair,
+        /// not a client and a server role.
+        py::object open_bt_stream(py::object on_request, py::object on_close);
+        py::object queue_incoming_bt_stream(py::object on_request, py::object on_close);
+
         void close(uint64_t error_code);
     };
 
@@ -176,7 +217,9 @@ namespace seshquic
                 py::object on_connection_closed,
                 py::object on_stream_data,
                 py::object on_stream_close,
-                py::object on_stream_fin);
+                py::object on_stream_fin,
+                py::object on_stream_construct,
+                py::object on_stream_open);
 
         py::object connect(
                 const py::object& remote,
@@ -190,7 +233,9 @@ namespace seshquic
                 py::object on_connection_closed,
                 py::object on_stream_data,
                 py::object on_stream_close,
-                py::object on_stream_fin);
+                py::object on_stream_fin,
+                py::object on_stream_construct,
+                py::object on_stream_open);
 
         void close(double wait);
     };
@@ -201,6 +246,8 @@ namespace seshquic
     /// so identity is not preserved across callbacks; equality and hashing are.
     py::object wrap(const std::shared_ptr<Stream>& s);
     py::object wrap(const std::shared_ptr<Connection>& c);
+
+    py::object wrap_bt(const std::shared_ptr<oxen::quic::BTRequestStream>& s);
 
     /// As above, from the reference a libquic callback is handed.
     py::object wrap_stream(Stream& s);
@@ -213,6 +260,9 @@ namespace seshquic
     oxen::quic::opt::stream_fin_callback make_stream_fin_cb(py::object cb);
     oxen::quic::connection_established_callback make_conn_established_cb(py::object cb);
     oxen::quic::connection_closed_callback make_conn_closed_cb(py::object cb);
+    std::function<void(oxen::quic::message)> make_message_cb(py::object cb);
+    oxen::quic::stream_constructor_callback make_stream_ctor_cb(py::object cb);
+    oxen::quic::stream_open_callback make_stream_open_cb(py::object cb);
 
     // Builders for `opt::` options from omittable Python arguments.  libquic's option handling
     // skips an empty optional, which is what lets its variadic interfaces be driven by keyword
@@ -256,5 +306,6 @@ namespace seshquic
 
     void init_endpoint(py::module_& m);
     void init_stream(py::module_& m);
+    void init_btstream(py::module_& m);
 
 }  // namespace seshquic

@@ -79,6 +79,31 @@ namespace seshquic
         return wrap(stream);
     }
 
+    py::object PyConnection::open_bt_stream(py::object on_request, py::object on_close)
+    {
+        auto generic = make_message_cb(std::move(on_request));
+        auto close_cb = make_stream_close_cb(std::move(on_close));
+
+        auto conn = get();
+        auto stream = without_gil(
+                [&] { return conn->open_stream<oxen::quic::BTRequestStream>(std::move(generic), std::move(close_cb)); });
+
+        return wrap_bt(stream);
+    }
+
+    py::object PyConnection::queue_incoming_bt_stream(py::object on_request, py::object on_close)
+    {
+        auto generic = make_message_cb(std::move(on_request));
+        auto close_cb = make_stream_close_cb(std::move(on_close));
+
+        auto conn = get();
+        auto stream = without_gil([&] {
+            return conn->queue_incoming_stream<oxen::quic::BTRequestStream>(std::move(generic), std::move(close_cb));
+        });
+
+        return wrap_bt(stream);
+    }
+
     void PyConnection::close(uint64_t error_code)
     {
         auto conn = get();
@@ -131,7 +156,9 @@ namespace seshquic
             py::object on_connection_closed,
             py::object on_stream_data,
             py::object on_stream_close,
-            py::object on_stream_fin)
+            py::object on_stream_fin,
+            py::object on_stream_construct,
+            py::object on_stream_open)
     {
         if (!creds)
             throw py::value_error{"listen() requires credentials"};
@@ -141,6 +168,8 @@ namespace seshquic
         auto data_cb = make_stream_data_cb(std::move(on_stream_data));
         auto stream_closed = make_stream_close_cb(std::move(on_stream_close));
         auto fin_cb = make_stream_fin_cb(std::move(on_stream_fin));
+        auto ctor_cb = make_stream_ctor_cb(std::move(on_stream_construct));
+        auto open_cb = make_stream_open_cb(std::move(on_stream_open));
 
         without_gil([&] {
             get().listen(
@@ -148,6 +177,8 @@ namespace seshquic
                     callback_option(std::move(data_cb)),
                     callback_option(std::move(stream_closed)),
                     fin_cb.cb ? std::optional{std::move(fin_cb)} : std::nullopt,
+                    callback_option(std::move(ctor_cb)),
+                    callback_option(std::move(open_cb)),
                     callback_option(std::move(established)),
                     callback_option(std::move(closed)));
         });
@@ -165,7 +196,9 @@ namespace seshquic
             py::object on_connection_closed,
             py::object on_stream_data,
             py::object on_stream_close,
-            py::object on_stream_fin)
+            py::object on_stream_fin,
+            py::object on_stream_construct,
+            py::object on_stream_open)
     {
         auto remote_addr = to_address(remote);
         auto pubkey = remote_pubkey.is_none() ? std::vector<std::byte>{} : to_bytes(remote_pubkey);
@@ -176,6 +209,8 @@ namespace seshquic
         auto data_cb = make_stream_data_cb(std::move(on_stream_data));
         auto stream_closed = make_stream_close_cb(std::move(on_stream_close));
         auto fin_cb = make_stream_fin_cb(std::move(on_stream_fin));
+        auto ctor_cb = make_stream_ctor_cb(std::move(on_stream_construct));
+        auto open_cb = make_stream_open_cb(std::move(on_stream_open));
 
         auto conn = without_gil([&] {
             RemoteAddress raddr{pk, remote_addr};
@@ -198,6 +233,8 @@ namespace seshquic
                         callback_option(std::move(data_cb)),
                         callback_option(std::move(stream_closed)),
                         fin_cb.cb ? std::optional{std::move(fin_cb)} : std::nullopt,
+                        callback_option(std::move(ctor_cb)),
+                        callback_option(std::move(open_cb)),
                         callback_option(std::move(established)),
                         callback_option(std::move(closed)));
 
@@ -210,6 +247,8 @@ namespace seshquic
                     callback_option(std::move(data_cb)),
                     callback_option(std::move(stream_closed)),
                     fin_cb.cb ? std::optional{std::move(fin_cb)} : std::nullopt,
+                    callback_option(std::move(ctor_cb)),
+                    callback_option(std::move(open_cb)),
                     callback_option(std::move(established)),
                     callback_option(std::move(closed)));
         });
@@ -257,6 +296,29 @@ connections.  Connection objects compare equal when they refer to the same conne
 
 The stream may not be usable immediately: if the connection has no stream slots free it is queued
 and becomes ready when one opens up.  Check `Stream.is_ready`.
+)")
+                .def("open_bt_stream",
+                     &PyConnection::open_bt_stream,
+                     py::keep_alive<0, 1>(),
+                     py::arg("on_request") = py::none(),
+                     py::arg("on_close") = py::none(),
+                     R"(Opens a bt-request stream to the other end.
+
+`on_request` becomes the stream's generic handler, used for any command with no `register_handler`
+endpoint of its own.
+)")
+                .def("queue_incoming_bt_stream",
+                     &PyConnection::queue_incoming_bt_stream,
+                     py::keep_alive<0, 1>(),
+                     py::arg("on_request") = py::none(),
+                     py::arg("on_close") = py::none(),
+                     R"(Prepares a bt-request stream for the other end to open.
+
+The returned stream takes the next incoming stream id and becomes usable once the other end opens
+it.  This is the mirror image of `open_bt_stream`, and either side of a connection can do either.
+
+For a protocol where only *some* incoming streams are bt-request streams -- stream 0 but not the
+rest, say -- use `on_stream_construct` on listen()/connect() instead, which sees the stream id.
 )")
                 .def("close",
                      &PyConnection::close,
@@ -365,7 +427,15 @@ connections, `connect()` to make outgoing ones, or both.
                      py::arg("on_stream_data") = py::none(),
                      py::arg("on_stream_close") = py::none(),
                      py::arg("on_stream_fin") = py::none(),
-                     "Starts accepting incoming connections.  May only be called once per endpoint.")
+                     py::arg("on_stream_construct") = py::none(),
+                     py::arg("on_stream_open") = py::none(),
+                     R"(Starts accepting incoming connections.  May only be called once per endpoint.
+
+`on_stream_construct(connection, stream_id)` decides what kind of stream an incoming stream should
+be, for protocols where that depends on the id -- returning `BTRequestStream` builds one, and
+returning None (or `Stream`) takes the default.  `on_stream_open(stream)` is then called with the
+constructed stream, which is where handlers go; returning an error code from it closes the stream.
+)")
                 .def("connect",
                      &PyEndpoint::connect,
                      // Keeps this endpoint alive for as long as the returned connection is.  The
@@ -385,6 +455,8 @@ connections, `connect()` to make outgoing ones, or both.
                      py::arg("on_stream_data") = py::none(),
                      py::arg("on_stream_close") = py::none(),
                      py::arg("on_stream_fin") = py::none(),
+                     py::arg("on_stream_construct") = py::none(),
+                     py::arg("on_stream_open") = py::none(),
                      R"(Starts an outgoing connection and returns it immediately, before the handshake.
 
 Watch `on_connection`/`on_connection_closed` to find out how it went.

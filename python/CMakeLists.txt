@@ -12,6 +12,7 @@ pybind11_add_module(seshquic_core MODULE
     src/module.cpp
     src/common.cpp
     src/address.cpp
+    src/btstream.cpp
     src/creds.cpp
     src/endpoint.cpp
     src/logging.cpp

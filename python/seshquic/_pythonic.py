@@ -5,11 +5,12 @@ managers, iteration over a stream -- is added onto those same classes rather tha
 so that an object handed to a callback from the event loop thread has it too.
 """
 
+import concurrent.futures
 import queue
 import threading
 
-from ._core import Connection, Endpoint, Stream
-from .errors import ConnectionFailed, StreamClosed
+from ._core import BTRequestStream, Connection, Endpoint, Stream
+from .errors import ConnectionFailed, RequestError, RequestTimeout, StreamClosed
 
 # Sentinels pushed into a stream's queue by its close and FIN callbacks; distinct so that iteration
 # can tell "the other end is done sending" from "the stream went away underneath us".
@@ -143,6 +144,52 @@ def _endpoint_serve_forever(self, wait=0.5):
         self.close(wait=wait)
 
 
+def _bt_request(self, endpoint, body=b"", *, timeout=None):
+    """Invokes `endpoint` on the other end and returns a Future for the response.
+
+    The future's result is the response body as ``bytes``.  An error response raises
+    `RequestError`, and no response in time raises `RequestTimeout` -- which is also a builtin
+    ``TimeoutError``, so ``except TimeoutError`` catches it.
+
+    Nothing is sent until this returns, but the response arrives on the event loop thread, so use
+    ``future.result(timeout)`` to wait for it or ``add_done_callback`` to be called back.
+    """
+    future = concurrent.futures.Future()
+
+    def on_response(message):
+        # Runs on the event loop thread.  set_* raises if the future was already resolved, which
+        # cannot happen here: libquic answers a request exactly once.
+        if message.timed_out:
+            future.set_exception(RequestTimeout(f"no response to {endpoint!r} in time"))
+        elif message.is_error:
+            future.set_exception(RequestError(f"{endpoint!r} returned an error", body=message.body))
+        else:
+            future.set_result(message.body)
+
+    self._command(endpoint, body, on_response=on_response, timeout=timeout)
+    return future
+
+
+def _bt_command(self, endpoint, body=b""):
+    """Invokes `endpoint` on the other end without expecting a response."""
+    self._command(endpoint, body)
+
+
+def _bt_handler(self, endpoint):
+    """Decorator form of `register_handler`::
+
+    @stream.handler("ping")
+    def ping(message):
+        message.respond(b"pong")
+    """
+
+    def decorate(fn):
+        self.register_handler(endpoint, fn)
+        return fn
+
+    return decorate
+
+
 _endpoint_connect_raw = Endpoint.connect
 
 Stream.iter_data = _stream_iter_data
@@ -151,6 +198,10 @@ Stream.read_all = _stream_read_all
 
 Connection.__enter__ = lambda self: self
 Connection.__exit__ = lambda self, exc_type, exc, tb: (self.close(), False)[1]
+
+BTRequestStream.request = _bt_request
+BTRequestStream.command = _bt_command
+BTRequestStream.handler = _bt_handler
 
 Endpoint.connect = _endpoint_connect
 Endpoint.__enter__ = _endpoint_enter

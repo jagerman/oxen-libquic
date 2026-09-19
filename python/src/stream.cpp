@@ -30,6 +30,12 @@ namespace seshquic
 
     py::object wrap(const std::shared_ptr<Stream>& s)
     {
+        // Streams reach Python through callbacks as a plain Stream&, so the subclass has to be
+        // recovered here; otherwise a bt-request stream arrives at an on_stream_open callback
+        // without the methods that make it one.
+        if (auto bt = std::dynamic_pointer_cast<oxen::quic::BTRequestStream>(s))
+            return wrap_bt(bt);
+
         return py::cast(new PyStream{s}, py::return_value_policy::take_ownership);
     }
 
@@ -96,6 +102,35 @@ namespace seshquic
             py::gil_scoped_acquire gil;
             fn(wrap_stream(s));
         }};
+    }
+
+    oxen::quic::stream_open_callback make_stream_open_cb(py::object cb)
+    {
+        py_callback fn{std::move(cb)};
+        if (!fn)
+            return nullptr;
+
+        return [fn = std::move(fn)](Stream& s) -> uint64_t {
+            py::gil_scoped_acquire gil;
+
+            // A returned error code closes the stream with it; None (or a callback that raised)
+            // accepts it, which is what an ordinary setup function will do.
+            auto rv = fn.call(wrap_stream(s));
+            if (!rv || rv.is_none())
+                return 0;
+
+            try
+            {
+                return rv.cast<uint64_t>();
+            }
+            catch (const py::cast_error&)
+            {
+                py::set_error(PyExc_TypeError, "a stream open callback must return None or an integer error code");
+                py::error_already_set e;
+                e.discard_as_unraisable("seshquic stream open callback");
+                return 0;
+            }
+        };
     }
 
     void PyStream::set_data_callback(py::object cb)

@@ -1,6 +1,12 @@
 #pragma once
 
 #include <pybind11/pybind11.h>
+// Included here rather than per-file on purpose: the std::optional/std::vector casters must be
+// visible in *every* translation unit that registers a function using them.  A file that misses it
+// silently instantiates a different caster for the same type, and the resulting ODR violation
+// breaks conversions in whichever definition the linker keeps -- including in files that did
+// include it.
+#include <pybind11/stl.h>
 
 #include <cstddef>
 #include <cstdint>

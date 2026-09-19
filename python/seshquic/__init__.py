@@ -17,10 +17,12 @@ Callbacks are invoked on the event loop thread, not the thread that set them up.
 
 from ._core import (
     Address,
+    BTRequestStream,
     Connection,
     Credentials,
     Endpoint,
     Loop,
+    Message,
     Stream,
     __version__,
     enable_logging,
@@ -33,11 +35,13 @@ from . import _pythonic  # noqa: F401  isort: skip
 
 __all__ = [
     "Address",
+    "BTRequestStream",
     "Connection",
     "ConnectionFailed",
     "Credentials",
     "Endpoint",
     "Loop",
+    "Message",
     "QuicError",
     "RequestError",
     "RequestTimeout",
