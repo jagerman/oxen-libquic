@@ -22,16 +22,6 @@ namespace seshquic
         {
             return {reinterpret_cast<const char*>(v.data()), v.size()};
         }
-
-        // GNUTLSCreds::make_from_ed_keys leaves key sizes to gnutls, which reports a bad length as a
-        // generic failure; checking here turns the common mistake into a ValueError naming the size.
-        void check_key_size(std::string_view what, const std::vector<std::byte>& key, size_t expected)
-        {
-            if (key.size() != expected)
-                throw py::value_error{
-                        std::string{what} + " must be " + std::to_string(expected) + " bytes, not " +
-                        std::to_string(key.size())};
-        }
     }  // namespace
 
     void init_creds(py::module_& m)
@@ -46,31 +36,14 @@ accept incoming connections) or `Endpoint.connect` (to identify yourself to a se
                         [](const py::object& seed, const py::object& pubkey) -> std::shared_ptr<TLSCreds> {
                             auto s = to_bytes(seed);
                             auto p = to_bytes(pubkey);
-                            check_key_size("pubkey", p, oxen::quic::GNUTLS_KEY_SIZE);
-
-                            if (s.size() == oxen::quic::GNUTLS_SECRET_KEY_SIZE)
-                            {
-                                // A combined seed+pubkey carries the pubkey already; catching a
-                                // mismatch here beats a handshake that fails for no visible reason.
-                                if (!std::equal(p.begin(), p.end(), s.begin() + oxen::quic::GNUTLS_KEY_SIZE))
-                                    throw py::value_error{"pubkey does not match the public half of the given 64-byte seed"};
-
-                                // Truncated here rather than by libquic: make_from_ed_keys says it
-                                // accepts the combined value but hands it to gnutls whole, which
-                                // rejects it (make_from_ed_seckey is the one that truncates).
-                                s.resize(oxen::quic::GNUTLS_KEY_SIZE);
-                            }
-                            else
-                                check_key_size("seed", s, oxen::quic::GNUTLS_KEY_SIZE);
-
                             return GNUTLSCreds::make_from_ed_keys(as_sv(s), as_sv(p));
                         },
                         py::arg("seed"),
                         py::arg("pubkey"),
-                        R"(Credentials from an Ed25519 seed and public key.
+                        R"(Credentials from a 32-byte Ed25519 seed and 32-byte public key.
 
-The seed may be either the 32-byte seed or the 64-byte libsodium seed+pubkey value, of which only
-the first 32 bytes are used.
+The seed may instead be the 64-byte libsodium seed+pubkey value, in which case `pubkey` must be
+the one it carries.  Raises ValueError for a wrong-sized key or a mismatched pubkey.
 )")
                 .def_static(
                         "from_ed_seckey",

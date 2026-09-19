@@ -52,7 +52,13 @@ def test_from_ed_keys_rejects_mismatched_combined_seed():
 
 def test_from_ed_keys_rejects_wrong_size():
     seed, pubkey = ed25519_keypair()
-    with pytest.raises(ValueError, match="must be 32 bytes"):
+    with pytest.raises(ValueError, match="seed must be 32 bytes"):
         Credentials.from_ed_keys(seed[:16], pubkey)
-    with pytest.raises(ValueError, match="must be 32 bytes"):
+    with pytest.raises(ValueError, match="pubkey must be 32 bytes"):
         Credentials.from_ed_keys(seed, pubkey[:16])
+
+
+def test_from_ed_seckey_rejects_wrong_size():
+    seed, _ = ed25519_keypair()
+    with pytest.raises(ValueError):
+        Credentials.from_ed_seckey(seed)
