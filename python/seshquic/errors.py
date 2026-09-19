@@ -1,12 +1,6 @@
 """Exceptions raised by seshquic."""
 
-__all__ = [
-    "QuicError",
-    "ConnectionFailed",
-    "StreamClosed",
-    "RequestError",
-    "RequestTimeout",
-]
+__all__ = ["QuicError", "ConnectionFailed", "StreamClosed", "RequestError", "RequestTimeout"]
 
 
 class QuicError(Exception):

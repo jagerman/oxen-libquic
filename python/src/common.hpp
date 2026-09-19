@@ -162,5 +162,6 @@ namespace seshquic
 
     void init_address(py::module_& m);
     void init_creds(py::module_& m);
+    void init_logging(py::module_& m);
 
 }  // namespace seshquic

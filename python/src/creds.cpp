@@ -46,9 +46,23 @@ accept incoming connections) or `Endpoint.connect` (to identify yourself to a se
                         [](const py::object& seed, const py::object& pubkey) -> std::shared_ptr<TLSCreds> {
                             auto s = to_bytes(seed);
                             auto p = to_bytes(pubkey);
-                            if (s.size() != oxen::quic::GNUTLS_SECRET_KEY_SIZE)
-                                check_key_size("seed", s, oxen::quic::GNUTLS_KEY_SIZE);
                             check_key_size("pubkey", p, oxen::quic::GNUTLS_KEY_SIZE);
+
+                            if (s.size() == oxen::quic::GNUTLS_SECRET_KEY_SIZE)
+                            {
+                                // A combined seed+pubkey carries the pubkey already; catching a
+                                // mismatch here beats a handshake that fails for no visible reason.
+                                if (!std::equal(p.begin(), p.end(), s.begin() + oxen::quic::GNUTLS_KEY_SIZE))
+                                    throw py::value_error{"pubkey does not match the public half of the given 64-byte seed"};
+
+                                // Truncated here rather than by libquic: make_from_ed_keys says it
+                                // accepts the combined value but hands it to gnutls whole, which
+                                // rejects it (make_from_ed_seckey is the one that truncates).
+                                s.resize(oxen::quic::GNUTLS_KEY_SIZE);
+                            }
+                            else
+                                check_key_size("seed", s, oxen::quic::GNUTLS_KEY_SIZE);
+
                             return GNUTLSCreds::make_from_ed_keys(as_sv(s), as_sv(p));
                         },
                         py::arg("seed"),

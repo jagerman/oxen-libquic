@@ -114,12 +114,12 @@ namespace seshquic
             return Endpoint::endpoint(
                     *_loop,
                     local_addr,
-                    alpns ? std::optional{opt::alpns{std::move(*alpns)}} : std::nullopt,
+                    value_option<opt::alpns>(alpns),
                     duration_option<opt::handshake_timeout, std::chrono::nanoseconds>(handshake_timeout),
-                    max_udp_payload ? std::optional{opt::max_udp_payload{*max_udp_payload}} : std::nullopt,
-                    allow_gso ? std::optional{opt::allow_gso{}} : std::nullopt,
-                    established ? std::optional{std::move(established)} : std::nullopt,
-                    closed ? std::optional{std::move(closed)} : std::nullopt);
+                    value_option<opt::max_udp_payload>(max_udp_payload),
+                    flag_option<opt::allow_gso>(allow_gso),
+                    callback_option(std::move(established)),
+                    callback_option(std::move(closed)));
         });
 
         _ep = loop_owned<Endpoint>{std::move(ep)};
@@ -145,11 +145,11 @@ namespace seshquic
         without_gil([&] {
             get().listen(
                     std::move(creds),
-                    data_cb ? std::optional{std::move(data_cb)} : std::nullopt,
-                    stream_closed ? std::optional{std::move(stream_closed)} : std::nullopt,
+                    callback_option(std::move(data_cb)),
+                    callback_option(std::move(stream_closed)),
                     fin_cb.cb ? std::optional{std::move(fin_cb)} : std::nullopt,
-                    established ? std::optional{std::move(established)} : std::nullopt,
-                    closed ? std::optional{std::move(closed)} : std::nullopt);
+                    callback_option(std::move(established)),
+                    callback_option(std::move(closed)));
         });
     }
 
@@ -180,7 +180,7 @@ namespace seshquic
         auto conn = without_gil([&] {
             RemoteAddress raddr{pk, remote_addr};
 
-            auto opt_alpns = alpns ? std::optional{opt::outbound_alpns{std::move(*alpns)}} : std::nullopt;
+            auto opt_alpns = value_option<opt::outbound_alpns>(alpns);
             auto opt_idle = duration_option<opt::idle_timeout, std::chrono::milliseconds>(idle_timeout);
             auto opt_keep = duration_option<opt::keep_alive, std::chrono::milliseconds>(keep_alive);
             auto opt_hs = duration_option<opt::handshake_timeout, std::chrono::nanoseconds>(handshake_timeout);
@@ -195,11 +195,11 @@ namespace seshquic
                         std::move(opt_idle),
                         std::move(opt_keep),
                         std::move(opt_hs),
-                        data_cb ? std::optional{std::move(data_cb)} : std::nullopt,
-                        stream_closed ? std::optional{std::move(stream_closed)} : std::nullopt,
+                        callback_option(std::move(data_cb)),
+                        callback_option(std::move(stream_closed)),
                         fin_cb.cb ? std::optional{std::move(fin_cb)} : std::nullopt,
-                        established ? std::optional{std::move(established)} : std::nullopt,
-                        closed ? std::optional{std::move(closed)} : std::nullopt);
+                        callback_option(std::move(established)),
+                        callback_option(std::move(closed)));
 
             return get().connect(
                     std::move(raddr),
@@ -207,11 +207,11 @@ namespace seshquic
                     std::move(opt_idle),
                     std::move(opt_keep),
                     std::move(opt_hs),
-                    data_cb ? std::optional{std::move(data_cb)} : std::nullopt,
-                    stream_closed ? std::optional{std::move(stream_closed)} : std::nullopt,
+                    callback_option(std::move(data_cb)),
+                    callback_option(std::move(stream_closed)),
                     fin_cb.cb ? std::optional{std::move(fin_cb)} : std::nullopt,
-                    established ? std::optional{std::move(established)} : std::nullopt,
-                    closed ? std::optional{std::move(closed)} : std::nullopt);
+                    callback_option(std::move(established)),
+                    callback_option(std::move(closed)));
         });
 
         return wrap(std::move(conn));
@@ -246,6 +246,10 @@ connections.  Connection objects compare equal when they refer to the same conne
 )"}
                 .def("open_stream",
                      &PyConnection::open_stream,
+                     // Keeps this connection object alive for as long as the returned stream is,
+                     // which in turn keeps the endpoint alive when the connection came from
+                     // connect().
+                     py::keep_alive<0, 1>(),
                      py::arg("on_data") = py::none(),
                      py::arg("on_close") = py::none(),
                      py::arg("on_fin") = py::none(),
@@ -364,6 +368,11 @@ connections, `connect()` to make outgoing ones, or both.
                      "Starts accepting incoming connections.  May only be called once per endpoint.")
                 .def("connect",
                      &PyEndpoint::connect,
+                     // Keeps this endpoint alive for as long as the returned connection is.  The
+                     // connection is only a weak handle on a libquic object the endpoint owns, so
+                     // without this `Endpoint(...).connect(...)` would have the endpoint collected
+                     // -- and the connection closed -- the moment the expression finished.
+                     py::keep_alive<0, 1>(),
                      py::arg("remote"),
                      py::arg("remote_pubkey") = py::none(),
                      py::arg("creds") = nullptr,

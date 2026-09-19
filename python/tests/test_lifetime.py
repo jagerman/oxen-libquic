@@ -1,3 +1,4 @@
+import gc
 import sys
 import threading
 
@@ -72,7 +73,9 @@ def test_shared_loop(server_creds, server_keys, client_creds):
     del loop
 
 
-def test_exception_in_callback_does_not_propagate(endpoint, server_creds, server_keys, client_creds, monkeypatch):
+def test_exception_in_callback_does_not_propagate(
+    endpoint, server_creds, server_keys, client_creds, monkeypatch
+):
     """A callback that raises must not take the event loop thread down with it."""
     _, server_pubkey = server_keys
 
@@ -128,3 +131,37 @@ def test_stream_identity_across_callbacks(endpoint, server_creds, server_keys, c
     assert seen[0] is not seen[1]
     assert seen[0] == seen[1]
     assert len({seen[0], seen[1]}) == 1
+
+
+def test_connection_keeps_its_endpoint_alive(echo_server, server_keys, client_creds):
+    """A connection from a temporary endpoint must keep that endpoint alive.
+
+    `Endpoint(...).connect(...)` leaves no Python reference to the endpoint, and a connection is
+    only a weak handle on something the endpoint owns, so without a keep_alive the endpoint would
+    be collected -- and the connection closed -- as the expression finished.
+    """
+    _, server_pubkey = server_keys
+
+    conn = quic.Endpoint("127.0.0.1:0").connect(
+        echo_server.local, remote_pubkey=server_pubkey, creds=client_creds
+    )
+    gc.collect()
+
+    assert conn.is_alive
+    assert conn.is_established
+
+
+def test_stream_keeps_its_connection_alive(echo_server, server_keys, client_creds):
+    _, server_pubkey = server_keys
+
+    conn = quic.Endpoint("127.0.0.1:0").connect(
+        echo_server.local, remote_pubkey=server_pubkey, creds=client_creds
+    )
+    stream = conn.open_stream()
+    del conn
+    gc.collect()
+
+    assert stream.is_alive
+    stream.send(b"still works")
+    stream.send_fin()
+    assert stream.read_all(timeout=10) == b"STILL WORKS"

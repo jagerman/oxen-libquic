@@ -48,13 +48,17 @@ def test_connect_to_nothing_times_out(endpoint, server_keys, client_creds):
     _, server_pubkey = server_keys
     # Port 1 on loopback: nothing is listening, so the handshake never completes.
     with pytest.raises(quic.ConnectionFailed):
-        endpoint.connect("127.0.0.1:1", remote_pubkey=server_pubkey, creds=client_creds, timeout=2.0)
+        endpoint.connect(
+            "127.0.0.1:1", remote_pubkey=server_pubkey, creds=client_creds, timeout=2.0
+        )
 
 
 def test_connect_wrong_pubkey_fails(endpoint, echo_server, client_keys, client_creds):
     _, wrong_pubkey = client_keys
     with pytest.raises(quic.ConnectionFailed):
-        endpoint.connect(echo_server.local, remote_pubkey=wrong_pubkey, creds=client_creds, timeout=5.0)
+        endpoint.connect(
+            echo_server.local, remote_pubkey=wrong_pubkey, creds=client_creds, timeout=5.0
+        )
 
 
 def test_connect_without_wait_returns_immediately(endpoint, echo_server, server_keys, client_creds):
@@ -131,7 +135,11 @@ def test_alpn_mismatch_fails(endpoint, server_creds, server_keys, client_creds):
         server.listen(server_creds)
         with pytest.raises(quic.ConnectionFailed):
             endpoint.connect(
-                server.local, remote_pubkey=server_pubkey, creds=client_creds, alpns=["yours"], timeout=5.0
+                server.local,
+                remote_pubkey=server_pubkey,
+                creds=client_creds,
+                alpns=["yours"],
+                timeout=5.0,
             )
 
 

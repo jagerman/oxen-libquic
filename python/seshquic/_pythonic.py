@@ -43,7 +43,9 @@ def _stream_iter_data(self, timeout=None):
         if isinstance(item, tuple) and item and item[0] is _CLOSED:
             error_code = item[1]
             if error_code:
-                raise StreamClosed(f"stream closed with error code {error_code}", error_code=error_code)
+                raise StreamClosed(
+                    f"stream closed with error code {error_code}", error_code=error_code
+                )
             return
         yield item
 
@@ -53,7 +55,16 @@ def _stream_read_all(self, timeout=None):
     return b"".join(self.iter_data(timeout=timeout))
 
 
-def _endpoint_connect(self, remote, *, wait=True, timeout=10.0, on_connection=None, on_connection_closed=None, **kwargs):
+def _endpoint_connect(
+    self,
+    remote,
+    *,
+    wait=True,
+    timeout=10.0,
+    on_connection=None,
+    on_connection_closed=None,
+    **kwargs,
+):
     """Connects to `remote`, by default blocking until the handshake completes.
 
     `remote` may be an `Address`, a "host:port" string, or a (host, port) tuple.  With `wait=False`
@@ -65,7 +76,11 @@ def _endpoint_connect(self, remote, *, wait=True, timeout=10.0, on_connection=No
     """
     if not wait:
         return _endpoint_connect_raw(
-            self, remote, on_connection=on_connection, on_connection_closed=on_connection_closed, **kwargs
+            self,
+            remote,
+            on_connection=on_connection,
+            on_connection_closed=on_connection_closed,
+            **kwargs,
         )
 
     settled = threading.Event()
@@ -86,14 +101,18 @@ def _endpoint_connect(self, remote, *, wait=True, timeout=10.0, on_connection=No
         if on_connection_closed is not None:
             on_connection_closed(conn, error_code)
 
-    conn = _endpoint_connect_raw(self, remote, on_connection=_established, on_connection_closed=_closed, **kwargs)
+    conn = _endpoint_connect_raw(
+        self, remote, on_connection=_established, on_connection_closed=_closed, **kwargs
+    )
 
     if not settled.wait(timeout):
         conn.close()
         raise ConnectionFailed(f"connection to {remote} timed out after {timeout}s")
 
     if not outcome.get("ok"):
-        raise ConnectionFailed(f"connection to {remote} failed", error_code=outcome.get("error_code"))
+        raise ConnectionFailed(
+            f"connection to {remote} failed", error_code=outcome.get("error_code")
+        )
 
     return conn
 

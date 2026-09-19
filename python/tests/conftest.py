@@ -1,27 +1,13 @@
-import os
-
 import pytest
+from nacl.signing import SigningKey
 
 import seshquic as quic
-
-try:
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-except ImportError:  # pragma: no cover
-    Ed25519PrivateKey = None
 
 
 def ed25519_keypair():
     """Returns a (seed, pubkey) pair, which is what Credentials.from_ed_keys wants."""
-    if Ed25519PrivateKey is None:
-        pytest.skip("python3-cryptography is needed to generate test keys")
-
-    sk = Ed25519PrivateKey.generate()
-    seed = sk.private_bytes(
-        serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption()
-    )
-    pubkey = sk.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    return seed, pubkey
+    sk = SigningKey.generate()
+    return sk.encode(), sk.verify_key.encode()
 
 
 @pytest.fixture

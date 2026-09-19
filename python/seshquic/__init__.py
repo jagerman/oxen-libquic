@@ -15,14 +15,18 @@ accept connections, `connect()` to make one, or both::
 Callbacks are invoked on the event loop thread, not the thread that set them up.
 """
 
-from ._core import Address, Connection, Credentials, Endpoint, Loop, Stream, __version__
-from .errors import (
-    ConnectionFailed,
-    QuicError,
-    RequestError,
-    RequestTimeout,
-    StreamClosed,
+from ._core import (
+    Address,
+    Connection,
+    Credentials,
+    Endpoint,
+    Loop,
+    Stream,
+    __version__,
+    enable_logging,
+    flush_logs,
 )
+from .errors import ConnectionFailed, QuicError, RequestError, RequestTimeout, StreamClosed
 
 # Imported for its side effect of adding the Pythonic methods onto the classes above.
 from . import _pythonic  # noqa: F401  isort: skip
@@ -40,4 +44,6 @@ __all__ = [
     "Stream",
     "StreamClosed",
     "__version__",
+    "enable_logging",
+    "flush_logs",
 ]

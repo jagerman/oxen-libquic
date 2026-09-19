@@ -6,9 +6,9 @@ build-backend = "scikit_build_core.build"
 name = "seshquic"
 version = "1.9.0"
 description = "QUIC for Python, built on libquic"
-readme = "python/README.md"
+readme = "README.md"
 requires-python = ">=3.9"
-license = { file = "LICENSE" }
+license = "LGPL-3.0-or-later"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: C++",
@@ -16,10 +16,12 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = ["pytest>=7", "PyNaCl"]
 
 [tool.scikit-build]
-wheel.packages = ["python/seshquic"]
+# The CMake project is the libquic tree this lives in; the extension is a target within it.
+cmake.source-dir = ".."
+wheel.packages = ["seshquic"]
 cmake.version = ">=3.18"
 cmake.define.LIBQUIC_BUILD_PYTHON = "ON"
 cmake.define.LIBQUIC_BUILD_TESTS = "OFF"
@@ -28,4 +30,11 @@ cmake.define.LIBQUIC_BUILD_BTREQTEST = "OFF"
 cmake.define.LIBQUIC_INSTALL = "OFF"
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests"]
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+skip-string-normalization = true
+skip-magic-trailing-comma = true
+target-version = ['py39']
+include = '\.py$'

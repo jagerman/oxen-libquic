@@ -39,3 +39,14 @@ if [ $? -eq 0 ]; then
         $jsonnet_format --in-place .drone.jsonnet
     fi
 fi
+
+black_format=$(command -v black 2>/dev/null)
+if [ $? -eq 0 ]; then
+    if [ "$1" = "verify" ]; then
+        if ! $black_format --check --quiet python; then
+            exit 8
+        fi
+    else
+        $black_format --quiet python
+    fi
+fi

@@ -31,7 +31,29 @@ namespace seshquic
     /// these in std::function, which is copy-constructible.
     class py_callback
     {
-        py::object _fn;
+        // Held indirectly so that copying a py_callback is a refcount bump on the shared_ptr rather
+        // than a Py_INCREF: libquic copies the std::function this ends up inside, and a copy can
+        // happen on the loop thread without the GIL, which touching a py::object directly would
+        // not survive.  The GIL is needed only once, in the deleter.
+        std::shared_ptr<py::object> _fn;
+
+        static void release(py::object* fn)
+        {
+            if (python_is_finalizing())
+            {
+                // Dropping the reference needs the GIL, which this thread will never be given
+                // again: CPython parks non-main threads that ask for it during finalization.
+                // release() hands off ownership without decrementing, deliberately leaking -- the
+                // interpreter is taking the whole heap with it, whereas blocking here would wedge
+                // the process at exit.
+                fn->release();
+                delete fn;
+                return;
+            }
+
+            py::gil_scoped_acquire gil;
+            delete fn;
+        }
 
       public:
         py_callback() = default;
@@ -39,48 +61,7 @@ namespace seshquic
         explicit py_callback(py::object fn)
         {
             if (fn && !fn.is_none())
-                _fn = std::move(fn);
-        }
-
-        py_callback(const py_callback& other)
-        {
-            if (other._fn)
-            {
-                py::gil_scoped_acquire gil;
-                _fn = other._fn;
-            }
-        }
-
-        py_callback(py_callback&&) noexcept = default;
-
-        py_callback& operator=(const py_callback& other)
-        {
-            if (this != &other)
-            {
-                py::gil_scoped_acquire gil;
-                _fn = other._fn;
-            }
-            return *this;
-        }
-
-        py_callback& operator=(py_callback&&) noexcept = default;
-
-        ~py_callback()
-        {
-            if (!_fn)
-                return;
-
-            if (python_is_finalizing())
-            {
-                // Releasing the reference needs the GIL, which this thread will never be given
-                // again.  Deliberately leak it instead: the interpreter is going away and taking
-                // the whole heap with it, whereas hanging here would wedge the process at exit.
-                _fn.release();
-                return;
-            }
-
-            py::gil_scoped_acquire gil;
-            py::object dying = std::move(_fn);
+                _fn = std::shared_ptr<py::object>{new py::object{std::move(fn)}, &release};
         }
 
         explicit operator bool() const { return static_cast<bool>(_fn); }
@@ -103,11 +84,11 @@ namespace seshquic
             py::gil_scoped_acquire gil;
             try
             {
-                _fn(std::forward<Args>(args)...);
+                (*_fn)(std::forward<Args>(args)...);
             }
             catch (py::error_already_set& e)
             {
-                e.discard_as_unraisable(_fn);
+                e.discard_as_unraisable(*_fn);
             }
         }
     };
@@ -233,15 +214,44 @@ namespace seshquic
     oxen::quic::connection_established_callback make_conn_established_cb(py::object cb);
     oxen::quic::connection_closed_callback make_conn_closed_cb(py::object cb);
 
-    /// Builds an `opt::` option from a duration in seconds, as Python expresses one, or nothing at
-    /// all if the argument was omitted.  libquic's option handling skips an empty optional, which
-    /// is what lets its variadic interfaces be driven by keyword arguments.
+    // Builders for `opt::` options from omittable Python arguments.  libquic's option handling
+    // skips an empty optional, which is what lets its variadic interfaces be driven by keyword
+    // arguments without any template machinery at the call site.
+
+    /// From a value that may not have been given.
+    template <typename Option, typename T>
+    std::optional<Option> value_option(const std::optional<T>& val)
+    {
+        if (!val)
+            return std::nullopt;
+        return Option{*val};
+    }
+
+    /// From a duration in seconds, as Python expresses one.
     template <typename Option, typename Duration>
-    std::optional<Option> duration_option(std::optional<double> seconds)
+    std::optional<Option> duration_option(const std::optional<double>& seconds)
     {
         if (!seconds)
             return std::nullopt;
         return Option{std::chrono::duration_cast<Duration>(std::chrono::duration<double>{*seconds})};
+    }
+
+    /// For an option that is simply present or absent.
+    template <typename Option>
+    std::optional<Option> flag_option(bool enabled)
+    {
+        if (!enabled)
+            return std::nullopt;
+        return Option{};
+    }
+
+    /// For a callback option, which is "not given" when the Python argument was None.
+    template <typename Callback>
+    std::optional<Callback> callback_option(Callback cb)
+    {
+        if (!cb)
+            return std::nullopt;
+        return std::move(cb);
     }
 
     void init_endpoint(py::module_& m);

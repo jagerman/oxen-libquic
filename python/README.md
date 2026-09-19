@@ -2,19 +2,46 @@
 
 Python bindings for libquic.
 
+```python
+import seshquic as quic
+
+with quic.Endpoint("127.0.0.1:0") as client:
+    conn = client.connect("example.com:4242", remote_pubkey=pk, creds=creds)
+    stream = conn.open_stream()
+    stream.send(b"hello")
+    stream.send_fin()
+    print(stream.read_all())
+```
+
 ## Building
 
-From the repository root:
+From this directory:
 
     pip install .
 
-For development, an in-tree build puts the extension module next to the package sources so that
-`PYTHONPATH=python` is enough to import it:
+For development, an in-tree CMake build puts the extension module next to the package sources, so
+that `PYTHONPATH` is enough to import it:
 
+    cd ..
     cmake -B build-py -DLIBQUIC_BUILD_PYTHON=ON -DLIBQUIC_BUILD_TESTS=OFF
     make -C build-py seshquic_core
     PYTHONPATH=python python3 -c 'import seshquic; print(seshquic.__version__)'
 
+The CMake project is the libquic tree above this directory; `pyproject.toml` points at it with
+`cmake.source-dir`, and the extension is the `seshquic_core` target in `CMakeLists.txt` here.
+
 ## Tests
 
-    PYTHONPATH=python python3 -m pytest python/tests
+    PYTHONPATH=../python python3 -m pytest
+
+`python3-cryptography` is needed to generate the Ed25519 test keys.
+
+## Formatting
+
+`../utils/format.sh` formats the C++ with clang-format and the Python with black; the black
+settings live in `pyproject.toml`.  `../utils/format.sh verify` checks without writing.
+
+## Debugging
+
+`seshquic.enable_logging("stderr", "debug")` turns on libquic's internal logging.  Levels go up to
+`"trace"`, which records every packet.

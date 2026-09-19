@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+from conftest import ed25519_keypair
 from seshquic import Credentials
 
 
@@ -35,3 +36,23 @@ def test_unauthenticated():
 
 def test_dangerously_unencrypted():
     assert Credentials.dangerously_unencrypted() is not None
+
+
+def test_from_ed_keys_accepts_combined_seed():
+    seed, pubkey = ed25519_keypair()
+    assert Credentials.from_ed_keys(seed + pubkey, pubkey) is not None
+
+
+def test_from_ed_keys_rejects_mismatched_combined_seed():
+    seed, pubkey = ed25519_keypair()
+    _, other_pubkey = ed25519_keypair()
+    with pytest.raises(ValueError, match="does not match"):
+        Credentials.from_ed_keys(seed + pubkey, other_pubkey)
+
+
+def test_from_ed_keys_rejects_wrong_size():
+    seed, pubkey = ed25519_keypair()
+    with pytest.raises(ValueError, match="must be 32 bytes"):
+        Credentials.from_ed_keys(seed[:16], pubkey)
+    with pytest.raises(ValueError, match="must be 32 bytes"):
+        Credentials.from_ed_keys(seed, pubkey[:16])

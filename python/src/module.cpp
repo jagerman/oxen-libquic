@@ -14,6 +14,7 @@ PYBIND11_MODULE(_core, m)
     const auto& v = oxen::quic::VERSION;
     m.attr("__version__") = std::to_string(v[0]) + '.' + std::to_string(v[1]) + '.' + std::to_string(v[2]);
 
+    seshquic::init_logging(m);
     seshquic::init_address(m);
     seshquic::init_creds(m);
     seshquic::init_stream(m);
