@@ -13,6 +13,25 @@ with quic.Endpoint("127.0.0.1:0") as client:
     print(stream.read_all())
 ```
 
+## asyncio
+
+Optional, and a separate import — `import seshquic` does not pull it in, and a program that never
+uses it needs no event loop:
+
+```python
+import seshquic.aio as quic
+
+async def main():
+    async with quic.Endpoint("127.0.0.1:0") as client:
+        conn = await client.connect("example.com:4242", remote_pubkey=pk, creds=creds)
+        bts = conn.open_bt_stream()
+        print(await bts.request("ping"))
+```
+
+Only what genuinely waits is a coroutine: connecting, closing, reading a stream, and a bt-request.
+See `seshquic/aio.py` for which callbacks run on the asyncio loop and which run on libquic's own
+thread, and why.
+
 ## Building
 
 From this directory:
