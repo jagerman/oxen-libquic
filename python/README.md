@@ -34,17 +34,23 @@ thread, and why.
 
 ## Building
 
-From this directory:
+From this directory, into your user site-packages (add `--break-system-packages` on a distro that
+marks its Python externally managed):
 
-    pip install .
+    pip install --user .
 
-For development, an in-tree CMake build puts the extension module next to the package sources, so
-that `PYTHONPATH` is enough to import it:
+That installs a copy, so a change to the C++ needs another `pip install`.  For development an
+in-tree CMake build avoids that: it puts the extension module next to the package sources, so the
+source tree is directly importable and only the rebuild is needed.
 
     cd ..
     cmake -B build-py -DLIBQUIC_BUILD_PYTHON=ON -DLIBQUIC_BUILD_TESTS=OFF
     make -C build-py seshquic_core
     PYTHONPATH=python python3 -c 'import seshquic; print(seshquic.__version__)'
+
+`pip install -e .` is not worth reaching for here: scikit-build-core's editable mode copies the
+Python sources into site-packages and points its import hook at the copies, so neither Python nor
+C++ edits are live without further configuration.
 
 The CMake project is the libquic tree above this directory; `pyproject.toml` points at it with
 `cmake.source-dir`, and the extension is the `seshquic_core` target in `CMakeLists.txt` here.
