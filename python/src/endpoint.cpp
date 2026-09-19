@@ -124,14 +124,21 @@ namespace seshquic
             std::optional<double> handshake_timeout,
             std::optional<size_t> max_udp_payload,
             bool allow_gso,
+            bool datagrams,
+            bool datagram_splitting,
+            std::optional<int> datagram_bufsize,
+            std::optional<size_t> datagram_queue_limit,
             py::object on_connection,
-            py::object on_connection_closed) :
+            py::object on_connection_closed,
+            py::object on_datagram) :
             _loop{loop ? loop->loop() : std::make_shared<Loop>()}
     {
         auto local_addr = to_address(local);
 
         auto established = make_conn_established_cb(std::move(on_connection));
         auto closed = make_conn_closed_cb(std::move(on_connection_closed));
+        auto dgram_cb = make_dgram_cb(std::move(on_datagram));
+        auto dgrams = datagram_option(datagrams, datagram_splitting, datagram_bufsize, datagram_queue_limit);
 
         // Every option is passed as an optional, which libquic's option handling treats as "not
         // given" when empty; that is what lets a variadic C++ API be driven by keyword arguments.
@@ -143,8 +150,10 @@ namespace seshquic
                     duration_option<opt::handshake_timeout, std::chrono::nanoseconds>(handshake_timeout),
                     value_option<opt::max_udp_payload>(max_udp_payload),
                     flag_option<opt::allow_gso>(allow_gso),
+                    std::move(dgrams),
                     callback_option(std::move(established)),
-                    callback_option(std::move(closed)));
+                    callback_option(std::move(closed)),
+                    callback_option(std::move(dgram_cb)));
         });
 
         _ep = loop_owned<Endpoint>{std::move(ep)};
@@ -158,10 +167,13 @@ namespace seshquic
             py::object on_stream_close,
             py::object on_stream_fin,
             py::object on_stream_construct,
-            py::object on_stream_open)
+            py::object on_stream_open,
+            py::object on_datagram)
     {
         if (!creds)
             throw py::value_error{"listen() requires credentials"};
+
+        auto dgram_cb = make_dgram_cb(std::move(on_datagram));
 
         auto established = make_conn_established_cb(std::move(on_connection));
         auto closed = make_conn_closed_cb(std::move(on_connection_closed));
@@ -180,7 +192,8 @@ namespace seshquic
                     callback_option(std::move(ctor_cb)),
                     callback_option(std::move(open_cb)),
                     callback_option(std::move(established)),
-                    callback_option(std::move(closed)));
+                    callback_option(std::move(closed)),
+                    callback_option(std::move(dgram_cb)));
         });
     }
 
@@ -198,7 +211,8 @@ namespace seshquic
             py::object on_stream_close,
             py::object on_stream_fin,
             py::object on_stream_construct,
-            py::object on_stream_open)
+            py::object on_stream_open,
+            py::object on_datagram)
     {
         auto remote_addr = to_address(remote);
         auto pubkey = remote_pubkey.is_none() ? std::vector<std::byte>{} : to_bytes(remote_pubkey);
@@ -211,6 +225,7 @@ namespace seshquic
         auto fin_cb = make_stream_fin_cb(std::move(on_stream_fin));
         auto ctor_cb = make_stream_ctor_cb(std::move(on_stream_construct));
         auto open_cb = make_stream_open_cb(std::move(on_stream_open));
+        auto dgram_cb = make_dgram_cb(std::move(on_datagram));
 
         auto conn = without_gil([&] {
             RemoteAddress raddr{pk, remote_addr};
@@ -236,7 +251,8 @@ namespace seshquic
                         callback_option(std::move(ctor_cb)),
                         callback_option(std::move(open_cb)),
                         callback_option(std::move(established)),
-                        callback_option(std::move(closed)));
+                        callback_option(std::move(closed)),
+                        callback_option(std::move(dgram_cb)));
 
             return get().connect(
                     std::move(raddr),
@@ -250,7 +266,8 @@ namespace seshquic
                     callback_option(std::move(ctor_cb)),
                     callback_option(std::move(open_cb)),
                     callback_option(std::move(established)),
-                    callback_option(std::move(closed)));
+                    callback_option(std::move(closed)),
+                    callback_option(std::move(dgram_cb)));
         });
 
         return wrap(std::move(conn));
@@ -319,6 +336,32 @@ it.  This is the mirror image of `open_bt_stream`, and either side of a connecti
 
 For a protocol where only *some* incoming streams are bt-request streams -- stream 0 but not the
 rest, say -- use `on_stream_construct` on listen()/connect() instead, which sees the stream id.
+)")
+                .def("send_datagram",
+                     &PyConnection::send_datagram,
+                     py::arg("data"),
+                     R"(Sends an unreliable datagram.
+
+Requires datagrams to have been enabled on both endpoints.  Data longer than `max_datagram_size`
+is dropped rather than split across datagrams, and a datagram may be lost, duplicated or delivered
+out of order -- if you need it to arrive, use a stream.
+)")
+                .def_property_readonly(
+                        "datagrams_enabled",
+                        [](const PyConnection& c) {
+                            auto conn = c.get();
+                            return without_gil([&] { return conn->datagrams_enabled(); });
+                        })
+                .def_property_readonly(
+                        "max_datagram_size",
+                        [](const PyConnection& c) {
+                            auto conn = c.get();
+                            return without_gil([&] { return conn->get_max_datagram_size(); });
+                        },
+                        R"(The largest datagram this connection can currently carry.
+
+Negotiated, and it changes over time as the path MTU is discovered, so read it when you are about
+to send rather than caching it.  Splitting roughly doubles it.
 )")
                 .def("close",
                      &PyConnection::close,
@@ -409,6 +452,11 @@ connections, `connect()` to make outgoing ones, or both.
                              std::optional<double>,
                              std::optional<size_t>,
                              bool,
+                             bool,
+                             bool,
+                             std::optional<int>,
+                             std::optional<size_t>,
+                             py::object,
                              py::object,
                              py::object>(),
                      py::arg("local") = py::str{""},
@@ -417,8 +465,21 @@ connections, `connect()` to make outgoing ones, or both.
                      py::arg("handshake_timeout") = py::none(),
                      py::arg("max_udp_payload") = py::none(),
                      py::arg("allow_gso") = false,
+                     py::arg("datagrams") = false,
+                     py::arg("datagram_splitting") = false,
+                     py::arg("datagram_bufsize") = py::none(),
+                     py::arg("datagram_queue_limit") = py::none(),
                      py::arg("on_connection") = py::none(),
-                     py::arg("on_connection_closed") = py::none())
+                     py::arg("on_connection_closed") = py::none(),
+                     py::arg("on_datagram") = py::none(),
+                     R"(A bound UDP socket, with its own event loop thread unless given one to share.
+
+`datagrams=True` enables QUIC datagrams on connections from this endpoint; both ends must enable
+them.  `datagram_splitting=True` lets a datagram be sent across two QUIC packets, roughly doubling
+the size one can carry, with `datagram_bufsize` sizing the reassembly buffer.  Datagrams are
+unreliable and unordered: they may be dropped, and are dropped outright once more than
+`datagram_queue_limit` bytes are queued on a connection.
+)")
                 .def("listen",
                      &PyEndpoint::listen,
                      py::arg("creds"),
@@ -429,6 +490,7 @@ connections, `connect()` to make outgoing ones, or both.
                      py::arg("on_stream_fin") = py::none(),
                      py::arg("on_stream_construct") = py::none(),
                      py::arg("on_stream_open") = py::none(),
+                     py::arg("on_datagram") = py::none(),
                      R"(Starts accepting incoming connections.  May only be called once per endpoint.
 
 `on_stream_construct(connection, stream_id)` decides what kind of stream an incoming stream should
@@ -457,6 +519,7 @@ constructed stream, which is where handlers go; returning an error code from it 
                      py::arg("on_stream_fin") = py::none(),
                      py::arg("on_stream_construct") = py::none(),
                      py::arg("on_stream_open") = py::none(),
+                     py::arg("on_datagram") = py::none(),
                      R"(Starts an outgoing connection and returns it immediately, before the handshake.
 
 Watch `on_connection`/`on_connection_closed` to find out how it went.

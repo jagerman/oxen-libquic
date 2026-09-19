@@ -188,6 +188,8 @@ namespace seshquic
         py::object open_bt_stream(py::object on_request, py::object on_close);
         py::object queue_incoming_bt_stream(py::object on_request, py::object on_close);
 
+        void send_datagram(const py::object& data);
+
         void close(uint64_t error_code);
     };
 
@@ -206,8 +208,13 @@ namespace seshquic
                 std::optional<double> handshake_timeout,
                 std::optional<size_t> max_udp_payload,
                 bool allow_gso,
+                bool datagrams,
+                bool datagram_splitting,
+                std::optional<int> datagram_bufsize,
+                std::optional<size_t> datagram_queue_limit,
                 py::object on_connection,
-                py::object on_connection_closed);
+                py::object on_connection_closed,
+                py::object on_datagram);
 
         Endpoint& get() const;
 
@@ -219,7 +226,8 @@ namespace seshquic
                 py::object on_stream_close,
                 py::object on_stream_fin,
                 py::object on_stream_construct,
-                py::object on_stream_open);
+                py::object on_stream_open,
+                py::object on_datagram);
 
         py::object connect(
                 const py::object& remote,
@@ -235,7 +243,8 @@ namespace seshquic
                 py::object on_stream_close,
                 py::object on_stream_fin,
                 py::object on_stream_construct,
-                py::object on_stream_open);
+                py::object on_stream_open,
+                py::object on_datagram);
 
         void close(double wait);
     };
@@ -263,6 +272,12 @@ namespace seshquic
     std::function<void(oxen::quic::message)> make_message_cb(py::object cb);
     oxen::quic::stream_constructor_callback make_stream_ctor_cb(py::object cb);
     oxen::quic::stream_open_callback make_stream_open_cb(py::object cb);
+    oxen::quic::dgram_data_callback make_dgram_cb(py::object cb);
+
+    /// Assembles opt::enable_datagrams from the keyword arguments that configure it, or nothing at
+    /// all when datagrams were not asked for.  Throws if the options were given without enabling.
+    std::optional<oxen::quic::opt::enable_datagrams> datagram_option(
+            bool enabled, bool splitting, std::optional<int> bufsize, std::optional<size_t> queue_limit);
 
     // Builders for `opt::` options from omittable Python arguments.  libquic's option handling
     // skips an empty optional, which is what lets its variadic interfaces be driven by keyword
