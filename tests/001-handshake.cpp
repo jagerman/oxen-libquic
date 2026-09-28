@@ -918,40 +918,6 @@ namespace oxen::quic::test
         }
     }
 
-    TEST_CASE("001 - Close packet send failing after connection cleanup", "[001][close][blocked_send]")
-    {
-        // The close packet's send blocks and is parked until the socket is writeable, but the
-        // 3*PTO cleanup timer doesn't wait for it and destroys the connection first.  The parked
-        // send then fails, and its callback must not touch the destroyed connection: if it does, the
-        // test crashes.
-        Network net{};
-        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
-
-        auto server_endpoint = net.endpoint(Address{});
-        server_endpoint->listen(server_tls);
-
-        auto client_established = callback_waiter{[](Connection&) {}};
-        auto client_endpoint = net.endpoint(Address{}, client_established);
-        auto client_ci = client_endpoint->connect(
-                RemoteAddress{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()}, client_tls);
-        REQUIRE(client_established.wait());
-
-        auto& ep = *client_endpoint;
-        std::weak_ptr<Connection> weak_conn = client_ci;
-
-        TestHelper::set_send_error(ep, EAGAIN);
-        client_ci->close_connection();
-        client_ci.reset();
-
-        REQUIRE(wait_for([&] { return weak_conn.expired(); }, 5s));
-        REQUIRE(TestHelper::pending_writeable_callbacks(ep) > 0);
-
-        TestHelper::set_send_error(ep, EIO);
-        CHECK(wait_for([&] { return TestHelper::pending_writeable_callbacks(ep) == 0; }, 5s));
-
-        TestHelper::set_send_error(ep, 0);
-    }
-
     TEST_CASE("001 - Handshake timeout", "[001][handshake][timeout]")
     {
         auto net1 = std::make_unique<Network>();

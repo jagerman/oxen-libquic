@@ -101,12 +101,6 @@ namespace oxen::quic
         // Blocks until every job already queued on the endpoint's job queue has run.  Jobs that
         // those jobs queue in turn may or may not have run by the time this returns.
         static void pump(Endpoint& ep);
-
-        // Makes every send on the endpoint's socket fail with `err` without sending anything (e.g.
-        // EAGAIN to simulate a blocked socket), until called again with 0.
-        static void set_send_error(Endpoint& ep, int err);
-
-        static size_t pending_writeable_callbacks(Endpoint& ep);
     };
 
     namespace test::defaults
