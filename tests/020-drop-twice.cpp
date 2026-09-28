@@ -17,16 +17,18 @@ namespace oxen::quic::test
 
         RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-        // Repeats the race several times (fresh connection each time) because which of the
-        // job queue's two processing batches ends up containing the second drop's deferred job -
-        // the one with the pending reset_soon destructor, or an earlier one without it - depends
-        // on real thread timing between this test and the endpoint's loop thread.
+        // Whether the second drop's job runs before or after the connection is destroyed depends on
+        // timing between this thread and the loop thread, so repeat to hit both orderings.  If it
+        // runs before, the unfixed code fires the close callback twice; if after, it is a
+        // use-after-free (which only ASan will reliably catch).
         for (int i = 0; i < 10; i++)
         {
+            std::atomic<int> closes{0};
             auto client_established = callback_waiter{[](Connection&) {}};
+            auto client_closed = [&closes](Connection&, uint64_t) { closes++; };
 
             Address client_local{};
-            auto client_endpoint = net_client.endpoint(client_local, client_established);
+            auto client_endpoint = net_client.endpoint(client_local, client_established, client_closed);
             auto client_ci = client_endpoint->connect(client_remote, client_tls);
 
             REQUIRE(client_established.wait());
@@ -34,35 +36,23 @@ namespace oxen::quic::test
             auto& conn = *client_ci;
             auto& ep = *client_endpoint;
 
-            // drop_connection's own teardown (delete_connection) removes the connection from the
-            // endpoint's tracking immediately but defers the actual C++ destructor by one more
-            // tick (job_queue.reset_soon), since some callers reach it from within a live
-            // connection method. That gap is the bug's window: a second, independent caller (e.g.
-            // a stateless reset arriving alongside an unrelated protocol error) can capture a
-            // reference to the connection while it is still alive and have its own deferred job
-            // run only after that reset_soon destructor has fired.
+            // The first drop's job removes the connection from the endpoint and hands the
+            // endpoint's reference to a reset_soon job.  `client_ci` still keeps it alive, so the
+            // second drop below is scheduled on a live connection, as every real caller does.
             TestHelper::drop_connection(ep, conn, io_error{CONN_STATELESS_RESET});
-
-            // Waits for the first drop's own deferred job to run. At this point delete_connection
-            // has already erased the connection from `conns` and queued its destructor via
-            // reset_soon, but that destructor is itself only queued - not yet run - so `conn` is
-            // still a live object.
             TestHelper::pump(ep);
 
-            // Second drop: scheduled while `conn` is still live (matching every real caller, which
-            // only ever reaches drop_connection through the connection's own currently-running
-            // method), but its deferred job lands behind the pending reset_soon destructor and so
-            // runs only after the connection has actually been destroyed.
             TestHelper::drop_connection(ep, conn, io_error{CONN_STATELESS_RESET});
 
+            // Whichever of this and the reset_soon job drops the last reference destroys the
+            // connection, and that can land on either side of the second drop's job.
             client_ci.reset();
 
-            // Runs the reset_soon destructor, then the second drop's deferred job.
             TestHelper::pump(ep);
             TestHelper::pump(ep);
-        }
 
-        log::info(test_cat, "Survived {} iterations", 10);
+            CHECK(closes == 1);
+        }
     }
 
 }  //  namespace oxen::quic::test
