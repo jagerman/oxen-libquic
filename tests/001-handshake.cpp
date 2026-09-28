@@ -1,6 +1,8 @@
 #include "unit_test.hpp"
 #include "utils.hpp"
 
+#include <atomic>
+
 #ifndef _WIN32
 extern "C"
 {
@@ -861,6 +863,93 @@ namespace oxen::quic::test
         CHECK(server_errcode == CONN_IDLE_CLOSED);
         CHECK(client_conn_closed.wait(timeout.timeout * 2));
         CHECK(client_errcode == CONN_IDLE_CLOSED);
+    }
+
+    TEST_CASE("001 - Connection dropped twice fires close callback once", "[001][close][drop_twice]")
+    {
+        Network net_client;
+        Network net_server;
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        Address server_local{};
+        auto server_endpoint = net_server.endpoint(server_local, [](Connection&) {});
+        server_endpoint->listen(server_tls);
+
+        RemoteAddress client_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        constexpr uint64_t error_code = 12345;
+
+        // Whether the second drop's job runs before or after the connection is destroyed depends on
+        // timing between this thread and the loop thread, so repeat to hit both orderings.  If it
+        // runs before, the unfixed code fires the close callback twice; if after, it is a
+        // use-after-free (which only ASan will reliably catch).
+        for (int i = 0; i < 10; i++)
+        {
+            std::atomic<int> closes{0};
+            auto client_established = callback_waiter{[](Connection&) {}};
+            auto client_closed = [&closes](Connection&, uint64_t) { closes++; };
+
+            Address client_local{};
+            auto client_endpoint = net_client.endpoint(client_local, client_established, client_closed);
+            auto client_ci = client_endpoint->connect(client_remote, client_tls);
+
+            REQUIRE(client_established.wait());
+
+            auto& conn = *client_ci;
+            auto& ep = *client_endpoint;
+
+            // The first drop's job removes the connection from the endpoint and hands the
+            // endpoint's reference to a reset_soon job.  `client_ci` still keeps it alive, so the
+            // second drop below is scheduled on a live connection, as every real caller does.
+            TestHelper::drop_connection(ep, conn, io_error{error_code});
+            TestHelper::pump(ep);
+
+            TestHelper::drop_connection(ep, conn, io_error{error_code});
+
+            // Whichever of this and the reset_soon job drops the last reference destroys the
+            // connection, and that can land on either side of the second drop's job.
+            client_ci.reset();
+
+            TestHelper::pump(ep);
+            TestHelper::pump(ep);
+
+            CHECK(closes == 1);
+        }
+    }
+
+    TEST_CASE("001 - Close packet send failing after connection cleanup", "[001][close][blocked_send]")
+    {
+        // The close packet's send blocks and is parked until the socket is writeable, but the
+        // 3*PTO cleanup timer doesn't wait for it and destroys the connection first.  The parked
+        // send then fails, and its callback must not touch the destroyed connection: if it does, the
+        // test crashes.
+        Network net{};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = net.endpoint(Address{});
+        server_endpoint->listen(server_tls);
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto client_endpoint = net.endpoint(Address{}, client_established);
+        auto client_ci = client_endpoint->connect(
+                RemoteAddress{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()}, client_tls);
+        REQUIRE(client_established.wait());
+
+        auto& ep = *client_endpoint;
+        std::weak_ptr<Connection> weak_conn = client_ci;
+
+        TestHelper::set_send_error(ep, EAGAIN);
+        client_ci->close_connection();
+        client_ci.reset();
+
+        REQUIRE(wait_for([&] { return weak_conn.expired(); }, 5s));
+        REQUIRE(TestHelper::pending_writeable_callbacks(ep) > 0);
+
+        TestHelper::set_send_error(ep, EIO);
+        CHECK(wait_for([&] { return TestHelper::pending_writeable_callbacks(ep) == 0; }, 5s));
+
+        TestHelper::set_send_error(ep, 0);
     }
 
     TEST_CASE("001 - Handshake timeout", "[001][handshake][timeout]")
