@@ -367,9 +367,15 @@ namespace oxen::quic
     void Endpoint::drop_connection(Connection& conn, io_error err)
     {
         log::debug(log_cat, "Scheduling drop connection ({}) with errcode {}", conn.reference_id(), err.code());
-        job_queue.call_soon([wself = weak_from_this(), &conn, err] {
+        // Captures the id and looks the connection back up when the job runs, as close_connection
+        // does: a raw `&conn` here can outlive the connection when a second drop/close reason
+        // fires for the same connection before this deferred job runs (e.g. a stateless reset
+        // arriving around the same time as an unrelated protocol error), since delete_connection
+        // defers the actual destruction to a later tick rather than freeing it inline.
+        job_queue.call_soon([wself = weak_from_this(), rid = conn.reference_id(), err] {
             if (auto self = wself.lock())
-                self->_drop_connection(conn, err);
+                if (auto c = self->get_conn(rid))
+                    self->_drop_connection(*c, err);
         });
     }
 

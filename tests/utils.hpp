@@ -95,6 +95,18 @@ namespace oxen::quic
         static void drop_connection_now(Endpoint& ep, Connection& conn, uint64_t ec);
 
         static UDPSocket::socket_t get_sock(Endpoint& ep);
+
+        // Exposes the private drop_connection for testing whether a second call on a stale
+        // reference (one whose connection has since actually been destroyed) is safe.
+        static void drop_connection(Endpoint& ep, Connection& conn, io_error err) { ep.drop_connection(conn, err); }
+
+        // Blocks until the endpoint's job queue has completed one full drain of everything
+        // already queued at the time of the call - i.e. one deferred-job "tick" - without waiting
+        // for anything queued as a *result* of running those jobs (which lands in the next tick).
+        static void pump(Endpoint& ep)
+        {
+            ep.job_queue.call_get([] {});
+        }
     };
 
     namespace test::defaults
