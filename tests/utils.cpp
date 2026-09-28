@@ -102,6 +102,16 @@ namespace oxen::quic
         ep.job_queue.call_get([] {});
     }
 
+    void TestHelper::set_send_error(Endpoint& ep, int err)
+    {
+        ep.job_queue.call_get([&ep, err] { ep.get_socket()->debug_send_error = err; });
+    }
+
+    size_t TestHelper::pending_writeable_callbacks(Endpoint& ep)
+    {
+        return ep.job_queue.call_get([&ep] { return ep.get_socket()->writeable_callbacks_.size(); });
+    }
+
     void TestHelper::enable_dgram_drop(Connection& ci)
     {
         auto& conn = static_cast<Connection&>(ci);

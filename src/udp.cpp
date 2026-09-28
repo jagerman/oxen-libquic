@@ -529,6 +529,9 @@ namespace oxen::quic
     std::pair<io_result, size_t> UDPSocket::send(
             const Path& path, const std::byte* buf, const size_t* bufsize, uint8_t ecn, size_t n_pkts)
     {
+        if (debug_send_error) [[unlikely]]
+            return {io_result{debug_send_error}, 0};
+
         auto* next_buf = const_cast<char*>(reinterpret_cast<const char*>(buf));
         int rv = 0;
         size_t sent = 0;

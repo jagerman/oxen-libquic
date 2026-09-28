@@ -154,6 +154,10 @@ namespace oxen::quic
         event_ptr wev_ = nullptr;
         std::vector<std::function<void()>> writeable_callbacks_;
 
+        /********* TEST SUITE FUNCTIONALITY *********/
+        // When non-zero, send() sends nothing and returns this error instead.
+        int debug_send_error{0};
+
         friend class TestHelper;
     };
 
