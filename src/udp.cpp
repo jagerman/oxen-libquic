@@ -343,7 +343,11 @@ namespace oxen::quic
         receive_callback_(Packet{bound_, payload, hdr});
     }
 
-    union alignas(cmsghdr) recv_cmsg_data
+    // This needs room for every control message we enable on the socket at once: the kernel
+    // silently drops whichever ones don't fit (setting MSG_CTRUNC), and Linux delivers pktinfo
+    // before the TOS/TCLASS ECN value, so undersizing this loses the ECN value on every packet.
+    // (Dual-stack Windows sockets deliver both pktinfo types).
+    struct alignas(cmsghdr) recv_cmsg_data
     {
         char ecn[CMSG_SPACE(sizeof(int))];  // a char most places but an int on windows because yay
         char pktinfo4[CMSG_SPACE(sizeof(in_pktinfo))];
