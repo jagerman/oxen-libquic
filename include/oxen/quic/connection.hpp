@@ -12,7 +12,6 @@
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <concepts>
@@ -454,14 +453,16 @@ namespace oxen::quic
         void on_packet_io_ready();
 
         struct pkt_tx_timer_updater;
-        bool send(pkt_tx_timer_updater* pkt_updater = nullptr);
+        bool send(pkt_tx_timer_updater& pkt_updater);
 
-        void flush_packets(std::chrono::steady_clock::time_point tp);
+        // Returns false if the endpoint's send batch is stalled on a blocked socket, in which case
+        // this connection gets woken once the stall clears and the caller should leave re-arming
+        // the retransmit timer until then.
+        [[nodiscard]] bool flush_packets(std::chrono::steady_clock::time_point tp);
 
-        std::array<std::byte, MAX_PMTUD_UDP_PAYLOAD * DATAGRAM_BATCH_SIZE> send_buffer;
-        std::array<size_t, DATAGRAM_BATCH_SIZE> send_buffer_size;
-        std::array<uint8_t, DATAGRAM_BATCH_SIZE> send_ecn;
-        size_t n_packets = 0;
+        // True while this connection is in the endpoint's list of connections waiting for a send
+        // stall to clear.
+        bool waiting_on_stall = false;
 
         void schedule_packet_retransmit(std::chrono::steady_clock::time_point ts);
 
