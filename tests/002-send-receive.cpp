@@ -973,4 +973,51 @@ namespace oxen::quic::test
 
         CHECK(resp.calls == 1);
     }
+
+    TEST_CASE("002 - Each packet in a batch is sent with its own ECN marking", "[002][ecn]")
+    {
+        // Equal-sized packets, so that only the differing ECN values can keep GSO from sending
+        // them all as a single batch.
+        const bool allow_gso = GENERATE(false, true);
+        const auto localhost = GENERATE("127.0.0.1"s, "::1"s);
+        constexpr std::array<uint8_t, 6> ecns{0, 2, 2, 0, 1, 3};
+
+        Loop loop;
+        std::vector<std::pair<int, uint8_t>> received;  // (packet index, ecn); loop thread only
+        std::promise<void> all_received;
+        std::unique_ptr<UDPSocket> sender, receiver;
+
+        loop.call_get([&] {
+            receiver = std::make_unique<UDPSocket>(loop.get_event_base(), Address{localhost, 0}, false, [&](Packet&& pkt) {
+                received.emplace_back(static_cast<int>(pkt.data()[0]), pkt.pkt_info.ecn);
+                if (received.size() == ecns.size())
+                    all_received.set_value();
+            });
+            sender = std::make_unique<UDPSocket>(loop.get_event_base(), Address{localhost, 0}, allow_gso, [](Packet&&) {});
+
+            std::array<std::byte, 100 * ecns.size()> bufs;
+            std::array<size_t, ecns.size()> sizes;
+            for (size_t i = 0; i < ecns.size(); i++)
+            {
+                std::fill_n(bufs.begin() + 100 * i, 100, static_cast<std::byte>(i));
+                sizes[i] = 100;
+            }
+            auto [res, sent] =
+                    sender->send(Path{sender->address(), receiver->address()}, bufs.data(), sizes.data(), ecns.data(), ecns.size());
+            REQUIRE(res.success());
+            REQUIRE(sent == ecns.size());
+        });
+
+        require_future(all_received.get_future());
+
+        loop.call_get([&] {
+            for (size_t i = 0; i < received.size(); i++)
+            {
+                CHECK(received[i].first == static_cast<int>(i));
+                CHECK(received[i].second == ecns[i]);
+            }
+            sender.reset();
+            receiver.reset();
+        });
+    }
 }  // namespace oxen::quic::test
