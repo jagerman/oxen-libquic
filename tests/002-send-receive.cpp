@@ -1,6 +1,8 @@
 #include "unit_test.hpp"
 
 #include <atomic>
+#include <map>
+#include <mutex>
 
 namespace oxen::quic::test
 {
@@ -1021,5 +1023,72 @@ namespace oxen::quic::test
             sender.reset();
             receiver.reset();
         });
+    }
+
+    TEST_CASE("002 - A blocked socket stalls the endpoint's sends until it clears", "[002][stall]")
+    {
+        Network test_net{};
+
+        constexpr int n_conns = 3;
+        std::vector<std::byte> msg(100'000);
+        for (size_t i = 0; i < msg.size(); i++)
+            msg[i] = static_cast<std::byte>(i % 251);
+
+        std::mutex received_mut;
+        std::map<Stream*, std::vector<std::byte>> received;
+        int complete = 0;
+        std::promise<void> all_received;
+        stream_data_callback server_data_cb = [&](Stream& s, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mut};
+            auto& r = received[&s];
+            r.insert(r.end(), dat.begin(), dat.end());
+            if (r.size() == msg.size() && ++complete == n_conns)
+                all_received.set_value();
+        };
+
+        std::atomic<int> established{0};
+        std::promise<void> all_established;
+        connection_established_callback client_established = [&](Connection&) {
+            if (++established == n_conns)
+                all_established.set_value();
+        };
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(Address{});
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls, server_data_cb));
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        // All of the connections share one client endpoint, and so one send batch.
+        auto client_endpoint = test_net.endpoint(Address{}, client_established);
+        std::vector<std::shared_ptr<Connection>> conns;
+        for (int i = 0; i < n_conns; i++)
+            conns.push_back(client_endpoint->connect(server_remote, client_tls));
+        require_future(all_established.get_future());
+
+        if (!TestHelper::block_sends_for(*client_endpoint, 250ms))
+            SKIP("Send stall testing requires a debug build of libquic");
+
+        std::vector<std::shared_ptr<Stream>> streams;
+        for (auto& c : conns)
+        {
+            streams.push_back(c->open_stream());
+            streams.back()->send(msg, nullptr);
+        }
+
+        require_future(all_received.get_future(), 5s);
+        {
+            std::lock_guard lock{received_mut};
+            for (auto& [s, r] : received)
+                CHECK(r == msg);
+        }
+
+        auto [stalls, skips] = TestHelper::stall_counts(*client_endpoint);
+        CHECK(stalls >= 1);
+        // A waiting connection only retries its flush when something new wakes it (incoming
+        // packets, new data to send, an already-armed timer); anything that kept re-waking waiters
+        // during the stall would instead show up here as a skip on every loop iteration, which over
+        // the 250ms stall is thousands of times.
+        CHECK(skips < 50);
     }
 }  // namespace oxen::quic::test

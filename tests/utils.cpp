@@ -87,6 +87,16 @@ namespace oxen::quic
         return ep.get_socket()->sock_;
     }
 
+    bool TestHelper::block_sends_for(Endpoint& ep, std::chrono::milliseconds duration)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_block_sends_for(duration); });
+    }
+
+    std::pair<size_t, size_t> TestHelper::stall_counts(Endpoint& ep)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_stall_counts(); });
+    }
+
     void TestHelper::drop_connection_now(Endpoint& ep, Connection& conn, uint64_t ec)
     {
         ep._drop_connection(conn, io_error{ec});
