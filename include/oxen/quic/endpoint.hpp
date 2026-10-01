@@ -37,6 +37,14 @@ struct event_base;
 
 namespace oxen::quic
 {
+    struct send_batch;
+    // Out-of-line so that Endpoint can hold a send_batch without its definition (which depends on
+    // build-time batching support, and so must not be part of the public layout).
+    struct send_batch_deleter
+    {
+        void operator()(send_batch* b) const;
+    };
+
     class Endpoint : public std::enable_shared_from_this<Endpoint>
     {
       public:
@@ -180,6 +188,10 @@ namespace oxen::quic
 
         Address _local;
         std::unique_ptr<UDPSocket> socket;
+
+        // Shared by all of this endpoint's connections; see send_batch.  Declared before `conns`
+        // so that it outlives the connections, which unregister from it when they halt.
+        std::unique_ptr<send_batch, send_batch_deleter> _send_batch;
         bool _accepting_inbound{false};
         bool _datagrams{false};
         bool _packet_splitting{false};
@@ -254,6 +266,22 @@ namespace oxen::quic
         /// (effectively dropping all packets) and a result is returned with `.failure()` true (and
         /// `.blocked()` false).
         io_result send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts);
+
+        send_batch& batch() { return *_send_batch; }
+
+        // Called when `owner`'s send of the batch blocked: leaves the unsent packets in the batch
+        // and waits for the socket to become writable again before letting anyone send.
+        void stall_send(Connection& owner);
+
+        // Called when a connection wants to flush during a stall, so that it gets woken once the
+        // stall clears.
+        void wait_for_send_stall(Connection& conn);
+
+        // Called when a connection halts: it can't be the owner of, or wait on, a stall any more.
+        void forget_send_stall(Connection& conn);
+
+        // Finishes sending a stalled batch once the socket is writable, then wakes the waiters.
+        void resume_stalled_send();
 
         // Drops a connection from the endpoint.  This is dangerous to call from *within* methods on
         // a connection itself, and generally should be deferred via a call_soon.

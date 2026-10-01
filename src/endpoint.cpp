@@ -134,8 +134,15 @@ namespace oxen::quic
         job_queue.call_soon([this, packet = std::move(pkt)]() mutable { handle_packet(std::move(packet)); });
     }
 
+    void send_batch_deleter::operator()(send_batch* b) const
+    {
+        delete b;
+    }
+
     void Endpoint::_init_internals()
     {
+        _send_batch.reset(new send_batch{});
+
         if (not _manual_routing)
         {
             log::debug(log_cat, "Starting new UDP socket on {}", _local);
@@ -1079,6 +1086,79 @@ namespace oxen::quic
 
         n_pkts = 0;
         return ret;
+    }
+
+    void Endpoint::stall_send(Connection& owner)
+    {
+        auto& b = batch();
+        assert(job_queue.inside());
+        assert(!b.stalled && b.n_packets > 0);
+        b.stalled = true;
+        b.owner = &owner;
+        socket->when_writeable([this] { resume_stalled_send(); });
+    }
+
+    void Endpoint::wait_for_send_stall(Connection& conn)
+    {
+        auto& b = batch();
+        assert(b.stalled);
+        if (b.owner == &conn || conn.waiting_on_stall)
+            return;
+        conn.waiting_on_stall = true;
+        b.waiters.push_back(&conn);
+    }
+
+    void Endpoint::forget_send_stall(Connection& conn)
+    {
+        auto& b = batch();
+        if (b.owner == &conn)
+            b.owner = nullptr;
+        if (conn.waiting_on_stall)
+        {
+            std::erase(b.waiters, &conn);
+            conn.waiting_on_stall = false;
+        }
+    }
+
+    void Endpoint::resume_stalled_send()
+    {
+        auto& b = batch();
+        assert(b.stalled);
+
+        auto* owner = b.owner;
+        // A dead owner is waiting to be closed and mustn't send anything more; one that has halted
+        // (closing or draining) cleared itself from `owner` already.
+        if (owner && !owner->dead)
+        {
+            auto rv = send_packets(owner->_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets);
+            if (rv.blocked())
+            {
+                socket->when_writeable([this] { resume_stalled_send(); });
+                return;
+            }
+            if (rv.failure())
+            {
+                log::warning(log_cat, "Error while trying to send packet: {}", rv.str_error());
+                drop_connection(*owner, io_error{CONN_SEND_FAIL});
+            }
+        }
+        else
+            log::debug(log_cat, "Discarding {} stalled packets of a connection that has gone away", b.n_packets);
+
+        b.n_packets = 0;
+        b.stalled = false;
+        b.owner = nullptr;
+
+        // The waiters go first, so that the owner (which already had its turn) goes to the back of
+        // the line.
+        for (auto* c : b.waiters)
+        {
+            c->waiting_on_stall = false;
+            c->packet_io_ready();
+        }
+        b.waiters.clear();
+        if (owner)
+            owner->packet_io_ready();
     }
 
     void Endpoint::send_or_queue_packet(
