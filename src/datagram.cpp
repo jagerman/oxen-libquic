@@ -338,13 +338,14 @@ namespace oxen::quic
                 for (size_t off = 0; off <= split_lookahead && it != buf.end(); ++off, ++it)
                 {
                     auto& dgram = *it;
+                    // A lookahead can only ever have its small second part sent from here, and its
+                    // first part only gets sent once it becomes the head (below).  So skipping any
+                    // datagram whose second part has gone leaves lookaheads that are entirely
+                    // unsent, which is what keeps a lookahead from completing before earlier
+                    // datagrams and inducing out-of-order delivery.
                     if (dgram.sent_second())
                         continue;
-                    if (i > 0 && dgram.status != SendStatus::Unsent)
-                        // For non-head lookaheads we can only send the small part if none of the
-                        // payload is sent already, because otherwise we would be inducing out-of-order
-                        // delivery if we complete the packet before earlier packets.
-                        continue;
+                    assert(off == 0 || dgram.status == SendStatus::Unsent);
                     std::span<const std::byte> part;
                     if (dgram.status == SendStatus::SentFirst)
                         // Already partially sent so we return the second part (the first split part is
