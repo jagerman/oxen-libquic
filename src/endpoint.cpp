@@ -1049,14 +1049,20 @@ namespace oxen::quic
 
         assert(n_pkts >= 1 && n_pkts <= MAX_BATCH);
 
+        size_t n_try = n_pkts;
 #ifndef NDEBUG
-        if (std::chrono::steady_clock::now() < batch().debug_block_until)
+        if (auto& b = batch(); std::chrono::steady_clock::now() < b.debug_block_until)
             return io_result{EAGAIN};
+        else if (b.debug_partial_sends > 0 && n_pkts > b.debug_partial_max)
+        {
+            b.debug_partial_sends--;
+            n_try = b.debug_partial_max;
+        }
 #endif
 
-        log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_pkts, path);
+        log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_try, path);
 
-        auto [ret, sent] = socket->send(path, buf, bufsize, ecn, n_pkts);
+        auto [ret, sent] = socket->send(path, buf, bufsize, ecn, n_try);
 
         if (ret.failure() && !ret.blocked())
         {
@@ -1181,6 +1187,19 @@ namespace oxen::quic
     {
 #ifndef NDEBUG
         batch().debug_block_until = std::chrono::steady_clock::now() + duration;
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool Endpoint::_debug_partial_sends([[maybe_unused]] size_t n_sends, [[maybe_unused]] size_t max_pkts)
+    {
+#ifndef NDEBUG
+        if (max_pkts < 1)
+            throw std::invalid_argument{"max_pkts must be at least 1"};
+        batch().debug_partial_sends = n_sends;
+        batch().debug_partial_max = max_pkts;
         return true;
 #else
         return false;

@@ -287,6 +287,9 @@ namespace oxen::quic
         // otherwise): makes socket sends report blocked for the given duration, returning false if
         // unsupported; and returns stall statistics so far (all zero if unsupported).
         bool _debug_block_sends_for(std::chrono::milliseconds duration);
+        // Makes the next `n_sends` socket sends of more than `max_pkts` (>= 1) packets send only
+        // that many, reporting the rest unsent; returns false if unsupported.
+        bool _debug_partial_sends(size_t n_sends, size_t max_pkts);
         struct debug_stall_stats
         {
             size_t stalls = 0;    // Times the send batch stalled on a blocked socket

@@ -92,6 +92,17 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_block_sends_for(duration); });
     }
 
+    bool TestHelper::partial_sends(Endpoint& ep, size_t n_sends, size_t max_pkts)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_partial_sends(n_sends, max_pkts); });
+    }
+
+    io_result TestHelper::send_packets(
+            Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
+    {
+        return ep.job_queue.call_get([&] { return ep.send_packets(path, buf, bufsize, ecn, n_pkts); });
+    }
+
     Endpoint::debug_stall_stats TestHelper::stall_counts(Endpoint& ep)
     {
         return ep.job_queue.call_get([&] { return ep._debug_stall_counts(); });

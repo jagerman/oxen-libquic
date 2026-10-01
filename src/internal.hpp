@@ -71,6 +71,10 @@ namespace oxen::quic
         // and counters of stalls, flushes skipped because of one, and stalled batches discarded
         // because their owner went away.
         std::chrono::steady_clock::time_point debug_block_until{};
+        // The next `debug_partial_sends` socket sends of more than `debug_partial_max` packets only
+        // send that many, reporting the rest as unsent (as a nearly-full socket would).
+        size_t debug_partial_sends = 0;
+        size_t debug_partial_max = 0;
         size_t debug_stalls = 0;
         size_t debug_stall_skips = 0;
         size_t debug_stall_discards = 0;
