@@ -116,8 +116,9 @@ namespace oxen::quic
         /// Queues an incoming stream of the given StreamT type, forwarding the given arguments to
         /// the StreamT constructor.  The stream will be given the next unseen incoming connection
         /// ID; it will be made ready once the associated stream id is seen from the remote
-        /// connection.  Note that this constructor bypasses the stream constructor callback for the
-        /// applicable stream id.
+        /// connection.  This is an alternative to handling the stream in the stream open callback:
+        /// that callback is *not* invoked when a queued stream opens.  Note that this constructor
+        /// also bypasses the stream constructor callback for the applicable stream id.
         template <std::derived_from<Stream> StreamT, typename... Args, typename EndpointDeferred = Endpoint>
         std::shared_ptr<StreamT> queue_incoming_stream(Args&&... args)
         {
@@ -132,7 +133,8 @@ namespace oxen::quic
         /// Queues a default incoming Stream object, either via the stream constructor callback (if
         /// set) or the default Stream constructor (if no constructor callback, or the callback
         /// returns nullptr).  The stream object will be made ready once the associated next
-        /// incoming stream ID is observed from the other end.
+        /// incoming stream ID is observed from the other end.  As with the templated version, the
+        /// stream open callback is not invoked when a queued stream opens.
         std::shared_ptr<Stream> queue_incoming_stream();
 
         /// Opens a new outgoing stream to the other end of the connection of the given StreamT
