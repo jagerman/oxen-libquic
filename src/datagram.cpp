@@ -5,7 +5,6 @@
 #include "internal.hpp"
 
 #include <numeric>
-#include <ranges>
 
 namespace oxen::quic
 {
@@ -227,6 +226,7 @@ namespace oxen::quic
             size_t i = 0;
             for (auto& pkt : buf)
             {
+                unsent_bytes += pkt.size() - pkt.unsent_size();
                 pkt.unsend();
                 if (++i > max_i)
                     break;
@@ -249,11 +249,8 @@ namespace oxen::quic
             else
             {
                 // Early data accepted, so now we can discard all the sent packets (which will be
-                // everything up, but not including, `early_data_head`).
-                [[maybe_unused]] size_t old_unsent = unsent_bytes;
-                for (auto& pkt : buf | std::views::take(*early_data_head))
-                    unsent_bytes -= pkt.size();
-                assert(unsent_bytes <= old_unsent);  // in case I'm dumb and the loop above is one too many
+                // everything up, but not including, `early_data_head`).  They were fully sent, so
+                // none of them contribute to unsent_bytes.
                 buf.erase(buf.begin(), buf.begin() + *early_data_head);
             }
             early_data_head.reset();
@@ -317,7 +314,7 @@ namespace oxen::quic
                 size_t before = buf.size();
                 do
                 {
-                    unsent_bytes -= buf.front().size();
+                    unsent_bytes -= buf.front().unsent_size();
                     buf.pop_front();
                 } while (!buf.empty() && buf.front().unsendable(max_dgram_piece, packet_splitting));
                 log::warning(
@@ -402,13 +399,13 @@ namespace oxen::quic
                 }
             }
 
+            last_size = result->payload().size();
             log::trace(
                     log_cat,
                     "Preparing datagram (id: {}) payload (size: {}): {}",
                     result->id,
-                    result->bufs[result->bufs_len - 1].len,
-                    buffer_printer{
-                            std::span{result->bufs[result->bufs_len - 1].base, result->bufs[result->bufs_len - 1].len}});
+                    last_size,
+                    buffer_printer{result->payload()});
             return result;
         }
 
@@ -417,6 +414,7 @@ namespace oxen::quic
             assert(last_i < buf.size());
             auto& b = buf[last_i];
             b.status |= last_sent;
+            unsent_bytes -= last_size;
 
             if (b.sent())
             {
@@ -427,10 +425,7 @@ namespace oxen::quic
                 if (early_data_head)
                     ++*early_data_head;
                 else
-                {
-                    unsent_bytes -= buf.front().size();
                     buf.pop_front();
-                }
             }
 
             last_i = std::numeric_limits<size_t>::max();

@@ -720,6 +720,82 @@ namespace oxen::quic::test
         CHECK(q.pending_bytes() == 0);
     }
 
+    TEST_CASE("007 - Datagram support: Pending bytes count only unsent split pieces", "[007][datagrams][queue_limit]")
+    {
+        dgram::queue q{true};
+        std::vector<std::byte> payload(2000);
+        q.emplace(payload, 1 << 2, nullptr);
+        q.emplace(payload, 2 << 2, nullptr);
+        REQUIRE(q.pending_bytes() == 4000);
+
+        auto send = [&q](bool prefer_small) {
+            auto d = q.fetch(1200, prefer_small);
+            REQUIRE(d);
+            q.confirm_sent();
+            return d->id;
+        };
+
+        // Small pieces first: the head's, then the lookahead's.
+        CHECK(send(true) == ((1 << 2) | 0b11));
+        CHECK(q.pending_bytes() == 3200);
+        CHECK(send(true) == ((2 << 2) | 0b11));
+        CHECK(q.pending_bytes() == 2400);
+
+        CHECK(send(false) == ((1 << 2) | 0b10));
+        CHECK(q.pending_bytes() == 1200);
+        CHECK(send(false) == ((2 << 2) | 0b10));
+        CHECK(q.pending_bytes() == 0);
+        CHECK(q.empty());
+    }
+
+    TEST_CASE("007 - Datagram support: Pending bytes across 0-RTT", "[007][datagrams][queue_limit][0rtt]")
+    {
+        dgram::queue q{true};
+        q.early_data_begin();
+        std::vector<std::byte> big(2000), small(100);
+        q.emplace(big, 1 << 2, nullptr);
+        q.emplace(small, 2 << 2, nullptr);
+        q.emplace(small, 3 << 2, nullptr);
+        REQUIRE(q.pending_bytes() == 2200);
+
+        auto send = [&q] {
+            auto d = q.fetch(1200, false);
+            REQUIRE(d);
+            q.confirm_sent();
+        };
+
+        // The big one goes out in two pieces, then the first small one goes out whole.
+        send();
+        CHECK(q.pending_bytes() == 1000);
+        send();
+        CHECK(q.pending_bytes() == 200);
+        send();
+        CHECK(q.pending_bytes() == 100);
+
+        SECTION("accepted")
+        {
+            q.early_data_end(true);
+            CHECK(q.size() == 1);
+            CHECK(q.pending_bytes() == 100);
+        }
+        SECTION("rejected")
+        {
+            q.early_data_end(false);
+            CHECK(q.size() == 3);
+            CHECK(q.pending_bytes() == 2200);
+        }
+        SECTION("retried with a piece in flight")
+        {
+            q.emplace(big, 4 << 2, nullptr);
+            send();  // the last small one
+            send();  // first piece of the new big one
+            CHECK(q.pending_bytes() == 800);
+            q.early_data_retry();
+            CHECK(q.size() == 4);
+            CHECK(q.pending_bytes() == 4200);
+        }
+    }
+
     TEST_CASE("007 - Datagram support: queued datagram discarded with its channel", "[007][datagrams][destruction]")
     {
         // The datagram half of the per-channel job queue.  There is no callback to observe here:

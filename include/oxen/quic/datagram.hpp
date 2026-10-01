@@ -70,6 +70,9 @@ namespace oxen::quic
             const ngtcp2_vec* data() const { return bufs.data(); }
             size_t size() const { return bufs_len; }
 
+            // The datagram data being sent, without the dgid prefix.
+            std::span<const uint8_t> payload() const { return {bufs[bufs_len - 1].base, bufs[bufs_len - 1].len}; }
+
             prepared(bool splitting_enabled, uint16_t id, std::span<const std::byte> data);
         };
 
@@ -282,6 +285,7 @@ namespace oxen::quic
             std::optional<size_t> early_data_head;
             size_t last_i = std::numeric_limits<size_t>::max();
             SendStatus last_sent = SendStatus::Unsent;
+            size_t last_size = 0;
 
             size_t unsent_bytes{0};
 
