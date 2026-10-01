@@ -317,6 +317,7 @@ namespace oxen::quic
                 size_t before = buf.size();
                 do
                 {
+                    unsent_bytes -= buf.front().size();
                     buf.pop_front();
                 } while (!buf.empty() && buf.front().unsendable(max_dgram_piece, packet_splitting));
                 log::warning(

@@ -698,6 +698,28 @@ namespace oxen::quic::test
         REQUIRE(drop_count_2 > drop_count);
     }
 
+    TEST_CASE("007 - Datagram support: Dropped unsendable datagrams leave the queue limit", "[007][datagrams][queue_limit]")
+    {
+        // The queue limit is enforced against pending_bytes(), so any bytes that a drop fails to
+        // release would count against the limit for the rest of the connection.
+        dgram::queue q{true};
+        std::vector<std::byte> big(2000), small(100);
+        q.emplace(big, 1 << 2, nullptr);
+        q.emplace(big, 2 << 2, nullptr);
+        q.emplace(small, 3 << 2, nullptr);
+        REQUIRE(q.pending_bytes() == 4100);
+
+        // Simulates a PMTU decrease: two 900-byte pieces can't carry the big ones any more.
+        auto d = q.fetch(900, false);
+        REQUIRE(d);
+        CHECK(d->id == 3 << 2);
+        CHECK(q.pending_bytes() == 100);
+
+        q.confirm_sent();
+        CHECK(q.empty());
+        CHECK(q.pending_bytes() == 0);
+    }
+
     TEST_CASE("007 - Datagram support: queued datagram discarded with its channel", "[007][datagrams][destruction]")
     {
         // The datagram half of the per-channel job queue.  There is no callback to observe here:
