@@ -1081,12 +1081,87 @@ namespace oxen::quic::test
                 CHECK(r == msg);
         }
 
-        auto [stalls, skips] = TestHelper::stall_counts(*client_endpoint);
-        CHECK(stalls >= 1);
+        auto stats = TestHelper::stall_counts(*client_endpoint);
+        CHECK(stats.stalls >= 1);
         // A waiting connection only retries its flush when something new wakes it (incoming
         // packets, new data to send, an already-armed timer); anything that kept re-waking waiters
         // during the stall would instead show up here as a skip on every loop iteration, which over
         // the 250ms stall is thousands of times.
-        CHECK(skips < 50);
+        CHECK(stats.skips < 50);
+        CHECK(stats.discards == 0);
+    }
+
+    TEST_CASE("002 - A stalled batch is discarded if its connection goes away", "[002][stall]")
+    {
+        Network test_net{};
+
+        std::vector<std::byte> msg(10'000);
+        for (size_t i = 0; i < msg.size(); i++)
+            msg[i] = static_cast<std::byte>(i % 251);
+
+        std::mutex received_mut;
+        std::map<Stream*, std::vector<std::byte>> received;
+        std::promise<void> one_received;
+        stream_data_callback server_data_cb = [&](Stream& s, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mut};
+            auto& r = received[&s];
+            r.insert(r.end(), dat.begin(), dat.end());
+            if (r.size() == msg.size())
+                one_received.set_value();
+        };
+
+        std::atomic<int> established{0};
+        std::promise<void> both_established;
+        connection_established_callback client_established = [&](Connection&) {
+            if (++established == 2)
+                both_established.set_value();
+        };
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(Address{});
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls, server_data_cb));
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        auto client_endpoint = test_net.endpoint(Address{}, client_established);
+        auto conn_a = client_endpoint->connect(server_remote, client_tls);
+        auto conn_b = client_endpoint->connect(server_remote, client_tls);
+        require_future(both_established.get_future());
+
+        if (!TestHelper::block_sends_for(*client_endpoint, 300ms))
+            SKIP("Send stall testing requires a debug build of libquic");
+
+        // A's first send blocks, so A's packets (all it ever gets to send) are the stalled batch.
+        auto stream_a = conn_a->open_stream();
+        stream_a->send(msg, nullptr);
+        REQUIRE(wait_for([&] { return TestHelper::stall_counts(*client_endpoint).stalls == 1; }, 200ms, 1ms));
+
+        auto stream_b = conn_b->open_stream();
+        stream_b->send(msg, nullptr);
+        REQUIRE(wait_for([&] { return TestHelper::stall_counts(*client_endpoint).skips >= 1; }, 200ms, 1ms));
+
+        SECTION("owner closed during the stall")
+        {
+            conn_a->close_connection();
+            REQUIRE(wait_for(
+                    [&] { return client_endpoint->job_queue.call_get([&] { return conn_a->is_closing(); }); }, 200ms, 1ms));
+        }
+        SECTION("owner died during the stall")
+        {
+            TestHelper::mark_dead(*conn_a);
+        }
+
+        // B was waiting on the stall, so it gets woken (and sends) once the socket unblocks.
+        require_future(one_received.get_future(), 5s);
+        std::this_thread::sleep_for(100ms);
+
+        CHECK(TestHelper::stall_counts(*client_endpoint).discards == 1);
+        {
+            std::lock_guard lock{received_mut};
+            REQUIRE(received.size() == 1);
+            CHECK(received.begin()->second == msg);
+        }
+
+        conn_a->close_connection();
     }
 }  // namespace oxen::quic::test

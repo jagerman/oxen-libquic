@@ -92,9 +92,14 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_block_sends_for(duration); });
     }
 
-    std::pair<size_t, size_t> TestHelper::stall_counts(Endpoint& ep)
+    Endpoint::debug_stall_stats TestHelper::stall_counts(Endpoint& ep)
     {
         return ep.job_queue.call_get([&] { return ep._debug_stall_counts(); });
+    }
+
+    void TestHelper::mark_dead(Connection& conn)
+    {
+        conn._endpoint.job_queue.call_get([&] { conn.dead = true; });
     }
 
     void TestHelper::drop_connection_now(Endpoint& ep, Connection& conn, uint64_t ec)

@@ -1154,7 +1154,12 @@ namespace oxen::quic
             }
         }
         else
+        {
             log::debug(log_cat, "Discarding {} stalled packets of a connection that has gone away", b.n_packets);
+#ifndef NDEBUG
+            b.debug_stall_discards++;
+#endif
+        }
 
         b.n_packets = 0;
         b.stalled = false;
@@ -1182,12 +1187,12 @@ namespace oxen::quic
 #endif
     }
 
-    std::pair<size_t, size_t> Endpoint::_debug_stall_counts() const
+    Endpoint::debug_stall_stats Endpoint::_debug_stall_counts() const
     {
 #ifndef NDEBUG
-        return {_send_batch->debug_stalls, _send_batch->debug_stall_skips};
+        return {_send_batch->debug_stalls, _send_batch->debug_stall_skips, _send_batch->debug_stall_discards};
 #else
-        return {0, 0};
+        return {};
 #endif
     }
 
