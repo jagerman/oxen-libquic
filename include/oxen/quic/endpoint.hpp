@@ -283,6 +283,12 @@ namespace oxen::quic
         // Finishes sending a stalled batch once the socket is writable, then wakes the waiters.
         void resume_stalled_send();
 
+        // Test hooks, only functional in debug builds of libquic (the state they use doesn't exist
+        // otherwise): makes socket sends report blocked for the given duration, returning false if
+        // unsupported; and returns {stalls, flushes skipped because of a stall} so far.
+        bool _debug_block_sends_for(std::chrono::milliseconds duration);
+        std::pair<size_t, size_t> _debug_stall_counts() const;
+
         // Drops a connection from the endpoint.  This is dangerous to call from *within* methods on
         // a connection itself, and generally should be deferred via a call_soon.
         void _drop_connection(Connection& conn, io_error err);

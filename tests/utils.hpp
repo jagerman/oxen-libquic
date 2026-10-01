@@ -96,6 +96,13 @@ namespace oxen::quic
 
         static UDPSocket::socket_t get_sock(Endpoint& ep);
 
+        // Makes the endpoint's socket sends report blocked for the given duration.  Returns false
+        // (and does nothing) if libquic wasn't built in debug mode, which this requires.
+        static bool block_sends_for(Endpoint& ep, std::chrono::milliseconds duration);
+        // Returns {stalls, flushes skipped because of a stall} so far (always {0, 0} in non-debug
+        // builds).
+        static std::pair<size_t, size_t> stall_counts(Endpoint& ep);
+
         static void drop_connection(Endpoint& ep, Connection& conn, io_error err);
 
         // Blocks until every job already queued on the endpoint's job queue has run.  Jobs that

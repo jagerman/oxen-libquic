@@ -10,6 +10,7 @@
 #include <fmt/format.h>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -65,6 +66,12 @@ namespace oxen::quic
 #ifndef NDEBUG
         // Set for the duration of a flush, to catch a flush starting inside another one.
         bool in_use = false;
+
+        // Test hooks (see Endpoint::_debug_block_sends_for): sends report blocked until this time,
+        // and counters of stalls and of flushes skipped because of one.
+        std::chrono::steady_clock::time_point debug_block_until{};
+        size_t debug_stalls = 0;
+        size_t debug_stall_skips = 0;
 #endif
     };
 

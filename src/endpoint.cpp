@@ -1049,6 +1049,11 @@ namespace oxen::quic
 
         assert(n_pkts >= 1 && n_pkts <= MAX_BATCH);
 
+#ifndef NDEBUG
+        if (std::chrono::steady_clock::now() < batch().debug_block_until)
+            return io_result{EAGAIN};
+#endif
+
         log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_pkts, path);
 
         auto [ret, sent] = socket->send(path, buf, bufsize, ecn, n_pkts);
@@ -1095,6 +1100,9 @@ namespace oxen::quic
         assert(!b.stalled && b.n_packets > 0);
         b.stalled = true;
         b.owner = &owner;
+#ifndef NDEBUG
+        b.debug_stalls++;
+#endif
         socket->when_writeable([this] { resume_stalled_send(); });
     }
 
@@ -1102,6 +1110,9 @@ namespace oxen::quic
     {
         auto& b = batch();
         assert(b.stalled);
+#ifndef NDEBUG
+        b.debug_stall_skips++;
+#endif
         if (b.owner == &conn || conn.waiting_on_stall)
             return;
         conn.waiting_on_stall = true;
@@ -1159,6 +1170,25 @@ namespace oxen::quic
         b.waiters.clear();
         if (owner)
             owner->packet_io_ready();
+    }
+
+    bool Endpoint::_debug_block_sends_for([[maybe_unused]] std::chrono::milliseconds duration)
+    {
+#ifndef NDEBUG
+        batch().debug_block_until = std::chrono::steady_clock::now() + duration;
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    std::pair<size_t, size_t> Endpoint::_debug_stall_counts() const
+    {
+#ifndef NDEBUG
+        return {_send_batch->debug_stalls, _send_batch->debug_stall_skips};
+#else
+        return {0, 0};
+#endif
     }
 
     void Endpoint::send_or_queue_packet(
