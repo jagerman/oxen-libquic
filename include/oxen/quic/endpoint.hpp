@@ -243,15 +243,17 @@ namespace oxen::quic
         /// with `.blocked()` set to true.  buf/bufsize/n_pkts are not altered (since they have not
         /// been sent).
         ///
-        /// If some, but not all, packets were sent then `buf`, `bufsize`, and `n_pkts` will be
+        /// `ecn` gives the ECN value of each packet.
+        ///
+        /// If some, but not all, packets were sent then `buf`, `bufsize`, `ecn`, and `n_pkts` will be
         /// updated so that the *unsent* `n_pkts` packets begin at buf, with sizes given in
-        /// `bufsize` -- so that the same `buf`/`bufsize`/`n_pkts` can be passed in when ready to
-        /// retry sending.
+        /// `bufsize` and ECN values in `ecn` -- so that the same `buf`/`bufsize`/`ecn`/`n_pkts` can
+        /// be passed in when ready to retry sending.
         ///
         /// If a more serious error occurs (other than a blocked socket) then `n_pkts` is set to 0
         /// (effectively dropping all packets) and a result is returned with `.failure()` true (and
         /// `.blocked()` false).
-        io_result send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t ecn, size_t& n_pkts);
+        io_result send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts);
 
         // Drops a connection from the endpoint.  This is dangerous to call from *within* methods on
         // a connection itself, and generally should be deferred via a call_soon.

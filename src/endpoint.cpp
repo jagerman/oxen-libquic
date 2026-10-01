@@ -1008,7 +1008,7 @@ namespace oxen::quic
         return {conn, true};
     }
 
-    io_result Endpoint::send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t ecn, size_t& n_pkts)
+    io_result Endpoint::send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -1060,12 +1060,14 @@ namespace oxen::quic
 
             else
             {
-                // We sent some but not all, so shift the unsent packets back to the beginning of buf/bufsize
+                // We sent some but not all, so shift the unsent packets back to the beginning of
+                // buf/bufsize/ecn
                 log::debug(log_cat, "UDP undersent {}/{}", sent, n_pkts);
                 size_t offset = std::accumulate(bufsize, bufsize + sent, size_t{0});
                 size_t len = std::accumulate(bufsize + sent, bufsize + n_pkts, size_t{0});
                 std::memmove(buf, buf + offset, len);
                 std::copy(bufsize + sent, bufsize + n_pkts, bufsize);
+                std::copy(ecn + sent, ecn + n_pkts, ecn);
                 n_pkts -= sent;
             }
 
@@ -1094,7 +1096,7 @@ namespace oxen::quic
 
         size_t n_pkts = 1;
         size_t bufsize = buf.size();
-        auto res = send_packets(p, buf.data(), &bufsize, ecn, n_pkts);
+        auto res = send_packets(p, buf.data(), &bufsize, &ecn, n_pkts);
 
         if (res.blocked() and not _manual_routing)
         {

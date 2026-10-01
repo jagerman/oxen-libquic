@@ -460,7 +460,7 @@ namespace oxen::quic
 
         std::array<std::byte, MAX_PMTUD_UDP_PAYLOAD * DATAGRAM_BATCH_SIZE> send_buffer;
         std::array<size_t, DATAGRAM_BATCH_SIZE> send_buffer_size;
-        uint8_t send_ecn = 0;
+        std::array<uint8_t, DATAGRAM_BATCH_SIZE> send_ecn;
         size_t n_packets = 0;
 
         void schedule_packet_retransmit(std::chrono::steady_clock::time_point ts);

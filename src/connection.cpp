@@ -1120,7 +1120,7 @@ namespace oxen::quic
             log::debug(log_cat, "enable_datagram_counter_test is true; sent packet count: {}", debug_datagram_counter);
         }
 
-        auto rv = endpoint().send_packets(_path, send_buffer.data(), send_buffer_size.data(), send_ecn, n_packets);
+        auto rv = endpoint().send_packets(_path, send_buffer.data(), send_buffer_size.data(), send_ecn.data(), n_packets);
 
         if (rv.blocked())
         {
@@ -1433,8 +1433,8 @@ namespace oxen::quic
 
             // success
             buf_pos += nwrite;
+            send_ecn[n_packets] = pkt_info.ecn;
             send_buffer_size[n_packets++] = nwrite;
-            send_ecn = pkt_info.ecn;
             stream_packets++;
 
             if (n_packets == MAX_BATCH)

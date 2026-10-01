@@ -659,7 +659,8 @@ namespace oxen::quic
                         break;
                     log::debug(log_cat, "completing outgoing delayed delivery of {}B packet along {}", data.size(), path);
                     size_t sz = data.size();
-                    auto [res, sent] = self.sock->send(path, data.data(), &sz, 0, 1);
+                    uint8_t ecn = 0;
+                    auto [res, sent] = self.sock->send(path, data.data(), &sz, &ecn, 1);
                     if (sent != 1)
                         log::critical(
                                 log_cat,
