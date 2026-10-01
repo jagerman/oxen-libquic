@@ -68,10 +68,12 @@ namespace oxen::quic
         bool in_use = false;
 
         // Test hooks (see Endpoint::_debug_block_sends_for): sends report blocked until this time,
-        // and counters of stalls and of flushes skipped because of one.
+        // and counters of stalls, flushes skipped because of one, and stalled batches discarded
+        // because their owner went away.
         std::chrono::steady_clock::time_point debug_block_until{};
         size_t debug_stalls = 0;
         size_t debug_stall_skips = 0;
+        size_t debug_stall_discards = 0;
 #endif
     };
 

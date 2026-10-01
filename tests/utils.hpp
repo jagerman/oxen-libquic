@@ -99,9 +99,12 @@ namespace oxen::quic
         // Makes the endpoint's socket sends report blocked for the given duration.  Returns false
         // (and does nothing) if libquic wasn't built in debug mode, which this requires.
         static bool block_sends_for(Endpoint& ep, std::chrono::milliseconds duration);
-        // Returns {stalls, flushes skipped because of a stall} so far (always {0, 0} in non-debug
-        // builds).
-        static std::pair<size_t, size_t> stall_counts(Endpoint& ep);
+        // Returns the endpoint's send stall statistics so far (all zero in non-debug builds).
+        static Endpoint::debug_stall_stats stall_counts(Endpoint& ep);
+
+        // Marks the connection dead, as a fatal ngtcp2 error does, but without also scheduling its
+        // close (so that the test controls what happens in between).
+        static void mark_dead(Connection& conn);
 
         static void drop_connection(Endpoint& ep, Connection& conn, io_error err);
 

@@ -285,9 +285,15 @@ namespace oxen::quic
 
         // Test hooks, only functional in debug builds of libquic (the state they use doesn't exist
         // otherwise): makes socket sends report blocked for the given duration, returning false if
-        // unsupported; and returns {stalls, flushes skipped because of a stall} so far.
+        // unsupported; and returns stall statistics so far (all zero if unsupported).
         bool _debug_block_sends_for(std::chrono::milliseconds duration);
-        std::pair<size_t, size_t> _debug_stall_counts() const;
+        struct debug_stall_stats
+        {
+            size_t stalls = 0;    // Times the send batch stalled on a blocked socket
+            size_t skips = 0;     // Flushes skipped because of a stall
+            size_t discards = 0;  // Stalled batches discarded because their owner went away
+        };
+        debug_stall_stats _debug_stall_counts() const;
 
         // Drops a connection from the endpoint.  This is dangerous to call from *within* methods on
         // a connection itself, and generally should be deferred via a call_soon.
