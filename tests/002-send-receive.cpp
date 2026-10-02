@@ -1745,4 +1745,39 @@ namespace oxen::quic::test
         SKIP("No don't-fragment socket option on this platform");
 #endif
     }
+
+    TEST_CASE("002 - Looking up the local address used to reach a peer", "[002][route]")
+    {
+        Loop loop;
+        std::unique_ptr<UDPSocket> sock;
+        auto bind = [&](Address addr) {
+            loop.call_get([&] { sock = std::make_unique<UDPSocket>(loop.get_event_base(), addr, false, [](Packet&&) {}); });
+            return sock->address().port();
+        };
+
+        SECTION("A socket bound to a specific address always uses it")
+        {
+            bind(Address{"127.0.0.1", 0});
+            CHECK(sock->local_address_for(Address{"127.0.0.1", 4433}) == sock->address());
+        }
+        SECTION("An IPv4 any-address socket uses the routed source address")
+        {
+            auto port = bind(Address{ipv4{}});
+            CHECK(sock->local_address_for(Address{"127.0.0.1", 4433}) == Address{"127.0.0.1", port});
+        }
+        SECTION("An IPv6-only any-address socket uses the routed source address")
+        {
+            auto port = bind(Address{ipv6{}});
+            CHECK(sock->local_address_for(Address{"::1", 4433}) == Address{"::1", port});
+        }
+        SECTION("A dual-stack socket reaches IPv4 peers at IPv4-mapped addresses")
+        {
+            auto port = bind(Address{});
+            CHECK(sock->local_address_for(Address{"127.0.0.1", 4433}.mapped_ipv4_as_ipv6()) ==
+                  Address{"127.0.0.1", port}.mapped_ipv4_as_ipv6());
+            CHECK(sock->local_address_for(Address{"::1", 4433}) == Address{"::1", port});
+        }
+
+        loop.call_get([&] { sock.reset(); });
+    }
 }  // namespace oxen::quic::test
