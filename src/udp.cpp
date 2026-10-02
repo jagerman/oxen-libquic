@@ -198,6 +198,69 @@ namespace oxen::quic
             log::error(log_cat, "Got error {} ({}) during {}", ec->value(), ec->message(), action);
     }
 
+    // QUIC packets must not be fragmented (RFC 9000 §14).  With fragmentation, PMTUD can confirm a
+    // size that the path only carries in pieces, and a packet too big for the path goes out in
+    // fragments rather than being refused with EMSGSIZE.  This is best effort: where an option is
+    // unavailable the OS default applies.
+    static void set_dont_fragment(UDPSocket::socket_t sock, bool ipv6, bool dual_stack)
+    {
+        [[maybe_unused]] auto set = [sock](int level, int opt, int value, std::string_view what, bool required) {
+#ifdef _WIN32
+            const DWORD v = value;
+            const auto* p = reinterpret_cast<const char*>(&v);
+#else
+            const int v = value;
+            const auto* p = &v;
+#endif
+            int rv = setsockopt(sock, level, opt, p, sizeof(v));
+            if (rv == 0)
+                return;
+            if (!required)
+                log::debug(log_cat, "Unable to enable {} on a dual-stack socket", what);
+            else
+            {
+#ifdef __APPLE__
+                // Only a warning: systems before macOS 11 / iOS 14 don't have IP_DONTFRAG, even
+                // when built with an SDK that defines it.
+                log::warning(
+                        log_cat,
+                        "Unable to enable {} ({}); packets may be fragmented",
+                        what,
+                        std::error_code{errno, std::system_category()}.message());
+#else
+                log_rv_error(rv, what);
+#endif
+            }
+        };
+
+        // A dual-stack IPv6 socket sends to IPv4(-mapped) addresses under the IPv4 options, which not
+        // every OS lets an IPv6 socket set.
+        [[maybe_unused]] const bool v4 = !ipv6 || dual_stack;
+        [[maybe_unused]] const bool v4_required = !ipv6;
+#if defined(_WIN32)
+        if (v4)
+            set(IPPROTO_IP, IP_DONTFRAGMENT, 1, "IP_DONTFRAGMENT", v4_required);
+        if (ipv6)
+            set(IPPROTO_IPV6, IPV6_DONTFRAG, 1, "IPV6_DONTFRAG", true);
+#elif defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_PROBE)
+        // PROBE rather than DO: both set DF, but DO also makes sends fail with EMSGSIZE once ICMP
+        // (which anyone who can guess the addresses can forge) reports a smaller path MTU, and an
+        // EMSGSIZE for an ordinary packet closes the connection.  With PROBE it only reflects the
+        // local interface's MTU.
+        if (v4)
+            set(IPPROTO_IP, IP_MTU_DISCOVER, IP_PMTUDISC_PROBE, "IP_MTU_DISCOVER", v4_required);
+        if (ipv6)
+            set(IPPROTO_IPV6, IPV6_MTU_DISCOVER, IPV6_PMTUDISC_PROBE, "IPV6_MTU_DISCOVER", true);
+#elif defined(IP_DONTFRAG)
+        if (v4)
+            set(IPPROTO_IP, IP_DONTFRAG, 1, "IP_DONTFRAG", v4_required);
+#ifdef IPV6_DONTFRAG
+        if (ipv6)
+            set(IPPROTO_IPV6, IPV6_DONTFRAG, 1, "IPV6_DONTFRAG", true);
+#endif
+#endif
+    }
+
 #ifdef _WIN32
     std::mutex get_wsa_mutex;
     LPFN_WSASENDMSG WSASendMsg = nullptr;
@@ -280,6 +343,8 @@ namespace oxen::quic
             const auto* v6only = addr.dual_stack ? sockopt_off_ptr : sockopt_on_ptr;
             check_rv(setsockopt(sock_, IPPROTO_IPV6, IPV6_V6ONLY, v6only, sockopt_onoff_size), "setting v6only flag");
         }
+
+        set_dont_fragment(sock_, addr.is_ipv6(), addr.dual_stack);
 
         // Enable ECN notification on packets we receive:
 #ifndef _WIN32

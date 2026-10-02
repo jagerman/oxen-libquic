@@ -1,3 +1,9 @@
+// macOS only declares IPV6_DONTFRAG (checked by the don't-fragment test, and set by udp.cpp) when
+// this is defined before any system header is included.
+#ifdef __APPLE__
+#define __APPLE_USE_RFC_3542
+#endif
+
 #include "unit_test.hpp"
 
 #include <atomic>
@@ -1677,5 +1683,56 @@ namespace oxen::quic::test
             REQUIRE(closed.wait_for(5s) == std::future_status::ready);
             CHECK(closed.get() == CONN_MTU_EXCEEDED);
         }
+    }
+
+    TEST_CASE("002 - UDP sockets are set not to fragment", "[002][dontfrag]")
+    {
+        // IPv4, IPv6 only, and dual-stack (an IPv6 socket that also carries IPv4-mapped traffic)
+        const auto local = GENERATE("127.0.0.1"s, "::1"s, ""s);
+        INFO("bound to [" << local << "]");
+        const bool ipv4 = local == "127.0.0.1";
+        const bool ipv6 = !ipv4;
+        [[maybe_unused]] const bool dual_stack = local.empty();
+
+        Network test_net{};
+        auto ep = test_net.endpoint(Address{local, 0});
+        auto sock = TestHelper::get_sock(*ep);
+
+        auto get = [sock](int level, int opt) -> std::optional<int> {
+#ifdef _WIN32
+            DWORD v = 0;
+            int len = sizeof(v);
+            if (getsockopt(sock, level, opt, reinterpret_cast<char*>(&v), &len) != 0)
+                return std::nullopt;
+#else
+            int v = 0;
+            socklen_t len = sizeof(v);
+            if (getsockopt(sock, level, opt, &v, &len) != 0)
+                return std::nullopt;
+#endif
+            return static_cast<int>(v);
+        };
+
+#if defined(_WIN32)
+        if (ipv4)
+            CHECK(get(IPPROTO_IP, IP_DONTFRAGMENT) == 1);
+        if (ipv6)
+            CHECK(get(IPPROTO_IPV6, IPV6_DONTFRAG) == 1);
+#elif defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_PROBE)
+        // Linux also takes the IPv4 option on a dual-stack IPv6 socket, for its IPv4-mapped traffic.
+        if (ipv4 || dual_stack)
+            CHECK(get(IPPROTO_IP, IP_MTU_DISCOVER) == IP_PMTUDISC_PROBE);
+        if (ipv6)
+            CHECK(get(IPPROTO_IPV6, IPV6_MTU_DISCOVER) == IPV6_PMTUDISC_PROBE);
+#elif defined(IP_DONTFRAG)
+        if (ipv4)
+            CHECK(get(IPPROTO_IP, IP_DONTFRAG) == 1);
+#ifdef IPV6_DONTFRAG
+        if (ipv6)
+            CHECK(get(IPPROTO_IPV6, IPV6_DONTFRAG) == 1);
+#endif
+#else
+        SKIP("No don't-fragment socket option on this platform");
+#endif
     }
 }  // namespace oxen::quic::test
