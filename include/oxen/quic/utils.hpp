@@ -86,9 +86,12 @@ namespace oxen::quic
     inline constexpr size_t MIN_LAZY_UDP_PAYLOAD = MIN_UDP_PAYLOAD;
     inline constexpr size_t MIN_GREEDY_UDP_PAYLOAD = 2 * MIN_LAZY_UDP_PAYLOAD;
     // The largest UDP payload we send or receive: what a 1500-byte (i.e. Ethernet) MTU carries over
-    // IPv4 (1500 - 20 - 8).  Over IPv6 that MTU carries at most 1452.
+    // IPv4 (1500 - 20 - 8).
     inline constexpr size_t MAX_PMTUD_UDP_PAYLOAD = 1472;
     inline constexpr size_t MAX_GREEDY_PMTUD_UDP_PAYLOAD = 2 * MAX_PMTUD_UDP_PAYLOAD;
+    // The largest UDP payload we send on IPv6 connections: what a 1500-byte MTU carries over IPv6
+    // (1500 - 40 - 8).
+    inline constexpr size_t MAX_IPV6_UDP_PAYLOAD = 1452;
 
     // The UDP payload sizes path MTU discovery probes.  ngtcp2 walks the list once, in order,
     // probing each size unless it is no larger than the largest size confirmed so far, or no
