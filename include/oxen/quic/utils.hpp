@@ -90,6 +90,36 @@ namespace oxen::quic
     inline constexpr size_t MAX_PMTUD_UDP_PAYLOAD = 1472;
     inline constexpr size_t MAX_GREEDY_PMTUD_UDP_PAYLOAD = 2 * MAX_PMTUD_UDP_PAYLOAD;
 
+    // The UDP payload sizes path MTU discovery probes.  ngtcp2 walks the list once, in order,
+    // probing each size unless it is no larger than the largest size confirmed so far, or no
+    // smaller than the smallest size that has failed; the order therefore decides the search.
+    // MTUs below are IPv6 (payload + 48) unless stated otherwise.
+    //
+    // 1372 and 1324 are the smallest path sizes at which session-router can carry a tunnelled QUIC
+    // connection's packets without splitting them; below them tunnels still work, but every
+    // full-size packet is split across two datagram pieces.  Its tunnels pin the inner connection to
+    // 1200-byte packets and send each one, with session-router's own headers added, as a single
+    // datagram on a link connection that has datagram splitting enabled.  libquic sends a datagram
+    // whole only if it fits in the path size after the link connection's own packet overhead: 46
+    // bytes, i.e. DATAGRAM_OVERHEAD_1RTT plus 2 for the split ID.
+    inline constexpr uint16_t DEFAULT_PMTUD_PROBES[] = {
+            1452,  // 1500 (Ethernet) MTU; tried first because it also fits that MTU over IPv4
+            1472,  // 1500 MTU over IPv4
+            1372,  // 1420 MTU (WireGuard).  Also the split threshold (not a limit: smaller paths still
+                   // work, by splitting) for session-router's UDP tunnel at the 1200 QUIC minimum,
+                   // which adds 126 bytes to each packet (a 48-byte IPv6 + UDP header, 37 bytes of
+                   // session layer and 41 of path layer): 1200 + 126, + 46 for the link connection's
+                   // own packet overhead = 1372.
+            1444,  // 1492 MTU (PPPoE)
+            1406,  // 1454 MTU
+            1342,  // 1390 MTU
+            1324,  // The split threshold (not a limit: smaller paths still work, by splitting) for
+                   // session-router's TCP tunnel at the 1200 QUIC minimum, which adds 78 bytes to each
+                   // packet (37 of session layer and 41 of path layer, with no IP header): 1200 + 78,
+                   // + 46 for the link connection's own packet overhead = 1324.
+            1232,  // 1280 MTU, the IPv6 minimum
+    };
+
     // This is the maximum overhead in the UDP packet of sending a packet containing only one single
     // datagram, and is used to determine the maximum datagram size we can send.
     //
