@@ -2,7 +2,7 @@ set(libquic_send_allowed "gso, sendmmsg, sendmsg")
 
 configure_file(version.cpp.in version.cpp @ONLY)
 
-session_dep(libngtcp2 1.1.0 WITH libngtcp2_crypto_gnutls)
+session_dep(libngtcp2 1.4.0 WITH libngtcp2_crypto_gnutls)
 session_dep(gnutls 3.7.2)
 session_dep(nettle 3.5)
 session_dep(libevent_core 2.1 WITH libevent_pthreads)
