@@ -109,6 +109,23 @@ namespace oxen::quic
         // query a list of all active inbound and outbound connections paired with a conn_interface
         std::list<std::shared_ptr<Connection>> get_all_conns(std::optional<Direction> d = std::nullopt);
 
+        // Hints that the host's network may have changed (e.g. a phone moving from Wi-Fi to
+        // cellular).  Each outbound connection that the host would now reach its peer from a
+        // different local address moves to that address, rediscovering how large a packet the new
+        // network can carry; connections whose address hasn't changed, and inbound connections, are
+        // unaffected.
+        //
+        // Calling this is optional: a connection notices the change by itself as soon as a packet
+        // from its peer arrives on the new address.  The hint helps when nothing arrives: if the new
+        // network carries smaller packets than the old one and the connection is in the middle of
+        // sending large ones, none of them gets through, so the peer has nothing to reply to until
+        // something small (e.g. a keep-alive) is sent.
+        //
+        // An application can call this from the operating system's network change notifications
+        // (e.g. Android's ConnectivityManager.NetworkCallback, or Apple's NWPathMonitor).  It may be
+        // called from any thread, and is cheap and harmless when nothing has actually changed.
+        void network_changed();
+
         const Address& local() const { return _local; }
 
         // Sets the local endpoint address.  This should *only* be used when using manual packet

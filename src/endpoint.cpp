@@ -215,6 +215,20 @@ namespace oxen::quic
         ctx.config.policy = _policy;
     }
 
+    void Endpoint::network_changed()
+    {
+        job_queue.call([this] {
+            for (const auto& [rid, conn] : conns)
+            {
+                if (!conn->is_outbound())
+                    continue;
+                // An arrival address checked on the old network says nothing about the new one.
+                conn->_unconfirmed_local = Address{};
+                conn->check_local_address();
+            }
+        });
+    }
+
     std::list<std::shared_ptr<Connection>> Endpoint::get_all_conns(std::optional<Direction> d)
     {
         std::list<std::shared_ptr<Connection>> ret{};

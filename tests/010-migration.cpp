@@ -121,7 +121,7 @@ namespace oxen::quic::test
         };
         auto wait_for_received = [&](std::string_view expected) {
             std::unique_lock lock{received_mutex};
-            return received_cv.wait_for(lock, 5s, [&] { return received == expected; });
+            return received_cv.wait_for(lock, 5s, [&] { return received.ends_with(expected); });
         };
 
         auto server_endpoint = test_net.endpoint(Address{"127.0.0.1", 0});
@@ -141,13 +141,23 @@ namespace oxen::quic::test
         auto stream = conn->open_stream();
         stream->send("one"s);
         REQUIRE(wait_for_received("one"));
+        // Let the server's acknowledgement arrive, so that nothing is in flight.
+        std::this_thread::sleep_for(200ms);
 
-        // The host moves to a different network: the server's acknowledgement of "two" arrives on
-        // the new address, and the client migrates to it.
+        // The host moves to a different network.
         const Address new_local{"127.0.0.2", port};
         REQUIRE(TestHelper::simulate_local_address(*client_endpoint, new_local));
-        stream->send("two"s);
-        REQUIRE(wait_for_received("onetwo"));
+
+        SECTION("Noticed when a packet arrives on the new address")
+        {
+            // The server's acknowledgement of "two" arrives on the new address.
+            stream->send("two"s);
+            REQUIRE(wait_for_received("two"));
+        }
+        SECTION("Told by the application, before any packet arrives")
+        {
+            client_endpoint->network_changed();
+        }
 
         for (int i = 0; i < 100 && conn->local() != new_local; i++)
             std::this_thread::sleep_for(10ms);
@@ -157,6 +167,6 @@ namespace oxen::quic::test
         CHECK(ngtcp2_local == new_local);
 
         stream->send("three"s);
-        CHECK(wait_for_received("onetwothree"));
+        CHECK(wait_for_received("three"));
     }
 }  // namespace oxen::quic::test
