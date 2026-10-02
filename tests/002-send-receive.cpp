@@ -1450,8 +1450,16 @@ namespace oxen::quic::test
         // "EIO": GSO can't work on the route, so it gets disabled.
         // "EINVAL, unsupported": the resend without GSO works, so GSO was the problem: disabled.
         // "EINVAL, too big": the resend without GSO fails with EMSGSIZE, so it was the size: GSO
-        //   stays on, and the oversized packets are dropped (and recovered by QUIC).
+        //   stays on, and since the refused packets are within the path's confirmed size the
+        //   connection closes.
         const auto mode = GENERATE(as<std::string>{}, "EIO", "EINVAL, unsupported", "EINVAL, too big");
+
+        std::promise<uint64_t> client_closed;
+        std::atomic<bool> closed_once{false};
+        connection_closed_callback on_client_closed = [&](Connection&, uint64_t ec) {
+            if (!closed_once.exchange(true))
+                client_closed.set_value(ec);
+        };
 
         Network test_net{};
 
@@ -1476,7 +1484,7 @@ namespace oxen::quic::test
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls, server_data_cb));
         RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
 
-        auto client_endpoint = test_net.endpoint(Address{}, client_established, opt::allow_gso{});
+        auto client_endpoint = test_net.endpoint(Address{}, client_established, on_client_closed, opt::allow_gso{});
         auto conn = client_endpoint->connect(server_remote, client_tls);
         REQUIRE(client_established.wait());
         if (!TestHelper::gso_enabled(*client_endpoint))
@@ -1492,19 +1500,22 @@ namespace oxen::quic::test
         auto stream = conn->open_stream();
         stream->send(msg, nullptr);
 
+        if (mode == "EINVAL, too big")
+        {
+            auto closed = client_closed.get_future();
+            require_future(closed, 5s);
+            CHECK(closed.get() == CONN_MTU_EXCEEDED);
+            CHECK(TestHelper::gso_enabled(*client_endpoint));
+            CHECK(TestHelper::send_stats(*client_endpoint).too_big_drops > 0);
+            return;
+        }
+
         require_future(all_received.get_future(), 5s);
         {
             std::lock_guard lock{received_mut};
             CHECK(received == msg);
         }
-
-        if (mode == "EINVAL, too big")
-        {
-            CHECK(TestHelper::gso_enabled(*client_endpoint));
-            CHECK(TestHelper::send_stats(*client_endpoint).too_big_drops > 0);
-        }
-        else
-            CHECK_FALSE(TestHelper::gso_enabled(*client_endpoint));
+        CHECK_FALSE(TestHelper::gso_enabled(*client_endpoint));
     }
 
     TEST_CASE("002 - max_udp_payload probe lists", "[002][pmtud]")
@@ -1603,5 +1614,68 @@ namespace oxen::quic::test
             CHECK(server_max == 1324);
         else if (list == "default" || list == "explicit default" || list == "max 9000")
             CHECK(server_max == expected);
+    }
+
+    TEST_CASE("002 - Packets refused as too big for the path", "[002][pmtud][senderr]")
+    {
+        // Declared before the Network, which closes the connection (calling this) as it shuts down.
+        std::promise<uint64_t> client_closed;
+        std::atomic<bool> closed_once{false};
+        connection_closed_callback on_client_closed = [&](Connection&, uint64_t ec) {
+            if (!closed_once.exchange(true))
+                client_closed.set_value(ec);
+        };
+
+        Network test_net{};
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(Address{});
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        auto client_endpoint = test_net.endpoint(Address{}, client_established, on_client_closed);
+        if (!TestHelper::simulate_mtu(*client_endpoint, 0))
+            SKIP("Simulating a path MTU requires a debug build of libquic");
+
+        // Packets above 1400 bytes are refused, so the largest probe size that fits is 1372.
+        constexpr size_t simulated_mtu = 1400;
+        auto closed = client_closed.get_future();
+
+        SECTION("Refused PMTUD probes are just dropped")
+        {
+            REQUIRE(TestHelper::simulate_mtu(*client_endpoint, simulated_mtu));
+            auto conn = client_endpoint->connect(server_remote, client_tls);
+            REQUIRE(client_established.wait());
+
+            // 1452 fails, then 1372 succeeds, then 1444 and 1406 fail; each failure takes a few
+            // PTOs to be given up on, but the refusals themselves happen as each probe is sent.
+            for (int i = 0; i < 50 && TestHelper::path_max_udp_payload(*conn) < 1372; i++)
+                std::this_thread::sleep_for(50ms);
+            std::this_thread::sleep_for(1s);
+
+            CHECK(TestHelper::path_max_udp_payload(*conn) == 1372);
+            CHECK(TestHelper::send_stats(*client_endpoint).too_big_drops > 0);
+            CHECK(closed.wait_for(0s) == std::future_status::timeout);
+        }
+
+        SECTION("A refused packet within the confirmed size closes the connection")
+        {
+            auto conn = client_endpoint->connect(server_remote, client_tls);
+            REQUIRE(client_established.wait());
+            for (int i = 0; i < 50 && TestHelper::path_max_udp_payload(*conn) < MAX_PMTUD_UDP_PAYLOAD; i++)
+                std::this_thread::sleep_for(20ms);
+            REQUIRE(TestHelper::path_max_udp_payload(*conn) == MAX_PMTUD_UDP_PAYLOAD);
+
+            // ngtcp2 can't lower the size it has confirmed, so every full-size packet would keep
+            // failing: the connection closes instead.
+            REQUIRE(TestHelper::simulate_mtu(*client_endpoint, simulated_mtu));
+            auto s = conn->open_stream();
+            s->send(std::string(100'000, 'x'));
+
+            REQUIRE(closed.wait_for(5s) == std::future_status::ready);
+            CHECK(closed.get() == CONN_MTU_EXCEEDED);
+        }
     }
 }  // namespace oxen::quic::test

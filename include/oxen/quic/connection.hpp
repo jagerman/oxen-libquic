@@ -464,6 +464,11 @@ namespace oxen::quic
         // stall to clear.
         bool waiting_on_stall = false;
 
+        // Called when a packet of `size` bytes was dropped because the socket refused it as too big
+        // for the path (EMSGSIZE): ignored for a PMTUD probe, but closes the connection for any
+        // packet within the path size ngtcp2 has confirmed.
+        void packet_too_big(size_t size);
+
         void schedule_packet_retransmit(std::chrono::steady_clock::time_point ts);
 
         bool draining = false;
