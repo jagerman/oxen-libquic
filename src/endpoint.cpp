@@ -166,7 +166,13 @@ namespace oxen::quic
 
     std::shared_ptr<Connection> Endpoint::_connect(RemoteAddress remote, std::shared_ptr<IOContext> ctx)
     {
-        Path path = Path{_local, std::move(remote)};
+        // Labelling the path with the source address the host's routing actually uses (rather than
+        // an any-address bind) means a change of that address is a change of path.
+        Address local = _local;
+        if (socket)
+            if (auto source = socket->local_address_for(remote))
+                local = *source;
+        Path path{local, std::move(remote)};
 
         auto rid = next_reference_id();
 
@@ -343,17 +349,16 @@ namespace oxen::quic
         }
 
         if (cptr->is_outbound())
-            // For a inbound packet on an outbound connection the packet handling code will have set
-            // the actual ip address in the packet, but that might not match the path that we
-            // created the connection with (because, often, we create using the any address), so
-            // forcibly reset the local address to the endpoint bind address so that we don't see it
-            // on an unknown path because of the anyaddr != specific address mismatch.
+            // An outbound connection's local address is our label for the network it's on, but its
+            // packets can arrive on a different local address (asymmetric routing on a multi-homed
+            // host, or no address at all where the OS doesn't report one), and ngtcp2 clients drop
+            // packets from a path they don't know, so give them the connection's own.
             //
             // We *don't* want to do this for inbound connections because we absolutely have to
             // return those from the same address they arrived on (otherwise, on a multi-IP machine,
             // you could have something arrive on IP2 but reply on IP1, which the remote side will
             // not accept).
-            pkt.path.local = _local;
+            pkt.path.local = cptr->_path.local;
 
         cptr->handle_conn_packet(std::move(pkt));
     }
