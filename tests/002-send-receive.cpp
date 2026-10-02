@@ -1010,8 +1010,13 @@ namespace oxen::quic::test
                 std::fill_n(bufs.begin() + 100 * i, 100, static_cast<std::byte>(i));
                 sizes[i] = 100;
             }
-            auto [res, sent] =
-                    sender->send(Path{sender->address(), receiver->address()}, bufs.data(), sizes.data(), ecns.data(), ecns.size());
+            auto [res, sent] = sender->send(
+                    Path{sender->address(), receiver->address()},
+                    bufs.data(),
+                    sizes.data(),
+                    ecns.data(),
+                    ecns.size(),
+                    false);
             REQUIRE(res.success());
             REQUIRE(sent == ecns.size());
         });
@@ -1063,7 +1068,12 @@ namespace oxen::quic::test
                 buf.insert(buf.end(), sizes[i], static_cast<std::byte>(i));
             std::array<uint8_t, sizes.size()> ecns{};
             auto [res, sent] = sender->send(
-                    Path{sender->address(), receiver->address()}, buf.data(), sizes.data(), ecns.data(), sizes.size());
+                    Path{sender->address(), receiver->address()},
+                    buf.data(),
+                    sizes.data(),
+                    ecns.data(),
+                    sizes.size(),
+                    false);
             REQUIRE(res.success());
             REQUIRE(sent == sizes.size());
         });

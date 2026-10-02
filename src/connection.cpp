@@ -1126,7 +1126,8 @@ namespace oxen::quic
         }
 
         size_t too_big = 0;
-        auto rv = _endpoint.send_packets(_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, &too_big);
+        auto rv = _endpoint.send_packets(
+                _path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, !is_outbound(), &too_big);
         if (too_big)
             packet_too_big(too_big);
 

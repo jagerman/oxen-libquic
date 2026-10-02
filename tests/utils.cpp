@@ -126,7 +126,7 @@ namespace oxen::quic
     io_result TestHelper::send_packets(
             Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
     {
-        return ep.job_queue.call_get([&] { return ep.send_packets(path, buf, bufsize, ecn, n_pkts); });
+        return ep.job_queue.call_get([&] { return ep.send_packets(path, buf, bufsize, ecn, n_pkts, false); });
     }
 
     Endpoint::debug_send_stats TestHelper::send_stats(Endpoint& ep)
@@ -712,7 +712,7 @@ namespace oxen::quic
                     log::debug(log_cat, "completing outgoing delayed delivery of {}B packet along {}", data.size(), path);
                     size_t sz = data.size();
                     uint8_t ecn = 0;
-                    auto [res, sent] = self.sock->send(path, data.data(), &sz, &ecn, 1);
+                    auto [res, sent] = self.sock->send(path, data.data(), &sz, &ecn, 1, true);
                     if (sent != 1)
                         log::critical(
                                 log_cat,

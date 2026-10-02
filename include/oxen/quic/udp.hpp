@@ -117,6 +117,10 @@ namespace oxen::quic
         /// payload given by the `bufsize` array, and the ECN value of each packet given by the `ecn`
         /// array.
         ///
+        /// If `pin_source` is true and the socket is bound to the any-address, the packets are sent
+        /// from `path.local` (when that is a specific address), as replies must be on a multi-homed
+        /// host; otherwise the OS chooses the source address from its routing.
+        ///
         /// If not all packets could be sent because the socket would block it is up to the caller
         /// to deal with it: if such a block occurs it is always the first `n` packets that will
         /// have been sent; the caller then has to decide whether to drop the rest, or hold onto
@@ -126,7 +130,12 @@ namespace oxen::quic
         /// retry however much of the send is remaining (via resend()) and, once the send is fully
         /// completed, resuming creation of new packets.
         std::pair<io_result, size_t> send(
-                const Path& path, const std::byte* bufs, const size_t* bufsize, const uint8_t* ecn, size_t n_pkts);
+                const Path& path,
+                const std::byte* bufs,
+                const size_t* bufsize,
+                const uint8_t* ecn,
+                size_t n_pkts,
+                bool pin_source);
 
         /// Queues a callback to invoke when the UDP socket becomes writeable again.
         ///

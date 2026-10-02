@@ -259,7 +259,8 @@ namespace oxen::quic
         /// with `.blocked()` set to true.  buf/bufsize/n_pkts are not altered (since they have not
         /// been sent).
         ///
-        /// `ecn` gives the ECN value of each packet.
+        /// `ecn` gives the ECN value of each packet.  `pin_source` is passed on to UDPSocket::send:
+        /// true sends from `path.local`, which replies to a peer must do.
         ///
         /// If some, but not all, packets were sent then `buf`, `bufsize`, `ecn`, and `n_pkts` will be
         /// updated so that the *unsent* `n_pkts` packets begin at buf, with sizes given in
@@ -276,7 +277,13 @@ namespace oxen::quic
         /// (effectively dropping all packets) and a result is returned with `.failure()` true (and
         /// `.blocked()` false).
         io_result send_packets(
-                const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts, size_t* too_big = nullptr);
+                const Path& path,
+                std::byte* buf,
+                size_t* bufsize,
+                uint8_t* ecn,
+                size_t& n_pkts,
+                bool pin_source,
+                size_t* too_big = nullptr);
 
         send_batch& batch() { return *_send_batch; }
 
@@ -425,9 +432,13 @@ namespace oxen::quic
         //
         // The callback will be called with the final io_result once the packet is sent (or once it
         // fails).  It can be called immediately, if the packet sends right away, but can be delayed
-        // if the socket would block.
+        // if the socket would block.  `pin_source` is as for send_packets.
         void send_or_queue_packet(
-                const Path& p, std::vector<std::byte> buf, uint8_t ecn, std::function<void(io_result)> callback = nullptr);
+                const Path& p,
+                std::vector<std::byte> buf,
+                uint8_t ecn,
+                bool pin_source,
+                std::function<void(io_result)> callback = nullptr);
 
         void send_stateless_reset(const Packet& pkt, const quic_cid& cid);
 
