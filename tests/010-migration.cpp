@@ -105,4 +105,58 @@ namespace oxen::quic::test
         require_future(conn_future_b);
         CHECK(client_established_b.wait());
     }
+
+    TEST_CASE("010 - A change of the host's source address migrates the connection", "[010][migration][network]")
+    {
+        Network test_net{};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        std::mutex received_mutex;
+        std::string received;
+        std::condition_variable received_cv;
+        stream_data_callback server_data_cb = [&](Stream&, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mutex};
+            received += view(dat);
+            received_cv.notify_all();
+        };
+        auto wait_for_received = [&](std::string_view expected) {
+            std::unique_lock lock{received_mutex};
+            return received_cv.wait_for(lock, 5s, [&] { return received == expected; });
+        };
+
+        auto server_endpoint = test_net.endpoint(Address{"127.0.0.1", 0});
+        server_endpoint->listen(server_tls, server_data_cb);
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, "127.0.0.1", server_endpoint->local().port()};
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto client_endpoint = test_net.endpoint(Address{ipv4{}}, client_established);
+        if (!TestHelper::simulate_local_address(*client_endpoint, std::nullopt))
+            SKIP("Simulating a change of the host's address requires a debug build of libquic");
+        const auto port = client_endpoint->local().port();
+
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+        CHECK(conn->local() == Address{"127.0.0.1", port});
+
+        auto stream = conn->open_stream();
+        stream->send("one"s);
+        REQUIRE(wait_for_received("one"));
+
+        // The host moves to a different network: the server's acknowledgement of "two" arrives on
+        // the new address, and the client migrates to it.
+        const Address new_local{"127.0.0.2", port};
+        REQUIRE(TestHelper::simulate_local_address(*client_endpoint, new_local));
+        stream->send("two"s);
+        REQUIRE(wait_for_received("onetwo"));
+
+        for (int i = 0; i < 100 && conn->local() != new_local; i++)
+            std::this_thread::sleep_for(10ms);
+        CHECK(conn->local() == new_local);
+        auto ngtcp2_local = TestHelper::ngtcp2_path_local(*conn);
+        INFO("ngtcp2 path local: " << ngtcp2_local.to_string());
+        CHECK(ngtcp2_local == new_local);
+
+        stream->send("three"s);
+        CHECK(wait_for_received("onetwothree"));
+    }
 }  // namespace oxen::quic::test

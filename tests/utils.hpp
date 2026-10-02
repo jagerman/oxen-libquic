@@ -110,6 +110,11 @@ namespace oxen::quic
         // Makes the endpoint's next `n_sends` socket sends fail with `err`.  Returns false (and does
         // nothing) if not a debug build.
         static bool fail_sends(Endpoint& ep, int err, size_t n_sends);
+        // Simulates the host's address changing to `addr` (nullopt to stop), as seen by the
+        // endpoint.  Returns false (and does nothing) if not a debug build.
+        static bool simulate_local_address(Endpoint& ep, std::optional<Address> addr);
+        // Returns the local address of ngtcp2's current path for the connection.
+        static Address ngtcp2_path_local(Connection& conn);
 
         // Makes the endpoint socket's upcoming sends fail, in order, with `gso_errors` (sends using
         // GSO) and `plain_errors` (sends without it).  Returns false (and does nothing) if not a

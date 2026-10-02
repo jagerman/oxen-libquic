@@ -107,6 +107,16 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_fail_sends(err, n_sends); });
     }
 
+    bool TestHelper::simulate_local_address(Endpoint& ep, std::optional<Address> addr)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_simulate_local_address(std::move(addr)); });
+    }
+
+    Address TestHelper::ngtcp2_path_local(Connection& conn)
+    {
+        return conn._endpoint.job_queue.call_get([&] { return Address{ngtcp2_conn_get_path(conn)->local}; });
+    }
+
     bool TestHelper::fail_socket_sends(Endpoint& ep, std::vector<int> gso_errors, std::vector<int> plain_errors)
     {
         return ep.job_queue.call_get(

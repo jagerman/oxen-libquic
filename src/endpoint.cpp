@@ -169,9 +169,8 @@ namespace oxen::quic
         // Labelling the path with the source address the host's routing actually uses (rather than
         // an any-address bind) means a change of that address is a change of path.
         Address local = _local;
-        if (socket)
-            if (auto source = socket->local_address_for(remote))
-                local = *source;
+        if (auto source = local_address_for(remote))
+            local = *source;
         Path path{local, std::move(remote)};
 
         auto rid = next_reference_id();
@@ -349,16 +348,28 @@ namespace oxen::quic
         }
 
         if (cptr->is_outbound())
-            // An outbound connection's local address is our label for the network it's on, but its
-            // packets can arrive on a different local address (asymmetric routing on a multi-homed
-            // host, or no address at all where the OS doesn't report one), and ngtcp2 clients drop
-            // packets from a path they don't know, so give them the connection's own.
+        {
+#ifndef NDEBUG
+            if (const auto& simulated = batch().debug_local_address)
+                pkt.path.local = *simulated;
+#endif
+            // An outbound connection's local address is our label for the network it's on.  A
+            // packet arriving on a different local address is a sign that the host's network has
+            // changed, but it can also just be asymmetric routing on a multi-homed host, so the
+            // connection checks the source address it would now send from before migrating.  (The
+            // any-address means the OS didn't report the address at all.)
+            if (!pkt.path.local.is_any_addr() && pkt.path.local != cptr->_path.local)
+                cptr->local_address_mismatch(pkt.path.local);
+
+            // Either way, ngtcp2 clients drop packets from a path they don't know, so the packet gets
+            // the connection's own local address.
             //
             // We *don't* want to do this for inbound connections because we absolutely have to
             // return those from the same address they arrived on (otherwise, on a multi-IP machine,
             // you could have something arrive on IP2 but reply on IP1, which the remote side will
             // not accept).
             pkt.path.local = cptr->_path.local;
+        }
 
         cptr->handle_conn_packet(std::move(pkt));
     }
@@ -1329,6 +1340,27 @@ namespace oxen::quic
         b.debug_partial_sends = n_sends;
         b.debug_partial_max = max_pkts;
         b.debug_partial_then_block = then_block;
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    std::optional<Address> Endpoint::local_address_for(const Address& remote) const
+    {
+#ifndef NDEBUG
+        if (const auto& simulated = _send_batch->debug_local_address)
+            return simulated;
+#endif
+        if (!socket)
+            return std::nullopt;
+        return socket->local_address_for(remote);
+    }
+
+    bool Endpoint::_debug_simulate_local_address([[maybe_unused]] std::optional<Address> addr)
+    {
+#ifndef NDEBUG
+        batch().debug_local_address = std::move(addr);
         return true;
 #else
         return false;
