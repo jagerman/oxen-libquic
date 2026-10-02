@@ -1940,6 +1940,9 @@ namespace oxen::quic
 
         ngtcp2_transport_params_default(&params);
 
+        // The largest packet we can receive (our receive buffers hold MAX_PMTUD_UDP_PAYLOAD).
+        params.max_udp_payload_size = MAX_PMTUD_UDP_PAYLOAD;
+
         if (max_udp_payload)
         {
             settings.max_tx_udp_payload_size = *max_udp_payload;
@@ -1969,10 +1972,6 @@ namespace oxen::quic
             // This is effectively an "unlimited" value, which lets us accept any size that fits into a QUIC packet
             // (see rfc 9221)
             params.max_datagram_frame_size = 65535;
-            // default ngtcp2 values set by ngtcp2_settings_default_versioned
-            params.max_udp_payload_size = NGTCP2_DEFAULT_MAX_RECV_UDP_PAYLOAD_SIZE;  // 65527
-            settings.max_tx_udp_payload_size = MAX_PMTUD_UDP_PAYLOAD;                // 1500 - 48 (approximate overhead)
-            // settings.no_tx_udp_payload_size_shaping = 1;
             callbacks.recv_datagram = connection_callbacks::on_recv_datagram;
 #ifndef NDEBUG
             callbacks.ack_datagram = connection_callbacks::on_ack_datagram;
