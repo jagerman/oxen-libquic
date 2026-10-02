@@ -655,13 +655,18 @@ namespace oxen::quic
     }
 
     std::pair<io_result, size_t> UDPSocket::send(
-            const Path& path, const std::byte* buf, const size_t* bufsize, const uint8_t* ecn, size_t n_pkts)
+            const Path& path,
+            const std::byte* buf,
+            const size_t* bufsize,
+            const uint8_t* ecn,
+            size_t n_pkts,
+            bool pin_source)
     {
         auto* next_buf = const_cast<char*>(reinterpret_cast<const char*>(buf));
         int rv = 0;
         size_t sent = 0;
 
-        const bool set_source_addr = bound_.is_any_addr() && !path.local.is_any_addr();
+        const bool set_source_addr = pin_source && bound_.is_any_addr() && !path.local.is_any_addr();
 
 #ifdef _WIN32
         // On Windows, when using a dual-stack socket, IPv4 destinations must always be

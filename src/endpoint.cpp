@@ -502,15 +502,24 @@ namespace oxen::quic
         // A blocked send parks this callback on the socket until it becomes writeable, but the
         // cleanup scheduled just above is on a timer that does not wait for that: it can fire, and
         // destroy the connection, first.  Hence the id-and-lookup rather than capturing `conn`.
-        send_or_queue_packet(conn.path(), std::move(buf), /*ecn=*/0, [this, rid = conn.reference_id()](io_result rv) {
-            if (not rv.failure())
-                return;
+        send_or_queue_packet(
+                conn.path(),
+                std::move(buf),
+                /*ecn=*/0,
+                !conn.is_outbound(),
+                [this, rid = conn.reference_id()](io_result rv) {
+                    if (not rv.failure())
+                        return;
 
-            log::warning(log_cat, "Error: failed to send close packet [{}]; removing connection ({})", rv.str_error(), rid);
+                    log::warning(
+                            log_cat,
+                            "Error: failed to send close packet [{}]; removing connection ({})",
+                            rv.str_error(),
+                            rid);
 
-            if (auto c = get_conn(rid))
-                delete_connection(*c);
-        });
+                    if (auto c = get_conn(rid))
+                        delete_connection(*c);
+                });
     }
 
     void Endpoint::delete_connection(Connection& conn)
@@ -765,7 +774,7 @@ namespace oxen::quic
         assert(static_cast<size_t>(nwrite) <= buf.size());
         buf.resize(nwrite);
 
-        send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0);
+        send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0, /* pin_source */ true);
     }
 
     void Endpoint::send_retry(const Packet& pkt, ngtcp2_pkt_hd* hdr)
@@ -815,7 +824,7 @@ namespace oxen::quic
         assert(static_cast<size_t>(nwrite) <= buf.size());
         buf.resize(nwrite);
 
-        send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0);
+        send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0, /* pin_source */ true);
     }
 
     void Endpoint::send_stateless_connection_close(const Packet& pkt, ngtcp2_pkt_hd* hdr, io_error ec)
@@ -835,7 +844,7 @@ namespace oxen::quic
         assert(static_cast<size_t>(nwrite) <= buf.size());
         buf.resize(nwrite);
 
-        send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0);
+        send_or_queue_packet(pkt.path, std::move(buf), /* ecn */ 0, /* pin_source */ true);
     }
 
     void Endpoint::store_path_validation_token(Address remote, std::vector<unsigned char> token)
@@ -1048,7 +1057,13 @@ namespace oxen::quic
     }
 
     io_result Endpoint::send_packets(
-            const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts, size_t* too_big)
+            const Path& path,
+            std::byte* buf,
+            size_t* bufsize,
+            uint8_t* ecn,
+            size_t& n_pkts,
+            bool pin_source,
+            size_t* too_big)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -1128,7 +1143,7 @@ namespace oxen::quic
 #endif
             {
                 log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_try, path);
-                result = socket->send(path, buf, bufsize, ecn, n_try);
+                result = socket->send(path, buf, bufsize, ecn, n_try, pin_source);
             }
             auto& [ret, sent] = result;
 
@@ -1247,7 +1262,8 @@ namespace oxen::quic
         if (owner && !owner->dead)
         {
             size_t too_big = 0;
-            auto rv = send_packets(owner->_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, &too_big);
+            auto rv = send_packets(
+                    owner->_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, !owner->is_outbound(), &too_big);
             if (too_big)
                 owner->packet_too_big(too_big);
             if (rv.blocked())
@@ -1347,7 +1363,7 @@ namespace oxen::quic
     }
 
     void Endpoint::send_or_queue_packet(
-            const Path& p, std::vector<std::byte> buf, uint8_t ecn, std::function<void(io_result)> callback)
+            const Path& p, std::vector<std::byte> buf, uint8_t ecn, bool pin_source, std::function<void(io_result)> callback)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -1361,12 +1377,12 @@ namespace oxen::quic
 
         size_t n_pkts = 1;
         size_t bufsize = buf.size();
-        auto res = send_packets(p, buf.data(), &bufsize, &ecn, n_pkts);
+        auto res = send_packets(p, buf.data(), &bufsize, &ecn, n_pkts, pin_source);
 
         if (res.blocked() and not _manual_routing)
         {
-            socket->when_writeable([this, p, buf = std::move(buf), ecn, cb = std::move(callback)]() mutable {
-                send_or_queue_packet(p, std::move(buf), ecn, std::move(cb));
+            socket->when_writeable([this, p, buf = std::move(buf), ecn, pin_source, cb = std::move(callback)]() mutable {
+                send_or_queue_packet(p, std::move(buf), ecn, pin_source, std::move(cb));
             });
         }
         else if (callback)
@@ -1406,7 +1422,7 @@ namespace oxen::quic
         assert(static_cast<size_t>(nwrite) <= buf.size());
         buf.resize(nwrite);
 
-        send_or_queue_packet(p, std::move(buf), /*ecn=*/0);
+        send_or_queue_packet(p, std::move(buf), /*ecn=*/0, /*pin_source=*/true);
     }
 
     std::shared_ptr<Connection> Endpoint::get_conn(ConnectionID rid)
