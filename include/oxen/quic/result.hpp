@@ -64,6 +64,9 @@ namespace oxen::quic
     inline constexpr uint64_t CONN_EARLY_DATA_REJECTED = ERROR_BASE + 1004;
     // Stateless reset received
     inline constexpr uint64_t CONN_STATELESS_RESET = ERROR_BASE + 1005;
+    // The path can no longer carry packets of the size established for it; reconnecting
+    // rediscovers the path's size.
+    inline constexpr uint64_t CONN_MTU_EXCEEDED = ERROR_BASE + 1006;
 
     std::string quic_strerror(uint64_t e);
 

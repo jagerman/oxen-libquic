@@ -1125,7 +1125,10 @@ namespace oxen::quic
             log::debug(log_cat, "enable_datagram_counter_test is true; sent packet count: {}", debug_datagram_counter);
         }
 
-        auto rv = _endpoint.send_packets(_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets);
+        size_t too_big = 0;
+        auto rv = _endpoint.send_packets(_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, &too_big);
+        if (too_big)
+            packet_too_big(too_big);
 
         if (rv.blocked())
         {
@@ -1836,6 +1839,25 @@ namespace oxen::quic
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         return ngtcp2_conn_get_streams_bidi_left(*this);
+    }
+
+    void Connection::packet_too_big(size_t size)
+    {
+        // PMTUD probes are larger than the path size ngtcp2 has confirmed, and failing is how it
+        // finds the path's limit.
+        if (size > ngtcp2_conn_get_path_max_tx_udp_payload_size(*this))
+            return;
+
+        // Anything else being refused means the path can no longer carry packets of the size
+        // ngtcp2 confirmed for it.  ngtcp2 can't lower that size, so every full-size packet would
+        // keep failing; closing lets the application reconnect, and the new connection discovers
+        // the path's size from scratch.
+        log::warning(
+                log_cat,
+                "{} packet of {} bytes refused as too big for the path; closing the connection",
+                reference_id(),
+                size);
+        _endpoint.close_connection(*this, io_error{CONN_MTU_EXCEEDED});
     }
 
     size_t Connection::get_max_datagram_piece() const

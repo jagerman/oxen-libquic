@@ -266,10 +266,17 @@ namespace oxen::quic
         /// `bufsize` and ECN values in `ecn` -- so that the same `buf`/`bufsize`/`ecn`/`n_pkts` can
         /// be passed in when ready to retry sending.
         ///
+        /// Packets the socket refuses as too big for the path (EMSGSIZE) are dropped, along with any
+        /// others at least as large, and the rest are still sent; if `too_big` is given (pointing at
+        /// 0), it is set to the size of the smallest packet dropped that way, if any.
+        /// If the socket has no buffer space (ENOBUFS), the remaining packets are dropped.  Either
+        /// way the send still counts as a success: QUIC treats the dropped packets as lost.
+        ///
         /// If a more serious error occurs (other than a blocked socket) then `n_pkts` is set to 0
         /// (effectively dropping all packets) and a result is returned with `.failure()` true (and
         /// `.blocked()` false).
-        io_result send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts);
+        io_result send_packets(
+                const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts, size_t* too_big = nullptr);
 
         send_batch& batch() { return *_send_batch; }
 

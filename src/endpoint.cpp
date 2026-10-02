@@ -1047,7 +1047,8 @@ namespace oxen::quic
             log::trace(log_cat, "Dropped {} packet(s) {}: {} ({} so far)", n, path, why, counter);
     }
 
-    io_result Endpoint::send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
+    io_result Endpoint::send_packets(
+            const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts, size_t* too_big)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
 
@@ -1157,8 +1158,14 @@ namespace oxen::quic
                 // The first unsent packet is too big for the path (e.g. a PMTUD probe), and so is
                 // any other at least as large, since they all have the same destination: drop them
                 // (QUIC treats them as lost) and carry on with the rest.
-                count_drops(batch().too_big_drops, drop_packets_from(buf, bufsize, ecn, n_pkts, bufsize[0]),
-                            "too big for the path", path);
+                const size_t size = bufsize[0];
+                if (too_big)
+                    *too_big = *too_big ? std::min(*too_big, size) : size;
+                count_drops(
+                        batch().too_big_drops,
+                        drop_packets_from(buf, bufsize, ecn, n_pkts, size),
+                        "too big for the path",
+                        path);
                 if (n_pkts == 0)
                     return io_result{};
                 retried = false;
@@ -1239,7 +1246,10 @@ namespace oxen::quic
         // (closing or draining) cleared itself from `owner` already.
         if (owner && !owner->dead)
         {
-            auto rv = send_packets(owner->_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets);
+            size_t too_big = 0;
+            auto rv = send_packets(owner->_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, &too_big);
+            if (too_big)
+                owner->packet_too_big(too_big);
             if (rv.blocked())
             {
                 socket->when_writeable([this] { resume_stalled_send(); });
