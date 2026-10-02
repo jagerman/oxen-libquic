@@ -1023,6 +1023,59 @@ namespace oxen::quic::test
         });
     }
 
+    TEST_CASE("002 - Batched packets of mixed sizes arrive intact", "[002][gso]")
+    {
+        // Covers each GSO batching decision: full-size runs ending in one shorter packet (after two
+        // or more full ones), a shorter packet that may not join a single full one, and a larger
+        // packet followed by a smaller one (as with a PMTUD probe), which must not form a batch.
+        const bool allow_gso = GENERATE(false, true);
+        constexpr std::array<size_t, 12> sizes{1000, 1000, 600, 1000, 1000, 1000, 500, 1000, 700, 1400, 600, 800};
+
+        Loop loop;
+        struct received_pkt
+        {
+            int index;
+            size_t size;
+            bool intact;
+        };
+        std::vector<received_pkt> received;  // loop thread only
+        std::promise<void> all_received;
+        std::unique_ptr<UDPSocket> sender, receiver;
+
+        loop.call_get([&] {
+            receiver = std::make_unique<UDPSocket>(loop.get_event_base(), Address{"127.0.0.1", 0}, false, [&](Packet&& pkt) {
+                auto d = pkt.data();
+                bool intact = std::all_of(d.begin(), d.end(), [&](std::byte b) { return b == d[0]; });
+                received.push_back({static_cast<int>(d[0]), d.size(), intact});
+                if (received.size() == sizes.size())
+                    all_received.set_value();
+            });
+            sender = std::make_unique<UDPSocket>(loop.get_event_base(), Address{"127.0.0.1", 0}, allow_gso, [](Packet&&) {});
+
+            std::vector<std::byte> buf;
+            for (size_t i = 0; i < sizes.size(); i++)
+                buf.insert(buf.end(), sizes[i], static_cast<std::byte>(i));
+            std::array<uint8_t, sizes.size()> ecns{};
+            auto [res, sent] = sender->send(
+                    Path{sender->address(), receiver->address()}, buf.data(), sizes.data(), ecns.data(), sizes.size());
+            REQUIRE(res.success());
+            REQUIRE(sent == sizes.size());
+        });
+
+        require_future(all_received.get_future());
+
+        loop.call_get([&] {
+            for (size_t i = 0; i < received.size(); i++)
+            {
+                CHECK(received[i].index == static_cast<int>(i));
+                CHECK(received[i].size == sizes[i]);
+                CHECK(received[i].intact);
+            }
+            sender.reset();
+            receiver.reset();
+        });
+    }
+
     TEST_CASE("002 - A blocked socket stalls the endpoint's sends until it clears", "[002][stall]")
     {
         Network test_net{};

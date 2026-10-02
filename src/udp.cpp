@@ -582,7 +582,7 @@ namespace oxen::quic
 
             // With GSO, we use *one* sendmmsg call which can contain multiple batches of packets; each
             // batch is of size n, where each of the n have the same size and ECN value (the ECN cmsg
-            // applies to every segment of the batch).
+            // applies to every segment of the batch), except that the last one may be shorter.
             //
             // We could have up to the full MAX_BATCH, with the worst case being every packet being a
             // different size or ECN value than the one before it.
@@ -599,22 +599,31 @@ namespace oxen::quic
             std::array<iovec, MAX_BATCH> iovs{};
 
             unsigned int msg_count = 0;
+            size_t batch_bytes = 0;
             for (size_t i = 0; i < n_pkts; i++)
             {
                 auto& gso_size = gso_sizes[msg_count];
                 auto& gso_count = gso_counts[msg_count];
                 gso_count++;
+                batch_bytes += bufsize[i];
                 if (gso_size == 0)
                     gso_size = bufsize[i];  // new batch
 
-                if (i < n_pkts - 1 && bufsize[i + 1] == gso_size && ecn[i + 1] == ecn[i])
-                    continue;  // The next one can be batched with us
+                // The next packet can join this batch if it's the same size or, once we have at least
+                // two full-size packets, if it's shorter (it then has to be the last one).  Not
+                // allowing a short packet after just one means a lone PMTUD probe (always larger than
+                // everything else) can never start a batch, which would take the following packet
+                // down with it when the kernel rejects the whole oversized message with EINVAL.
+                if (i < n_pkts - 1 && bufsize[i] == gso_size && ecn[i + 1] == ecn[i] &&
+                    (bufsize[i + 1] == gso_size || (bufsize[i + 1] < gso_size && gso_count >= 2)))
+                    continue;
 
                 auto& iov = iovs[msg_count];
                 auto& msg = msgs[msg_count];
                 auto& control = controls[msg_count];
                 iov.iov_base = next_buf;
-                iov.iov_len = gso_count * gso_size;
+                iov.iov_len = batch_bytes;
+                batch_bytes = 0;
                 next_buf += iov.iov_len;
                 msg_count++;
                 auto& hdr = msg.msg_hdr;
