@@ -1015,6 +1015,43 @@ namespace oxen::quic
         return {conn, true};
     }
 
+    // Removes every packet of at least `min_size` bytes from the batch, keeping the rest in order,
+    // and returns how many were removed.
+    static size_t drop_packets_from(std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts, size_t min_size)
+    {
+        size_t kept = 0;
+        const std::byte* in = buf;
+        std::byte* out = buf;
+        for (size_t i = 0; i < n_pkts; i++)
+        {
+            const size_t sz = bufsize[i];
+            if (sz < min_size)
+            {
+                if (out != in)
+                    std::memmove(out, in, sz);
+                bufsize[kept] = sz;
+                ecn[kept] = ecn[i];
+                kept++;
+                out += sz;
+            }
+            in += sz;
+        }
+        size_t dropped = n_pkts - kept;
+        n_pkts = kept;
+        return dropped;
+    }
+
+    // Counts `n` dropped packets in `counter`, logging the first and then one in every 100.
+    static void count_drops(size_t& counter, size_t n, std::string_view why, const Path& path)
+    {
+        size_t before = counter;
+        counter += n;
+        if (before == 0 || before / 100 != counter / 100)
+            log::debug(log_cat, "Dropped {} packet(s) {}: {} ({} so far)", n, path, why, counter);
+        else
+            log::trace(log_cat, "Dropped {} packet(s) {}: {} ({} so far)", n, path, why, counter);
+    }
+
     io_result Endpoint::send_packets(const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
@@ -1057,13 +1094,21 @@ namespace oxen::quic
         for (;;)
         {
             size_t n_try = n_pkts;
+            std::pair<io_result, size_t> result;
 #ifndef NDEBUG
-            if (auto& b = batch(); std::chrono::steady_clock::now() < b.debug_block_until)
+            auto& b = batch();
+            std::optional<io_result> debug_result;
+            if (std::chrono::steady_clock::now() < b.debug_block_until)
                 return io_result{EAGAIN};
             else if (b.debug_partial_block_next)
             {
                 b.debug_partial_block_next = false;
                 return io_result{EAGAIN};
+            }
+            else if (b.debug_fail_count > 0)
+            {
+                b.debug_fail_count--;
+                debug_result.emplace(b.debug_fail_errno);
             }
             else if (b.debug_partial_sends > 0 && n_pkts > b.debug_partial_max)
             {
@@ -1071,11 +1116,25 @@ namespace oxen::quic
                 n_try = b.debug_partial_max;
                 b.debug_partial_block_next = b.debug_partial_then_block;
             }
+            if (!debug_result && b.debug_mtu)
+            {
+                // As sendmmsg would: an error if the first packet is too big, otherwise the packets
+                // before the first too-big one go out and the error is lost.
+                auto too_big = std::find_if(bufsize, bufsize + n_try, [&](size_t s) { return s > b.debug_mtu; });
+                if (too_big == bufsize)
+                    debug_result.emplace(EMSGSIZE);
+                else
+                    n_try = too_big - bufsize;
+            }
+            if (debug_result)
+                result = {*debug_result, 0};
+            else
 #endif
-
-            log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_try, path);
-
-            auto [ret, sent] = socket->send(path, buf, bufsize, ecn, n_try);
+            {
+                log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_try, path);
+                result = socket->send(path, buf, bufsize, ecn, n_try);
+            }
+            auto& [ret, sent] = result;
 
             if (sent > 0 && sent < n_pkts)
             {
@@ -1096,6 +1155,28 @@ namespace oxen::quic
             {
                 log::debug(log_cat, "UDP send blocked with {} packet(s) unsent", n_pkts);
                 return ret;
+            }
+
+            if (ret.too_big())
+            {
+                // The first unsent packet is too big for the path (e.g. a PMTUD probe), and so is
+                // any other at least as large, since they all have the same destination: drop them
+                // (QUIC treats them as lost) and carry on with the rest.
+                count_drops(batch().too_big_drops, drop_packets_from(buf, bufsize, ecn, n_pkts, bufsize[0]),
+                            "too big for the path", path);
+                if (n_pkts == 0)
+                    return io_result{};
+                retried = false;
+                continue;
+            }
+
+            if (ret.no_buffers())
+            {
+                // A local queue is full, so the rest would most likely fail too: drop them, and let
+                // QUIC's loss recovery and congestion control deal with it like any other loss.
+                count_drops(batch().no_buffer_drops, n_pkts, "no local buffer space", path);
+                n_pkts = 0;
+                return io_result{};
             }
 
             if (ret.failure())
@@ -1228,10 +1309,33 @@ namespace oxen::quic
 #endif
     }
 
-    Endpoint::debug_stall_stats Endpoint::_debug_stall_counts() const
+    bool Endpoint::_debug_mtu([[maybe_unused]] size_t mtu)
     {
 #ifndef NDEBUG
-        return {_send_batch->debug_stalls, _send_batch->debug_stall_skips, _send_batch->debug_stall_discards};
+        batch().debug_mtu = mtu;
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool Endpoint::_debug_fail_sends([[maybe_unused]] int err, [[maybe_unused]] size_t n_sends)
+    {
+#ifndef NDEBUG
+        auto& b = batch();
+        b.debug_fail_errno = err;
+        b.debug_fail_count = n_sends;
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    Endpoint::debug_send_stats Endpoint::_debug_send_stats() const
+    {
+#ifndef NDEBUG
+        auto& b = *_send_batch;
+        return {b.debug_stalls, b.debug_stall_skips, b.debug_stall_discards, b.too_big_drops, b.no_buffer_drops};
 #else
         return {};
 #endif

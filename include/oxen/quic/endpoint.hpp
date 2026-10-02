@@ -285,20 +285,27 @@ namespace oxen::quic
 
         // Test hooks, only functional in debug builds of libquic (the state they use doesn't exist
         // otherwise): makes socket sends report blocked for the given duration, returning false if
-        // unsupported; and returns stall statistics so far (all zero if unsupported).
+        // unsupported; and returns send statistics so far (all zero if unsupported).
         bool _debug_block_sends_for(std::chrono::milliseconds duration);
         // Makes the next `n_sends` socket sends of more than `max_pkts` (>= 1) packets send only
         // that many, reporting the rest unsent, and (if `then_block`) the immediate retry of the
         // rest report EAGAIN; returns false if unsupported (a release build, or one that sends one
         // packet at a time).
         bool _debug_partial_sends(size_t n_sends, size_t max_pkts, bool then_block);
-        struct debug_stall_stats
+        // Makes packets larger than `mtu` (0 to turn this off) fail to send with EMSGSIZE, as on a
+        // path with that MTU; returns false if unsupported.
+        bool _debug_mtu(size_t mtu);
+        // Makes the next `n_sends` socket sends fail with `err`; returns false if unsupported.
+        bool _debug_fail_sends(int err, size_t n_sends);
+        struct debug_send_stats
         {
-            size_t stalls = 0;    // Times the send batch stalled on a blocked socket
-            size_t skips = 0;     // Flushes skipped because of a stall
-            size_t discards = 0;  // Stalled batches discarded because their owner went away
+            size_t stalls = 0;           // Times the send batch stalled on a blocked socket
+            size_t skips = 0;            // Flushes skipped because of a stall
+            size_t discards = 0;         // Stalled batches discarded because their owner went away
+            size_t too_big_drops = 0;    // Packets dropped as too big for their path (EMSGSIZE)
+            size_t no_buffer_drops = 0;  // Packets dropped for lack of local buffer space (ENOBUFS)
         };
-        debug_stall_stats _debug_stall_counts() const;
+        debug_send_stats _debug_send_stats() const;
 
         // Drops a connection from the endpoint.  This is dangerous to call from *within* methods on
         // a connection itself, and generally should be deferred via a call_soon.

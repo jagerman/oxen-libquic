@@ -63,6 +63,11 @@ namespace oxen::quic
         // Connections that tried to flush during a stall, to be woken (in order) once it clears.
         std::vector<Connection*> waiters;
 
+        // Packets dropped because they were too large for their path, or because a local queue had
+        // no room for them (used to rate-limit their logging).
+        size_t too_big_drops = 0;
+        size_t no_buffer_drops = 0;
+
 #ifndef NDEBUG
         // Set for the duration of a flush, to catch a flush starting inside another one.
         bool in_use = false;
@@ -79,6 +84,12 @@ namespace oxen::quic
         size_t debug_partial_max = 0;
         bool debug_partial_then_block = true;
         bool debug_partial_block_next = false;
+        // Packets larger than this (if non-zero) fail to send with EMSGSIZE, as they would on a path
+        // with that MTU.
+        size_t debug_mtu = 0;
+        // The next `debug_fail_count` socket sends fail with `debug_fail_errno`.
+        int debug_fail_errno = 0;
+        size_t debug_fail_count = 0;
         size_t debug_stalls = 0;
         size_t debug_stall_skips = 0;
         size_t debug_stall_discards = 0;

@@ -1134,7 +1134,7 @@ namespace oxen::quic::test
                 CHECK(r == msg);
         }
 
-        auto stats = TestHelper::stall_counts(*client_endpoint);
+        auto stats = TestHelper::send_stats(*client_endpoint);
         CHECK(stats.stalls >= 1);
         // A waiting connection only retries its flush when something new wakes it (incoming
         // packets, new data to send, an already-armed timer); anything that kept re-waking waiters
@@ -1187,11 +1187,11 @@ namespace oxen::quic::test
         // A's first send blocks, so A's packets (all it ever gets to send) are the stalled batch.
         auto stream_a = conn_a->open_stream();
         stream_a->send(msg, nullptr);
-        REQUIRE(wait_for([&] { return TestHelper::stall_counts(*client_endpoint).stalls == 1; }, 200ms, 1ms));
+        REQUIRE(wait_for([&] { return TestHelper::send_stats(*client_endpoint).stalls == 1; }, 200ms, 1ms));
 
         auto stream_b = conn_b->open_stream();
         stream_b->send(msg, nullptr);
-        REQUIRE(wait_for([&] { return TestHelper::stall_counts(*client_endpoint).skips >= 1; }, 200ms, 1ms));
+        REQUIRE(wait_for([&] { return TestHelper::send_stats(*client_endpoint).skips >= 1; }, 200ms, 1ms));
 
         SECTION("owner closed during the stall")
         {
@@ -1208,7 +1208,7 @@ namespace oxen::quic::test
         require_future(one_received.get_future(), 5s);
         std::this_thread::sleep_for(100ms);
 
-        CHECK(TestHelper::stall_counts(*client_endpoint).discards == 1);
+        CHECK(TestHelper::send_stats(*client_endpoint).discards == 1);
         {
             std::lock_guard lock{received_mut};
             REQUIRE(received.size() == 1);
@@ -1353,8 +1353,95 @@ namespace oxen::quic::test
                 CHECK(r == msg);
         }
 
-        auto stats = TestHelper::stall_counts(*client_endpoint);
+        auto stats = TestHelper::send_stats(*client_endpoint);
         CHECK(stats.stalls >= 1);
         CHECK(stats.discards == 0);
+    }
+
+    TEST_CASE("002 - Send errors that only lose packets don't close the connection", "[002][senderr]")
+    {
+        // "too big": with a 1300-byte MTU, ngtcp2's PMTUD probes above that fail with EMSGSIZE.
+        // "no buffers": a few sends fail with ENOBUFS while the stream is being sent.
+        const auto mode = GENERATE(as<std::string>{}, "too big", "no buffers");
+
+        Network test_net{};
+
+        std::vector<std::byte> msg(100'000);
+        for (size_t i = 0; i < msg.size(); i++)
+            msg[i] = static_cast<std::byte>(i % 251);
+
+        std::mutex received_mut;
+        std::vector<std::byte> received;
+        std::promise<void> all_received;
+        stream_data_callback server_data_cb = [&](Stream&, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mut};
+            received.insert(received.end(), dat.begin(), dat.end());
+            if (received.size() == msg.size())
+                all_received.set_value();
+        };
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        std::atomic<bool> client_closed{false};
+        connection_closed_callback client_closed_cb = [&](Connection&, uint64_t) { client_closed = true; };
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(Address{});
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls, server_data_cb));
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        auto client_endpoint = test_net.endpoint(Address{}, client_established, client_closed_cb);
+
+        if (mode == "too big" && !TestHelper::simulate_mtu(*client_endpoint, 1300))
+            SKIP("Send error testing requires a debug build of libquic");
+
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+
+        if (mode == "no buffers" && !TestHelper::fail_sends(*client_endpoint, ENOBUFS, 5))
+            SKIP("Send error testing requires a debug build of libquic");
+
+        auto stream = conn->open_stream();
+        stream->send(msg, nullptr);
+
+        require_future(all_received.get_future(), 5s);
+        {
+            std::lock_guard lock{received_mut};
+            CHECK(received == msg);
+        }
+
+        auto stats = TestHelper::send_stats(*client_endpoint);
+        if (mode == "too big")
+            CHECK(stats.too_big_drops > 0);
+        else
+            CHECK(stats.no_buffer_drops > 0);
+        CHECK_FALSE(client_closed);
+        CHECK_FALSE(client_endpoint->job_queue.call_get([&] { return conn->is_closing() || conn->is_draining(); }));
+    }
+
+    TEST_CASE("002 - Other send errors still close the connection", "[002][senderr]")
+    {
+        Network test_net{};
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto client_closed = callback_waiter{[](Connection&, uint64_t) {}};
+
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(Address{});
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        auto client_endpoint = test_net.endpoint(Address{}, client_established, client_closed);
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+
+        if (!TestHelper::fail_sends(*client_endpoint, EPERM, 1))
+            SKIP("Send error testing requires a debug build of libquic");
+
+        auto stream = conn->open_stream();
+        stream->send("hello"s);
+
+        CHECK(client_closed.wait());
     }
 }  // namespace oxen::quic::test

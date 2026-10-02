@@ -120,6 +120,26 @@ namespace oxen::quic
 #endif
                           : (error_code == EAGAIN || error_code == EWOULDBLOCK);
         }
+        // returns true if error value indicates a datagram too large to send on its path (e.g. a
+        // PMTUD probe larger than the path MTU)
+        bool too_big() const
+        {
+            return is_ngtcp2 ? false
+#ifdef _WIN32
+                 : is_wsa ? error_code == WSAEMSGSIZE
+#endif
+                          : error_code == EMSGSIZE;
+        }
+        // returns true if error value indicates that a local queue (such as an interface's
+        // transmit queue) had no room for the datagram
+        bool no_buffers() const
+        {
+            return is_ngtcp2 ? false
+#ifdef _WIN32
+                 : is_wsa ? error_code == WSAENOBUFS
+#endif
+                          : error_code == ENOBUFS;
+        }
 
         // returns the error message string describing error_code
         std::conditional_t<IN_HELL, std::string, std::string_view> str_error() const;

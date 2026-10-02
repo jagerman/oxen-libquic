@@ -97,15 +97,25 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_partial_sends(n_sends, max_pkts, then_block); });
     }
 
+    bool TestHelper::simulate_mtu(Endpoint& ep, size_t mtu)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_mtu(mtu); });
+    }
+
+    bool TestHelper::fail_sends(Endpoint& ep, int err, size_t n_sends)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_fail_sends(err, n_sends); });
+    }
+
     io_result TestHelper::send_packets(
             Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
     {
         return ep.job_queue.call_get([&] { return ep.send_packets(path, buf, bufsize, ecn, n_pkts); });
     }
 
-    Endpoint::debug_stall_stats TestHelper::stall_counts(Endpoint& ep)
+    Endpoint::debug_send_stats TestHelper::send_stats(Endpoint& ep)
     {
-        return ep.job_queue.call_get([&] { return ep._debug_stall_counts(); });
+        return ep.job_queue.call_get([&] { return ep._debug_send_stats(); });
     }
 
     void TestHelper::mark_dead(Connection& conn)

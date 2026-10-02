@@ -104,13 +104,19 @@ namespace oxen::quic
         // nearly-full socket would).  Returns false (and does nothing) if libquic wasn't built in
         // debug mode.
         static bool partial_sends(Endpoint& ep, size_t n_sends, size_t max_pkts, bool then_block = true);
+        // Makes the endpoint's packets larger than `mtu` (0 to turn off) fail with EMSGSIZE, as on
+        // a path with that MTU.  Returns false (and does nothing) if not a debug build.
+        static bool simulate_mtu(Endpoint& ep, size_t mtu);
+        // Makes the endpoint's next `n_sends` socket sends fail with `err`.  Returns false (and does
+        // nothing) if not a debug build.
+        static bool fail_sends(Endpoint& ep, int err, size_t n_sends);
 
         // Calls the endpoint's internal send_packets (on its loop thread).
         static io_result send_packets(
                 Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts);
 
-        // Returns the endpoint's send stall statistics so far (all zero in non-debug builds).
-        static Endpoint::debug_stall_stats stall_counts(Endpoint& ep);
+        // Returns the endpoint's send statistics so far (all zero in non-debug builds).
+        static Endpoint::debug_send_stats send_stats(Endpoint& ep);
 
         // Marks the connection dead, as a fatal ngtcp2 error does, but without also scheduling its
         // close (so that the test controls what happens in between).
