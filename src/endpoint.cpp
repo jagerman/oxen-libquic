@@ -102,7 +102,7 @@ namespace oxen::quic
 
     void Endpoint::handle_ep_opt(opt::max_udp_payload mup)
     {
-        _max_udp_payload = mup.size;
+        _max_udp_payload = std::move(mup);
     }
 
     void Endpoint::handle_ep_opt([[maybe_unused]] opt::allow_gso)
@@ -189,11 +189,7 @@ namespace oxen::quic
                             ctx,
                             alpns,
                             ctx->config.handshake_timeout.value_or(handshake_timeout),
-                            remote.get_remote_key(),
-                            nullptr,
-                            std::nullopt,
-                            nullptr,
-                            _max_udp_payload);
+                            remote.get_remote_key());
                     return it_b->second;
                 }
                 catch (...)
@@ -1002,8 +998,7 @@ namespace oxen::quic
                             std::nullopt,
                             &hdr,
                             token_type,
-                            pkt_original_cid,
-                            _max_udp_payload);
+                            pkt_original_cid);
 
                     conn = it_b->second.get();
                     break;

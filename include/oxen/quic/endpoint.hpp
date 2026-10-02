@@ -57,9 +57,12 @@ namespace oxen::quic
         connection_established_callback connection_established_cb;
         connection_closed_callback connection_close_cb;
 
-        // Returns the max UDP payload cap configured on this endpoint, if any.  nullopt means
-        // PMTUD runs with the default maximum.
-        std::optional<size_t> get_max_udp_payload() const { return _max_udp_payload; }
+        // Returns the max UDP payload cap configured on this endpoint (the largest size in its
+        // probe list), if any.  nullopt means PMTUD runs with the default probe list.
+        std::optional<size_t> get_max_udp_payload() const
+        {
+            return _max_udp_payload ? std::make_optional(_max_udp_payload->max()) : std::nullopt;
+        }
 
         Loop& loop;
         JobQueue job_queue{loop};
@@ -200,7 +203,8 @@ namespace oxen::quic
         size_t _dgram_queue_limit{std::numeric_limits<size_t>::max()};
 
         opt::manual_routing _manual_routing;
-        std::optional<size_t> _max_udp_payload;
+        // nullopt means the default probe list (DEFAULT_PMTUD_PROBES).
+        std::optional<opt::max_udp_payload> _max_udp_payload;
         bool _allow_gso{false};
 
         uint64_t _next_rid{0};

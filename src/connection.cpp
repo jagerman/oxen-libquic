@@ -1882,8 +1882,7 @@ namespace oxen::quic
             ngtcp2_settings& settings,
             ngtcp2_transport_params& params,
             ngtcp2_callbacks& callbacks,
-            std::chrono::nanoseconds handshake_timeout,
-            std::optional<size_t> max_udp_payload)
+            std::chrono::nanoseconds handshake_timeout)
     {
         callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
         callbacks.path_validation = connection_callbacks::on_path_validation;
@@ -1931,23 +1930,30 @@ namespace oxen::quic
 #ifndef NDEBUG
         settings.log_printf = log_printer;
 #endif
-        settings.max_tx_udp_payload_size = MAX_PMTUD_UDP_PAYLOAD;
         settings.cc_algo = NGTCP2_CC_ALGO_BBR;
         settings.initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT;
         settings.max_window = 24_Mi;
         settings.max_stream_window = 16_Mi;
         settings.handshake_timeout = handshake_timeout <= 0s ? UINT64_MAX : static_cast<uint64_t>(handshake_timeout.count());
 
+        std::span<const uint16_t> probes = DEFAULT_PMTUD_PROBES;
+        size_t max_payload = MAX_PMTUD_UDP_PAYLOAD;
+        if (const auto& mup = _endpoint._max_udp_payload)
+        {
+            probes = mup->probes();
+            max_payload = mup->max();
+        }
+        // ngtcp2 copies the probe list into the connection.
+        settings.pmtud_probes = probes.data();
+        settings.pmtud_probeslen = probes.size();
+        settings.no_pmtud = probes.empty();
+        settings.max_tx_udp_payload_size = max_payload;
+
         ngtcp2_transport_params_default(&params);
 
-        // The largest packet we can receive (our receive buffers hold MAX_PMTUD_UDP_PAYLOAD).
-        params.max_udp_payload_size = MAX_PMTUD_UDP_PAYLOAD;
-
-        if (max_udp_payload)
-        {
-            settings.max_tx_udp_payload_size = *max_udp_payload;
-            params.max_udp_payload_size = *max_udp_payload;
-        }
+        // Advertising our largest probe size as the largest we accept holds the other side to our
+        // cap as well.
+        params.max_udp_payload_size = max_payload;
 
         // Connection flow level control window
         params.initial_max_data = 15_Mi;
@@ -1997,8 +2003,7 @@ namespace oxen::quic
             std::optional<std::vector<unsigned char>> remote_pk,
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
-            ngtcp2_cid* ocid,
-            std::optional<size_t> max_udp_payload) :
+            ngtcp2_cid* ocid) :
             _endpoint{ep},
             _loop{_endpoint.loop},
             context{std::move(ctx)},
@@ -2056,7 +2061,7 @@ namespace oxen::quic
 
         auto handshake_timeout = context->config.handshake_timeout.value_or(default_handshake_timeout);
 
-        init(settings, params, callbacks, handshake_timeout, max_udp_payload);
+        init(settings, params, callbacks, handshake_timeout);
 
         // Clients should be the ones providing a remote pubkey here. This way we can emplace it into
         // the gnutlssession object to be verified. Servers should be verifying via callback
@@ -2239,8 +2244,7 @@ namespace oxen::quic
             std::optional<std::vector<unsigned char>> remote_pk,
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
-            ngtcp2_cid* ocid,
-            std::optional<size_t> max_udp_payload)
+            ngtcp2_cid* ocid)
     {
         log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
         std::shared_ptr<Connection> conn{new Connection{
@@ -2255,8 +2259,7 @@ namespace oxen::quic
                 remote_pk,
                 hdr,
                 token_type,
-                ocid,
-                max_udp_payload}};
+                ocid}};
 
         conn->packet_io_ready();
 

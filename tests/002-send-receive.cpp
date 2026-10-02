@@ -1507,10 +1507,47 @@ namespace oxen::quic::test
             CHECK_FALSE(TestHelper::gso_enabled(*client_endpoint));
     }
 
-    TEST_CASE("002 - The max UDP payload cap applies with or without datagrams", "[002][pmtud]")
+    TEST_CASE("002 - max_udp_payload probe lists", "[002][pmtud]")
+    {
+        auto as_vector = [](const opt::max_udp_payload& mup) {
+            return std::vector<uint16_t>{mup.probes().begin(), mup.probes().end()};
+        };
+
+        CHECK(as_vector(opt::max_udp_payload{1400}) == std::vector<uint16_t>{1372, 1342, 1324, 1232});
+        CHECK(opt::max_udp_payload{1400}.max() == 1372);
+        CHECK(as_vector(opt::max_udp_payload{9000}) ==
+              std::vector<uint16_t>{std::begin(DEFAULT_PMTUD_PROBES), std::end(DEFAULT_PMTUD_PROBES)});
+        CHECK(opt::max_udp_payload{9000}.max() == MAX_PMTUD_UDP_PAYLOAD);
+        CHECK(opt::max_udp_payload{1231}.probes().empty());
+        CHECK(opt::max_udp_payload::minimum().probes().empty());
+        CHECK(opt::max_udp_payload::minimum().max() == 1200);
+        CHECK(opt::max_udp_payload::ipv4(1500).max() == 1472);
+        CHECK(opt::max_udp_payload::ipv6(1500).max() == 1452);
+        CHECK_THROWS_AS(opt::max_udp_payload{1199}, std::invalid_argument);
+
+        std::array<uint16_t, 2> explicit_list{1444, 1300};
+        CHECK(as_vector(opt::max_udp_payload{explicit_list}) == std::vector<uint16_t>{1444, 1300});
+        CHECK(opt::max_udp_payload{explicit_list}.max() == 1444);
+        CHECK(opt::max_udp_payload{std::span<const uint16_t>{}}.probes().empty());
+        for (uint16_t bad : {1200, 1473})
+        {
+            std::array<uint16_t, 2> list{1300, bad};
+            CHECK_THROWS_AS(opt::max_udp_payload{list}, std::invalid_argument);
+        }
+    }
+
+    TEST_CASE("002 - PMTUD reaches the largest probe size, with or without datagrams", "[002][pmtud]")
     {
         const bool datagrams = GENERATE(false, true);
-        const bool capped = GENERATE(true, false);
+        // The probe list on the client, and the size both sides should end up at over loopback.
+        const auto [list, expected] = GENERATE(table<std::string, size_t>({
+                {"default", MAX_PMTUD_UDP_PAYLOAD},
+                {"max 1330", 1324},
+                {"max 9000", MAX_PMTUD_UDP_PAYLOAD},
+                {"only 1406", 1406},
+                {"minimum", 1200},
+        }));
+        INFO("probe list: " << list << ", datagrams: " << datagrams);
 
         Network test_net{};
 
@@ -1522,8 +1559,15 @@ namespace oxen::quic::test
         if (datagrams)
             dgrams.emplace(Splitting::ACTIVE);
         std::optional<opt::max_udp_payload> cap;
-        if (capped)
-            cap.emplace(1300);
+        const std::array<uint16_t, 1> only_1406{1406};
+        if (list == "max 1330")
+            cap.emplace(1330);
+        else if (list == "max 9000")
+            cap.emplace(9000);
+        else if (list == "only 1406")
+            cap.emplace(only_1406);
+        else if (list == "minimum")
+            cap.emplace(opt::max_udp_payload::minimum());
 
         server_endpoint = test_net.endpoint(Address{}, dgrams);
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
@@ -1538,18 +1582,15 @@ namespace oxen::quic::test
 
         auto server_conns = server_endpoint->get_all_conns(Direction::INBOUND);
         REQUIRE(server_conns.size() == 1);
-        auto client_max = TestHelper::path_max_udp_payload(*conn);
+        CHECK(TestHelper::path_max_udp_payload(*conn) == expected);
+        // The server probes with the default list, but is held to the client's limit by the
+        // max_udp_payload_size the client advertises; it can still land below the client's size,
+        // at the largest default size that fits.
         auto server_max = TestHelper::path_max_udp_payload(*server_conns.front());
-        if (capped)
-        {
-            // The server is held to it too, through the max_udp_payload_size we advertise.
-            CHECK(client_max <= 1300);
-            CHECK(server_max <= 1300);
-        }
-        else
-        {
-            CHECK(client_max > 1300);
-            CHECK(server_max > 1300);
-        }
+        CHECK(server_max <= expected);
+        if (list == "max 1330")
+            CHECK(server_max == 1324);
+        else if (list == "default" || list == "max 9000")
+            CHECK(server_max == MAX_PMTUD_UDP_PAYLOAD);
     }
 }  // namespace oxen::quic::test

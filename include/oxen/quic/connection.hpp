@@ -99,8 +99,7 @@ namespace oxen::quic
                 std::optional<std::vector<unsigned char>> remote_pk = std::nullopt,
                 ngtcp2_pkt_hd* hdr = nullptr,
                 std::optional<ngtcp2_token_type> token_type = std::nullopt,
-                ngtcp2_cid* ocid = nullptr,
-                std::optional<size_t> max_udp_payload = std::nullopt);
+                ngtcp2_cid* ocid = nullptr);
 
         TLSSession* get_session() const { return tls_session.get(); }
         TLSCreds* get_creds() const { return tls_creds.get(); }
@@ -380,8 +379,7 @@ namespace oxen::quic
                 std::optional<std::vector<unsigned char>> remote_pk = std::nullopt,
                 ngtcp2_pkt_hd* hdr = nullptr,
                 std::optional<ngtcp2_token_type> token_type = std::nullopt,
-                ngtcp2_cid* ocid = nullptr,
-                std::optional<size_t> max_udp_payload = std::nullopt);
+                ngtcp2_cid* ocid = nullptr);
 
         Endpoint& _endpoint;
         Loop& _loop;
@@ -518,8 +516,7 @@ namespace oxen::quic
                 ngtcp2_settings& settings,
                 ngtcp2_transport_params& params,
                 ngtcp2_callbacks& callbacks,
-                std::chrono::nanoseconds handshake_timeout,
-                std::optional<size_t> max_udp_payload);
+                std::chrono::nanoseconds handshake_timeout);
 
         io_result read_packet(const Packet& pkt);
 
