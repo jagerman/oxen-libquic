@@ -465,6 +465,45 @@ namespace oxen::quic
 #endif
     }
 
+    std::optional<Address> UDPSocket::local_address_for(const Address& remote) const
+    {
+        if (!bound_.is_any_addr())
+            return bound_;
+
+        // A dual-stack socket reaches IPv4 peers at IPv4-mapped addresses, but not every OS lets an
+        // IPv6 socket connect to one (Windows and some BSDs default to IPV6_V6ONLY), so we look up
+        // the plain IPv4 address and map the answer back.
+        const bool mapped = remote.is_ipv4_mapped_ipv6();
+        const auto target = mapped ? remote.unmapped_ipv4_from_ipv6() : remote;
+
+        // Connecting a UDP socket sends nothing, but makes the kernel choose the source address that
+        // a send to `target` would use.
+        auto sock = ::socket(target.is_ipv6() ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
+#ifdef _WIN32
+        if (sock == INVALID_SOCKET)
+#else
+        if (sock == -1)
+#endif
+            return std::nullopt;
+
+        std::optional<Address> source;
+        auto addr = target.is_ipv6() ? Address{ipv6{}} : Address{ipv4{}};
+        if (::connect(sock, target, target.socklen()) == 0 && ::getsockname(sock, addr, addr.socklen_ptr()) == 0)
+        {
+            if (mapped)
+                addr.map_ipv4_as_ipv6();
+            addr.set_port(bound_.port());
+            source = addr;
+        }
+
+#ifdef _WIN32
+        ::closesocket(sock);
+#else
+        ::close(sock);
+#endif
+        return source;
+    }
+
     void UDPSocket::process_packet(std::span<const std::byte> payload, msghdr& hdr)
     {
         if (payload.empty())

@@ -17,6 +17,7 @@ extern "C"
 #include "utils.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <variant>
 
 struct event_base;
@@ -107,6 +108,12 @@ namespace oxen::quic
         /// bound to an "any" address, while incoming packets will have the actual IP address the
         /// packet arrived on).
         const Address& address() const { return bound_; }
+
+        /// Returns the local address this socket would currently use to send to `remote`, or nullopt
+        /// if there is no route to it.  On a socket bound to a specific address that is always the
+        /// bound address; on one bound to the any-address it follows the host's routing, and so can
+        /// change when the host's network does.
+        std::optional<Address> local_address_for(const Address& remote) const;
 
         /// Attempts to send one or more UDP payloads on a single path.  Returns a pair: an
         /// io_result of either success (all packets were sent), `blocked()` if some or all of the
