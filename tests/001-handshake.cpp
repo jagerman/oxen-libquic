@@ -628,10 +628,10 @@ namespace oxen::quic::test
         CHECK(client_established.wait());
         CHECK(server_established.wait());
 
-        // Client should see it's any address as local:
-        CHECK(client_path.local.host() == "0.0.0.0");
-        // But server should see the address the client connected to, even though it's listening on
-        // the any address:
+        // Both should see the actual addresses in use, even though both are listening on the any
+        // address: the client the source address it reaches the server from, and the server the
+        // address the client connected to.
+        CHECK(client_path.local.host() == "127.0.0.1");
         CHECK(server_path.local.host() == "127.0.0.1");
     }
 
@@ -674,7 +674,9 @@ namespace oxen::quic::test
         CHECK(client_established.wait());
         CHECK(server_established.wait());
 
-        CHECK(client_path.local.host() == "0.0.0.0");
+        // The OS picks which loopback address the client sends from (127.0.0.1 on Linux).
+        CHECK(client_path.local.is_loopback());
+        CHECK_FALSE(client_path.local.is_any_addr());
         CHECK(server_path.local.host() == "127.0.0.2");
     }
 
