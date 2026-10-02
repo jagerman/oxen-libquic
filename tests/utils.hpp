@@ -111,6 +111,13 @@ namespace oxen::quic
         // nothing) if not a debug build.
         static bool fail_sends(Endpoint& ep, int err, size_t n_sends);
 
+        // Makes the endpoint socket's upcoming sends fail, in order, with `gso_errors` (sends using
+        // GSO) and `plain_errors` (sends without it).  Returns false (and does nothing) if not a
+        // debug build.
+        static bool fail_socket_sends(Endpoint& ep, std::vector<int> gso_errors, std::vector<int> plain_errors);
+        // Returns whether the endpoint's socket is currently sending with GSO.
+        static bool gso_enabled(Endpoint& ep);
+
         // Calls the endpoint's internal send_packets (on its loop thread).
         static io_result send_packets(
                 Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts);

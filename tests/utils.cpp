@@ -107,6 +107,17 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_fail_sends(err, n_sends); });
     }
 
+    bool TestHelper::fail_socket_sends(Endpoint& ep, std::vector<int> gso_errors, std::vector<int> plain_errors)
+    {
+        return ep.job_queue.call_get(
+                [&] { return ep.get_socket()->_debug_fail_sends(std::move(gso_errors), std::move(plain_errors)); });
+    }
+
+    bool TestHelper::gso_enabled(Endpoint& ep)
+    {
+        return ep.job_queue.call_get([&] { return ep.get_socket()->gso_; });
+    }
+
     io_result TestHelper::send_packets(
             Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
     {
