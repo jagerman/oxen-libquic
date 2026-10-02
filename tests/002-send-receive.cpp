@@ -1506,4 +1506,50 @@ namespace oxen::quic::test
         else
             CHECK_FALSE(TestHelper::gso_enabled(*client_endpoint));
     }
+
+    TEST_CASE("002 - The max UDP payload cap applies with or without datagrams", "[002][pmtud]")
+    {
+        const bool datagrams = GENERATE(false, true);
+        const bool capped = GENERATE(true, false);
+
+        Network test_net{};
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        std::shared_ptr<Endpoint> server_endpoint, client_endpoint;
+        std::optional<opt::enable_datagrams> dgrams;
+        if (datagrams)
+            dgrams.emplace(Splitting::ACTIVE);
+        std::optional<opt::max_udp_payload> cap;
+        if (capped)
+            cap.emplace(1300);
+
+        server_endpoint = test_net.endpoint(Address{}, dgrams);
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        client_endpoint = test_net.endpoint(Address{}, client_established, dgrams, cap);
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+
+        // Give PMTUD (a few round trips over loopback) time to finish.
+        std::this_thread::sleep_for(300ms);
+
+        auto server_conns = server_endpoint->get_all_conns(Direction::INBOUND);
+        REQUIRE(server_conns.size() == 1);
+        auto client_max = TestHelper::path_max_udp_payload(*conn);
+        auto server_max = TestHelper::path_max_udp_payload(*server_conns.front());
+        if (capped)
+        {
+            // The server is held to it too, through the max_udp_payload_size we advertise.
+            CHECK(client_max <= 1300);
+            CHECK(server_max <= 1300);
+        }
+        else
+        {
+            CHECK(client_max > 1300);
+            CHECK(server_max > 1300);
+        }
+    }
 }  // namespace oxen::quic::test

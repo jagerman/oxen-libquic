@@ -77,15 +77,17 @@ namespace oxen::quic
     inline constexpr std::chrono::seconds DEFAULT_IDLE_TIMEOUT = 30s;
 
     // NGTCP2 sets the path_pmtud_payload to 1200 on connection creation, then discovers upwards
-    // to a theoretical max of 1452. In 'lazy' mode, we take in split packets under the current max
-    // pmtud size. In 'greedy' mode, we take in up to double the current pmtud size to split amongst
-    // two datagrams. (Note: NGTCP2_MAX_UDP_PAYLOAD_SIZE is badly named, so we're using more accurate
-    // ones)
+    // to at most MAX_PMTUD_UDP_PAYLOAD. In 'lazy' mode, we take in split packets under the current
+    // max pmtud size. In 'greedy' mode, we take in up to double the current pmtud size to split
+    // amongst two datagrams. (Note: NGTCP2_MAX_UDP_PAYLOAD_SIZE is badly named, so we're using more
+    // accurate ones)
 
     inline constexpr size_t MIN_UDP_PAYLOAD = 1200;  // == NGTCP2_MAX_UDP_PAYLOAD_SIZE
     inline constexpr size_t MIN_LAZY_UDP_PAYLOAD = MIN_UDP_PAYLOAD;
     inline constexpr size_t MIN_GREEDY_UDP_PAYLOAD = 2 * MIN_LAZY_UDP_PAYLOAD;
-    inline constexpr size_t MAX_PMTUD_UDP_PAYLOAD = 1452;  // == NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE
+    // The largest UDP payload we send or receive: what a 1500-byte (i.e. Ethernet) MTU carries over
+    // IPv4 (1500 - 20 - 8).  Over IPv6 that MTU carries at most 1452.
+    inline constexpr size_t MAX_PMTUD_UDP_PAYLOAD = 1472;
     inline constexpr size_t MAX_GREEDY_PMTUD_UDP_PAYLOAD = 2 * MAX_PMTUD_UDP_PAYLOAD;
 
     // This is the maximum overhead in the UDP packet of sending a packet containing only one single

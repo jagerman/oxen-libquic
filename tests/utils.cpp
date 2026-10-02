@@ -118,6 +118,11 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep.get_socket()->gso_; });
     }
 
+    size_t TestHelper::path_max_udp_payload(Connection& conn)
+    {
+        return conn._endpoint.job_queue.call_get([&] { return ngtcp2_conn_get_path_max_tx_udp_payload_size(conn); });
+    }
+
     io_result TestHelper::send_packets(
             Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts)
     {

@@ -35,10 +35,9 @@ namespace oxen::quic
             ::event_free(e);
     }
 
-    // We hard-code these constants in utils.hpp to avoid needing to include all of ngtcp2, but
-    // verify here that they match the ngtcp2 value.
+    // We hard-code this constant in utils.hpp to avoid needing to include all of ngtcp2, but verify
+    // here that it matches the ngtcp2 value.
     static_assert(MIN_UDP_PAYLOAD == NGTCP2_MAX_UDP_PAYLOAD_SIZE);
-    static_assert(MAX_PMTUD_UDP_PAYLOAD == NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE);
 
 #ifdef _WIN32
     static bool running_under_wine_impl()

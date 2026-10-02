@@ -148,9 +148,8 @@ namespace oxen::quic
         /// The max size of a transmittable datagram can be queried directly from
         /// Connection::get_max_datagram_size(). At connection initialization, ngtcp2 will default
         /// this value to 1200.  The actual value is negotiated upwards via path discovery, reaching
-        /// a theoretical maximum of NGTCP2_MAX_PMTUD_UDP_PAYLOAD_SIZE (1452), or near it, per
-        /// datagram. Please note that enabling datagram splitting will double whatever value is
-        /// returned.
+        /// at most MAX_PMTUD_UDP_PAYLOAD (1472), or near it, per datagram. Please note that
+        /// enabling datagram splitting will double whatever value is returned.
         ///
         /// Note: this setting CANNOT be changed for an endpoint after creation, it must be
         /// destroyed and re-initialized with the desired settings.

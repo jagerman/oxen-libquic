@@ -118,6 +118,10 @@ namespace oxen::quic
         // Returns whether the endpoint's socket is currently sending with GSO.
         static bool gso_enabled(Endpoint& ep);
 
+        // Returns the largest UDP payload ngtcp2 currently sends on the connection's path (i.e.
+        // the size PMTUD has validated so far).
+        static size_t path_max_udp_payload(Connection& conn);
+
         // Calls the endpoint's internal send_packets (on its loop thread).
         static io_result send_packets(
                 Endpoint& ep, const Path& path, std::byte* buf, size_t* bufsize, uint8_t* ecn, size_t& n_pkts);
