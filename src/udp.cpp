@@ -44,6 +44,12 @@ extern "C"
 #include <variant>
 #include <vector>
 
+#ifndef NDEBUG
+#include <deque>
+#include <mutex>
+#include <unordered_map>
+#endif
+
 #ifdef _WIN32
 
 #define CMSG_FIRSTHDR(h) WSA_CMSG_FIRSTHDR(h)
@@ -62,8 +68,39 @@ extern "C"
 
 #endif
 
+// We support different compilation modes for trying different methods of UDP sending by setting
+// these defines; these shouldn't be set directly but rather through the cmake -DLIBQUIC_SEND
+// option.  At most one of these may be defined.
+//
+// OXEN_LIBQUIC_UDP_GSO -- support use either sendmmsg or GSO to batch-send packets.  GSO
+// support can be opted-in at runtime.  Only works on Linux, and not always (i.e. depends on
+// hardware and software support).  Will fall back to SENDMMSG if the required UDP_SEGMENT is
+// not defined (i.e. on older Linux distros), or if GSO is not selected at runtime.
+// CMake option: -DLIBQUIC_SEND=gso
+//
+// OXEN_LIBQUIC_UDP_SENDMMSG -- use sendmmsg (but not GSO) to batch-send packets.  Only works on
+// Linux and FreeBSD.
+// CMake option: -DLIBQUIC_SEND=sendmmsg
+//
+// If neither is defined we use plain sendmsg in a loop.
+
+#if (defined(OXEN_LIBQUIC_UDP_GSO) + defined(OXEN_LIBQUIC_UDP_SENDMMSG)) > 1
+#error Only one of OXEN_LIBQUIC_UDP_GSO and OXEN_LIBQUIC_UDP_SENDMMSG may be set at once
+#endif
+
+#if defined(OXEN_LIBQUIC_UDP_GSO) && !defined(UDP_SEGMENT)
+#undef OXEN_LIBQUIC_UDP_GSO
+#define OXEN_LIBQUIC_UDP_SENDMMSG
+#endif
+
 namespace oxen::quic
 {
+
+#ifdef OXEN_LIBQUIC_UDP_GSO
+    constexpr bool GSO_SUPPORTED = true;
+#else
+    constexpr bool GSO_SUPPORTED = false;
+#endif
 
 #ifdef _WIN32
     static_assert(std::is_same_v<UDPSocket::socket_t, SOCKET>);
@@ -80,6 +117,49 @@ namespace oxen::quic
             IP_TOS;
 #endif
 #endif
+
+#ifndef NDEBUG
+    // State for UDPSocket::_debug_fail_sends, kept here rather than in UDPSocket so that the
+    // class's layout doesn't depend on the build type.
+    namespace
+    {
+        struct send_failures
+        {
+            std::deque<int> gso, plain;
+        };
+        std::mutex debug_send_failures_mutex;
+        std::unordered_map<const UDPSocket*, send_failures> debug_send_failures;
+
+        // Returns the next error queued for a GSO (or non-GSO) send on `sock`, or 0 if none.
+        int take_debug_send_failure(const UDPSocket* sock, bool gso)
+        {
+            std::lock_guard lock{debug_send_failures_mutex};
+            auto it = debug_send_failures.find(sock);
+            if (it == debug_send_failures.end())
+                return 0;
+            auto& q = gso ? it->second.gso : it->second.plain;
+            if (q.empty())
+                return 0;
+            int err = q.front();
+            q.pop_front();
+            return err;
+        }
+    }  // namespace
+#endif
+
+    bool UDPSocket::_debug_fail_sends(
+            [[maybe_unused]] std::vector<int> gso_errors, [[maybe_unused]] std::vector<int> plain_errors)
+    {
+#ifndef NDEBUG
+        std::lock_guard lock{debug_send_failures_mutex};
+        auto& f = debug_send_failures[this];
+        f.gso.insert(f.gso.end(), gso_errors.begin(), gso_errors.end());
+        f.plain.insert(f.plain.end(), plain_errors.begin(), plain_errors.end());
+        return true;
+#else
+        return false;
+#endif
+    }
 
     /// Checks rv for being -1 and, if so, raises a system_error from errno.  Otherwise returns it.
     static int check_rv(int rv, std::string_view action)
@@ -169,7 +249,7 @@ namespace oxen::quic
 #endif
 
     UDPSocket::UDPSocket(event_base* ev_loop, const Address& addr, bool allow_gso, receive_callback_t on_receive) :
-            gso_{allow_gso}, ev_{ev_loop}, receive_callback_{std::move(on_receive)}
+            gso_{GSO_SUPPORTED && allow_gso}, ev_{ev_loop}, receive_callback_{std::move(on_receive)}
     {
         assert(ev_);
 
@@ -313,6 +393,10 @@ namespace oxen::quic
         ::closesocket(sock_);
 #else
         ::close(sock_);
+#endif
+#ifndef NDEBUG
+        std::lock_guard lock{debug_send_failures_mutex};
+        debug_send_failures.erase(this);
 #endif
     }
 
@@ -505,31 +589,6 @@ namespace oxen::quic
         return CMSG_SPACE(sizeof(ecn));
     }
 
-    // We support different compilation modes for trying different methods of UDP sending by setting
-    // these defines; these shouldn't be set directly but rather through the cmake -DLIBQUIC_SEND
-    // option.  At most one of these may be defined.
-    //
-    // OXEN_LIBQUIC_UDP_GSO -- support use either sendmmsg or GSO to batch-send packets.  GSO
-    // support can be opted-in at runtime.  Only works on Linux, and not always (i.e. depends on
-    // hardware and software support).  Will fall back to SENDMMSG if the required UDP_SEGMENT is
-    // not defined (i.e. on older Linux distros), or if GSO is not selected at runtime.
-    // CMake option: -DLIBQUIC_SEND=gso
-    //
-    // OXEN_LIBQUIC_UDP_SENDMMSG -- use sendmmsg (but not GSO) to batch-send packets.  Only works on
-    // Linux and FreeBSD.
-    // CMake option: -DLIBQUIC_SEND=sendmmsg
-    //
-    // If neither is defined we use plain sendmsg in a loop.
-
-#if (defined(OXEN_LIBQUIC_UDP_GSO) + defined(OXEN_LIBQUIC_UDP_SENDMMSG)) > 1
-#error Only one of OXEN_LIBQUIC_UDP_GSO and OXEN_LIBQUIC_UDP_SENDMMSG may be set at once
-#endif
-
-#if defined(OXEN_LIBQUIC_UDP_GSO) && !defined(UDP_SEGMENT)
-#undef OXEN_LIBQUIC_UDP_GSO
-#define OXEN_LIBQUIC_UDP_SENDMMSG
-#endif
-
     std::pair<io_result, size_t> UDPSocket::send(
             const Path& path, const std::byte* buf, const size_t* bufsize, const uint8_t* ecn, size_t n_pkts)
     {
@@ -576,6 +635,9 @@ namespace oxen::quic
         }
 
 #ifdef OXEN_LIBQUIC_UDP_GSO
+
+        // Set if the GSO send failed in a way that falls back to sending without GSO, below.
+        int gso_error = 0;
 
         if (gso_)
         {
@@ -661,6 +723,14 @@ namespace oxen::quic
 
             do
             {
+#ifndef NDEBUG
+                if (int err = take_debug_send_failure(this, true))
+                {
+                    rv = -1;
+                    errno = err;
+                    break;
+                }
+#endif
                 rv = sendmmsg(sock_, msgs.data(), msg_count, 0);
                 log::trace(log_cat, "sendmmsg returned {}", rv);
             } while (rv == -1 && errno == EINTR);
@@ -697,9 +767,19 @@ namespace oxen::quic
                         sent += gso_counts[i];
                     }
                 }
+                return {io_result{}, sent};
             }
 
-            return {io_result{rv < 0 ? errno : 0}, sent};
+            if (errno != EIO && errno != EINVAL)
+                return {io_result{errno}, sent};
+
+            // EIO means GSO can't work on this route (e.g. no checksum offload, before Linux 6.11,
+            // or an IPsec route).  EINVAL is either that or a batch larger than the path MTU, and
+            // resending without GSO tells them apart: the packets then fail one at a time with
+            // EMSGSIZE if it was the size.
+            gso_error = errno;
+            log::debug(log_cat, "UDP GSO send failed ({}); resending without GSO", std::strerror(gso_error));
+            next_buf = const_cast<char*>(reinterpret_cast<const char*>(buf));
         }
 #endif
 
@@ -747,10 +827,29 @@ namespace oxen::quic
 
         do
         {
+#ifndef NDEBUG
+            if (int err = take_debug_send_failure(this, false))
+            {
+                rv = -1;
+                errno = err;
+                break;
+            }
+#endif
             rv = sendmmsg(sock_, msgs.data(), n_pkts, MSG_DONTWAIT);
         } while (rv == -1 && errno == EINTR);
 
         sent = rv >= 0 ? rv : 0;
+
+#ifdef OXEN_LIBQUIC_UDP_GSO
+        // For EINVAL, GSO was the problem only if this resend went through.
+        if (gso_error == EIO || (gso_error == EINVAL && sent == n_pkts))
+        {
+            int send_errno = errno;
+            log::info(log_cat, "UDP GSO send failed ({}); disabling GSO on this socket", std::strerror(gso_error));
+            gso_ = false;
+            errno = send_errno;
+        }
+#endif
 
 #else  // No sendmmsg at all, so we just use sendmsg in a loop
 

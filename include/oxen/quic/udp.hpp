@@ -143,6 +143,11 @@ namespace oxen::quic
         void process_packet(std::span<const std::byte> payload, msghdr& hdr);
         io_result receive();
 
+        // Test hook, only functional in debug builds of libquic: makes this socket's upcoming sends
+        // fail, in order, with `gso_errors` (for sends made using GSO) and `plain_errors` (for
+        // sends made without it).  Returns false if unsupported.
+        bool _debug_fail_sends(std::vector<int> gso_errors, std::vector<int> plain_errors);
+
         socket_t sock_;
         Address bound_;
 

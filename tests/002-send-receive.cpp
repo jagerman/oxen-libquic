@@ -1444,4 +1444,66 @@ namespace oxen::quic::test
 
         CHECK(client_closed.wait());
     }
+
+    TEST_CASE("002 - A failed GSO send falls back to sending without it", "[002][senderr][gso]")
+    {
+        // "EIO": GSO can't work on the route, so it gets disabled.
+        // "EINVAL, unsupported": the resend without GSO works, so GSO was the problem: disabled.
+        // "EINVAL, too big": the resend without GSO fails with EMSGSIZE, so it was the size: GSO
+        //   stays on, and the oversized packets are dropped (and recovered by QUIC).
+        const auto mode = GENERATE(as<std::string>{}, "EIO", "EINVAL, unsupported", "EINVAL, too big");
+
+        Network test_net{};
+
+        std::vector<std::byte> msg(100'000);
+        for (size_t i = 0; i < msg.size(); i++)
+            msg[i] = static_cast<std::byte>(i % 251);
+
+        std::mutex received_mut;
+        std::vector<std::byte> received;
+        std::promise<void> all_received;
+        stream_data_callback server_data_cb = [&](Stream&, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mut};
+            received.insert(received.end(), dat.begin(), dat.end());
+            if (received.size() == msg.size())
+                all_received.set_value();
+        };
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(Address{});
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls, server_data_cb));
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        auto client_endpoint = test_net.endpoint(Address{}, client_established, opt::allow_gso{});
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+        if (!TestHelper::gso_enabled(*client_endpoint))
+            SKIP("This build of libquic does not support GSO");
+
+        bool injected = mode == "EIO" ? TestHelper::fail_socket_sends(*client_endpoint, {EIO}, {})
+                      : mode == "EINVAL, unsupported"
+                              ? TestHelper::fail_socket_sends(*client_endpoint, {EINVAL}, {})
+                              : TestHelper::fail_socket_sends(*client_endpoint, {EINVAL}, {EMSGSIZE});
+        if (!injected)
+            SKIP("Send error testing requires a debug build of libquic");
+
+        auto stream = conn->open_stream();
+        stream->send(msg, nullptr);
+
+        require_future(all_received.get_future(), 5s);
+        {
+            std::lock_guard lock{received_mut};
+            CHECK(received == msg);
+        }
+
+        if (mode == "EINVAL, too big")
+        {
+            CHECK(TestHelper::gso_enabled(*client_endpoint));
+            CHECK(TestHelper::send_stats(*client_endpoint).too_big_drops > 0);
+        }
+        else
+            CHECK_FALSE(TestHelper::gso_enabled(*client_endpoint));
+    }
 }  // namespace oxen::quic::test
