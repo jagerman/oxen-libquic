@@ -72,9 +72,13 @@ namespace oxen::quic
         // because their owner went away.
         std::chrono::steady_clock::time_point debug_block_until{};
         // The next `debug_partial_sends` socket sends of more than `debug_partial_max` packets only
-        // send that many, reporting the rest as unsent (as a nearly-full socket would).
+        // send that many, reporting the rest as unsent (as sendmmsg does when a later message
+        // fails); if `debug_partial_then_block` the immediate retry then reports EAGAIN (as a
+        // nearly-full socket would).
         size_t debug_partial_sends = 0;
         size_t debug_partial_max = 0;
+        bool debug_partial_then_block = true;
+        bool debug_partial_block_next = false;
         size_t debug_stalls = 0;
         size_t debug_stall_skips = 0;
         size_t debug_stall_discards = 0;

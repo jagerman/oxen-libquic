@@ -1049,54 +1049,70 @@ namespace oxen::quic
 
         assert(n_pkts >= 1 && n_pkts <= MAX_BATCH);
 
-        size_t n_try = n_pkts;
-#ifndef NDEBUG
-        if (auto& b = batch(); std::chrono::steady_clock::now() < b.debug_block_until)
-            return io_result{EAGAIN};
-        else if (b.debug_partial_sends > 0 && n_pkts > b.debug_partial_max)
+        // sendmmsg only reports an error when its *first* message fails: when a later one fails it
+        // returns the short count and the error is lost.  So a short count without an error gets
+        // one immediate retry of the rest, to find out why, rather than being assumed to mean that
+        // the socket is full.
+        bool retried = false;
+        for (;;)
         {
-            b.debug_partial_sends--;
-            n_try = b.debug_partial_max;
-        }
+            size_t n_try = n_pkts;
+#ifndef NDEBUG
+            if (auto& b = batch(); std::chrono::steady_clock::now() < b.debug_block_until)
+                return io_result{EAGAIN};
+            else if (b.debug_partial_block_next)
+            {
+                b.debug_partial_block_next = false;
+                return io_result{EAGAIN};
+            }
+            else if (b.debug_partial_sends > 0 && n_pkts > b.debug_partial_max)
+            {
+                b.debug_partial_sends--;
+                n_try = b.debug_partial_max;
+                b.debug_partial_block_next = b.debug_partial_then_block;
+            }
 #endif
 
-        log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_try, path);
+            log::trace(log_cat, "Sending {} UDP packet(s) {}...", n_try, path);
 
-        auto [ret, sent] = socket->send(path, buf, bufsize, ecn, n_try);
+            auto [ret, sent] = socket->send(path, buf, bufsize, ecn, n_try);
 
-        if (ret.failure() && !ret.blocked())
-        {
-            log::error(log_cat, "Error sending packets {}: {}", path, ret.str_error());
-            n_pkts = 0;  // Drop any packets, as we had a serious error
-            return ret;
-        }
-
-        if (sent < n_pkts)
-        {
-            if (sent == 0)  // Didn't send *any* packets, i.e. we got entirely blocked
-                log::debug(log_cat, "UDP sent none of {}", n_pkts);
-
-            else
+            if (sent > 0 && sent < n_pkts)
             {
-                // We sent some but not all, so shift the unsent packets back to the beginning of
-                // buf/bufsize/ecn
+                // Shift the unsent packets back to the beginning of buf/bufsize/ecn
                 log::debug(log_cat, "UDP undersent {}/{}", sent, n_pkts);
                 size_t offset = std::accumulate(bufsize, bufsize + sent, size_t{0});
                 size_t len = std::accumulate(bufsize + sent, bufsize + n_pkts, size_t{0});
                 std::memmove(buf, buf + offset, len);
                 std::copy(bufsize + sent, bufsize + n_pkts, bufsize);
                 std::copy(ecn + sent, ecn + n_pkts, ecn);
-                n_pkts -= sent;
+            }
+            n_pkts -= sent;
+
+            if (n_pkts == 0)
+                return io_result{};
+
+            if (ret.blocked())
+            {
+                log::debug(log_cat, "UDP send blocked with {} packet(s) unsent", n_pkts);
+                return ret;
             }
 
-            // We always return EAGAIN (so that .blocked() is true) if we failed to send all, even
-            // if that isn't strictly what we got back as the return value (sendmmsg gives back a
-            // non-error on *partial* success).
-            return io_result{EAGAIN};
-        }
+            if (ret.failure())
+            {
+                log::error(log_cat, "Error sending packets {}: {}", path, ret.str_error());
+                n_pkts = 0;  // Drop any packets, as we had a serious error
+                return ret;
+            }
 
-        n_pkts = 0;
-        return ret;
+            if (retried)
+            {
+                // Short again without an error, so treat it as the socket being full.
+                log::debug(log_cat, "UDP send undersent again; treating {} unsent packet(s) as blocked", n_pkts);
+                return io_result{EAGAIN};
+            }
+            retried = true;
+        }
     }
 
     void Endpoint::stall_send(Connection& owner)
@@ -1193,7 +1209,8 @@ namespace oxen::quic
 #endif
     }
 
-    bool Endpoint::_debug_partial_sends([[maybe_unused]] size_t n_sends, [[maybe_unused]] size_t max_pkts)
+    bool Endpoint::_debug_partial_sends(
+            [[maybe_unused]] size_t n_sends, [[maybe_unused]] size_t max_pkts, [[maybe_unused]] bool then_block)
     {
 #ifndef NDEBUG
         if (max_pkts < 1)
@@ -1201,8 +1218,10 @@ namespace oxen::quic
         // Without batched sends every send is a single packet, which can't be partly sent.
         if (MAX_BATCH < 2)
             return false;
-        batch().debug_partial_sends = n_sends;
-        batch().debug_partial_max = max_pkts;
+        auto& b = batch();
+        b.debug_partial_sends = n_sends;
+        b.debug_partial_max = max_pkts;
+        b.debug_partial_then_block = then_block;
         return true;
 #else
         return false;

@@ -92,9 +92,9 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_block_sends_for(duration); });
     }
 
-    bool TestHelper::partial_sends(Endpoint& ep, size_t n_sends, size_t max_pkts)
+    bool TestHelper::partial_sends(Endpoint& ep, size_t n_sends, size_t max_pkts, bool then_block)
     {
-        return ep.job_queue.call_get([&] { return ep._debug_partial_sends(n_sends, max_pkts); });
+        return ep.job_queue.call_get([&] { return ep._debug_partial_sends(n_sends, max_pkts, then_block); });
     }
 
     io_result TestHelper::send_packets(

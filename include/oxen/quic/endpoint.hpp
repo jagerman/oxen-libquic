@@ -288,9 +288,10 @@ namespace oxen::quic
         // unsupported; and returns stall statistics so far (all zero if unsupported).
         bool _debug_block_sends_for(std::chrono::milliseconds duration);
         // Makes the next `n_sends` socket sends of more than `max_pkts` (>= 1) packets send only
-        // that many, reporting the rest unsent; returns false if unsupported (a release build, or
-        // one that sends one packet at a time).
-        bool _debug_partial_sends(size_t n_sends, size_t max_pkts);
+        // that many, reporting the rest unsent, and (if `then_block`) the immediate retry of the
+        // rest report EAGAIN; returns false if unsupported (a release build, or one that sends one
+        // packet at a time).
+        bool _debug_partial_sends(size_t n_sends, size_t max_pkts, bool then_block);
         struct debug_stall_stats
         {
             size_t stalls = 0;    // Times the send batch stalled on a blocked socket

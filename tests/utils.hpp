@@ -100,8 +100,10 @@ namespace oxen::quic
         // (and does nothing) if libquic wasn't built in debug mode, which this requires.
         static bool block_sends_for(Endpoint& ep, std::chrono::milliseconds duration);
         // Makes the endpoint's next `n_sends` socket sends of more than `max_pkts` packets send only
-        // that many.  Returns false (and does nothing) if libquic wasn't built in debug mode.
-        static bool partial_sends(Endpoint& ep, size_t n_sends, size_t max_pkts);
+        // that many, with the immediate retry of the rest reporting EAGAIN if `then_block` (as a
+        // nearly-full socket would).  Returns false (and does nothing) if libquic wasn't built in
+        // debug mode.
+        static bool partial_sends(Endpoint& ep, size_t n_sends, size_t max_pkts, bool then_block = true);
 
         // Calls the endpoint's internal send_packets (on its loop thread).
         static io_result send_packets(

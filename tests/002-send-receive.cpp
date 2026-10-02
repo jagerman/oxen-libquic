@@ -1224,11 +1224,15 @@ namespace oxen::quic::test
         constexpr std::array<size_t, 6> sizes{100, 200, 150, 300, 120, 80};
         constexpr std::array<uint8_t, 6> ecns{0, 2, 2, 0, 1, 3};
 
+        // Whether the socket is then full (the rest must be kept for later), or the short count was
+        // sendmmsg dropping an error and an immediate retry gets the rest away.
+        const bool then_block = GENERATE(true, false);
+
         Network test_net{};
         auto ep = test_net.endpoint(Address{LOCALHOST, 0});
 
-        if (!TestHelper::partial_sends(*ep, 1, 2))
-            SKIP("Partial send testing requires a debug build of libquic");
+        if (!TestHelper::partial_sends(*ep, 1, 2, then_block))
+            SKIP("Partial send testing requires a debug build of libquic with batched sends");
 
         struct received_pkt
         {
@@ -1262,17 +1266,20 @@ namespace oxen::quic::test
         size_t n = sizes.size();
 
         auto res = TestHelper::send_packets(*ep, path, buf.data(), bufsize.data(), ecn.data(), n);
-        CHECK(res.blocked());
-        REQUIRE(n == 4);
-        for (size_t i = 0; i < n; i++)
+        if (then_block)
         {
-            CHECK(bufsize[i] == sizes[i + 2]);
-            CHECK(ecn[i] == ecns[i + 2]);
-        }
-        CHECK(buf[0] == std::byte{2});
-        CHECK(buf[sizes[2]] == std::byte{3});
+            CHECK(res.blocked());
+            REQUIRE(n == 4);
+            for (size_t i = 0; i < n; i++)
+            {
+                CHECK(bufsize[i] == sizes[i + 2]);
+                CHECK(ecn[i] == ecns[i + 2]);
+            }
+            CHECK(buf[0] == std::byte{2});
+            CHECK(buf[sizes[2]] == std::byte{3});
 
-        res = TestHelper::send_packets(*ep, path, buf.data(), bufsize.data(), ecn.data(), n);
+            res = TestHelper::send_packets(*ep, path, buf.data(), bufsize.data(), ecn.data(), n);
+        }
         CHECK(res.success());
         CHECK(n == 0);
 
