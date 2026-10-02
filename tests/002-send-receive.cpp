@@ -1539,15 +1539,22 @@ namespace oxen::quic::test
     TEST_CASE("002 - PMTUD reaches the largest probe size, with or without datagrams", "[002][pmtud]")
     {
         const bool datagrams = GENERATE(false, true);
-        // The probe list on the client, and the size both sides should end up at over loopback.
-        const auto [list, expected] = GENERATE(table<std::string, size_t>({
-                {"default", MAX_PMTUD_UDP_PAYLOAD},
-                {"max 1330", 1324},
-                {"max 9000", MAX_PMTUD_UDP_PAYLOAD},
-                {"only 1406", 1406},
-                {"minimum", 1200},
+        // Both endpoints are dual-stack, so over 127.0.0.1 the server sees an IPv4-mapped address.
+        const auto localhost = GENERATE("127.0.0.1"s, "::1"s);
+        const bool ipv6 = localhost == "::1";
+        // The probe list on the client, and the size the client should end up at over loopback for
+        // IPv4 and for IPv6 (which skips sizes above MAX_IPV6_UDP_PAYLOAD).
+        const auto [list, expected_v4, expected_v6] = GENERATE(table<std::string, size_t, size_t>({
+                {"default", MAX_PMTUD_UDP_PAYLOAD, MAX_IPV6_UDP_PAYLOAD},
+                {"explicit default", MAX_PMTUD_UDP_PAYLOAD, MAX_IPV6_UDP_PAYLOAD},
+                {"max 1330", 1324, 1324},
+                {"max 9000", MAX_PMTUD_UDP_PAYLOAD, MAX_IPV6_UDP_PAYLOAD},
+                {"only 1406", 1406, 1406},
+                {"only 1472", 1472, 1200},
+                {"minimum", 1200, 1200},
         }));
-        INFO("probe list: " << list << ", datagrams: " << datagrams);
+        const size_t expected = ipv6 ? expected_v6 : expected_v4;
+        INFO("probe list: " << list << ", datagrams: " << datagrams << ", via " << localhost);
 
         Network test_net{};
 
@@ -1559,19 +1566,23 @@ namespace oxen::quic::test
         if (datagrams)
             dgrams.emplace(Splitting::ACTIVE);
         std::optional<opt::max_udp_payload> cap;
-        const std::array<uint16_t, 1> only_1406{1406};
-        if (list == "max 1330")
+        const std::array<uint16_t, 1> only_1406{1406}, only_1472{1472};
+        if (list == "explicit default")
+            cap.emplace(std::span<const uint16_t>{DEFAULT_PMTUD_PROBES});
+        else if (list == "max 1330")
             cap.emplace(1330);
         else if (list == "max 9000")
             cap.emplace(9000);
         else if (list == "only 1406")
             cap.emplace(only_1406);
+        else if (list == "only 1472")
+            cap.emplace(only_1472);
         else if (list == "minimum")
             cap.emplace(opt::max_udp_payload::minimum());
 
         server_endpoint = test_net.endpoint(Address{}, dgrams);
         REQUIRE_NOTHROW(server_endpoint->listen(server_tls));
-        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, localhost, server_endpoint->local().port()};
 
         client_endpoint = test_net.endpoint(Address{}, client_established, dgrams, cap);
         auto conn = client_endpoint->connect(server_remote, client_tls);
@@ -1590,7 +1601,7 @@ namespace oxen::quic::test
         CHECK(server_max <= expected);
         if (list == "max 1330")
             CHECK(server_max == 1324);
-        else if (list == "default" || list == "max 9000")
-            CHECK(server_max == MAX_PMTUD_UDP_PAYLOAD);
+        else if (list == "default" || list == "explicit default" || list == "max 9000")
+            CHECK(server_max == expected);
     }
 }  // namespace oxen::quic::test

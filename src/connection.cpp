@@ -1937,16 +1937,24 @@ namespace oxen::quic
         settings.handshake_timeout = handshake_timeout <= 0s ? UINT64_MAX : static_cast<uint64_t>(handshake_timeout.count());
 
         std::span<const uint16_t> probes = DEFAULT_PMTUD_PROBES;
-        size_t max_payload = MAX_PMTUD_UDP_PAYLOAD;
         if (const auto& mup = _endpoint._max_udp_payload)
-        {
             probes = mup->probes();
-            max_payload = mup->max();
-        }
+
+        // Over IPv6 a 1500-byte MTU carries at most MAX_IPV6_UDP_PAYLOAD, and nothing between 1500
+        // and jumbo frames is in real use, so larger sizes would only be wasted probes.  Capping
+        // max_tx_udp_payload_size is enough: ngtcp2 skips any probe larger than it.  IPv4-mapped
+        // addresses (from dual-stack sockets) are sent as IPv4.
+        const size_t family_max =
+                _path.remote.is_ipv6() && !_path.remote.is_ipv4_mapped_ipv6() ? MAX_IPV6_UDP_PAYLOAD : MAX_PMTUD_UDP_PAYLOAD;
+        size_t max_payload = MIN_UDP_PAYLOAD;
+        for (auto size : probes)
+            if (size <= family_max)
+                max_payload = std::max<size_t>(max_payload, size);
+
         // ngtcp2 copies the probe list into the connection.
         settings.pmtud_probes = probes.data();
         settings.pmtud_probeslen = probes.size();
-        settings.no_pmtud = probes.empty();
+        settings.no_pmtud = max_payload == MIN_UDP_PAYLOAD;
         settings.max_tx_udp_payload_size = max_payload;
 
         ngtcp2_transport_params_default(&params);

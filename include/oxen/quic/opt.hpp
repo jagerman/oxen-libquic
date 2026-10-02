@@ -29,6 +29,9 @@ namespace oxen::quic
         // any size no larger than one already confirmed or no smaller than one that failed.  To
         // probe exactly one size, pass a span of just that size.
         //
+        // Either way, IPv6 connections skip sizes larger than MAX_IPV6_UDP_PAYLOAD (1452), the most
+        // a 1500-byte MTU carries over IPv6.
+        //
         // The values are UDP payload sizes, NOT link-layer MTUs.  Use the ipv4() or ipv6()
         // factories to convert from a link MTU.
         class max_udp_payload
