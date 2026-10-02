@@ -285,6 +285,10 @@ namespace oxen::quic
                 bool pin_source,
                 size_t* too_big = nullptr);
 
+        // The local address our socket would currently use to reach `remote` (see
+        // UDPSocket::local_address_for), or nullopt if that can't be determined.
+        std::optional<Address> local_address_for(const Address& remote) const;
+
         send_batch& batch() { return *_send_batch; }
 
         // Called when `owner`'s send of the batch blocked: leaves the unsent packets in the batch
@@ -315,6 +319,10 @@ namespace oxen::quic
         bool _debug_mtu(size_t mtu);
         // Makes the next `n_sends` socket sends fail with `err`; returns false if unsupported.
         bool _debug_fail_sends(int err, size_t n_sends);
+        // Simulates the host's address changing to `addr` (nullopt to stop): looking up the local
+        // address used to reach a peer returns it, and received packets report it as the address
+        // they arrived on; returns false if unsupported.
+        bool _debug_simulate_local_address(std::optional<Address> addr);
         struct debug_send_stats
         {
             size_t stalls = 0;           // Times the send batch stalled on a blocked socket

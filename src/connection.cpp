@@ -1861,6 +1861,48 @@ namespace oxen::quic
         _endpoint.close_connection(*this, io_error{CONN_MTU_EXCEEDED});
     }
 
+    void Connection::local_address_mismatch(const Address& arrived_on)
+    {
+        // ngtcp2 only allows migrating once the handshake is confirmed.
+        if (arrived_on == _unconfirmed_local || !handshake_confirmed)
+            return;
+
+        if (!check_local_address())
+            _unconfirmed_local = arrived_on;
+    }
+
+    bool Connection::check_local_address()
+    {
+        assert(is_outbound());
+
+        if (!handshake_confirmed || draining || closing || dead)
+            return false;
+
+        auto source = _endpoint.local_address_for(_path.remote);
+        if (!source || *source == _path.local)
+            return false;
+
+        // A new path, with a new connection ID, makes ngtcp2 validate it and rediscover its PMTU
+        // from the minimum, rather than carrying on at a size the new network may not allow.
+        Path new_path{*source, _path.remote};
+        if (auto rv = ngtcp2_conn_initiate_immediate_migration(*this, new_path, get_timestamp().count()); rv != 0)
+        {
+            log::warning(
+                    log_cat,
+                    "{} could not migrate from local address {} to {}: {}",
+                    reference_id(),
+                    _path.local,
+                    *source,
+                    ngtcp2_strerror(rv));
+            return false;
+        }
+
+        log::info(log_cat, "{} local address changed from {} to {}; migrating", reference_id(), _path.local, *source);
+        _path = new_path;
+        _unconfirmed_local = Address{};
+        return true;
+    }
+
     size_t Connection::get_max_datagram_piece() const
     {
         if (!dgrams)

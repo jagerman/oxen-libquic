@@ -469,6 +469,19 @@ namespace oxen::quic
         // packet within the path size ngtcp2 has confirmed.
         void packet_too_big(size_t size);
 
+        // The last local address a packet arrived on, other than _path.local, that turned out not
+        // to mean the host's source address had changed (e.g. asymmetric routing), so that further
+        // packets arriving there don't each repeat the lookup.
+        Address _unconfirmed_local;
+
+        // Called (on an outbound connection) when a packet arrives on a local address other than
+        // _path.local.
+        void local_address_mismatch(const Address& arrived_on);
+
+        // If the host would now reach the peer from a different local address than _path.local
+        // (i.e. the host's network changed), migrates the connection to it; returns true if it did.
+        bool check_local_address();
+
         void schedule_packet_retransmit(std::chrono::steady_clock::time_point ts);
 
         bool draining = false;
