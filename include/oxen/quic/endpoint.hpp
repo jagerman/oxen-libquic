@@ -109,6 +109,13 @@ namespace oxen::quic
         // query a list of all active inbound and outbound connections paired with a conn_interface
         std::list<std::shared_ptr<Connection>> get_all_conns(std::optional<Direction> d = std::nullopt);
 
+        // Tells the endpoint that the host's network may have changed (e.g. a phone moving from
+        // Wi-Fi to cellular): each outbound connection checks whether the host now reaches its peer
+        // from a different local address and, if so, migrates to it.  Connections also notice this
+        // themselves once a packet arrives on the new address, but that needs some of their packets
+        // to have got through on the new network first.
+        void network_changed();
+
         const Address& local() const { return _local; }
 
         // Sets the local endpoint address.  This should *only* be used when using manual packet
