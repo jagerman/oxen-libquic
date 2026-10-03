@@ -465,9 +465,10 @@ namespace oxen::quic
         bool waiting_on_stall = false;
 
         // Called when a packet of `size` bytes was dropped because the socket refused it as too big
-        // for the path (EMSGSIZE): ignored for a PMTUD probe, but closes the connection for any
-        // packet within the path size ngtcp2 has confirmed.
-        void packet_too_big(size_t size);
+        // for the path (EMSGSIZE): ignored for a PMTUD probe.  For any packet within the path size
+        // ngtcp2 has confirmed, an outbound connection whose local address has changed migrates;
+        // otherwise the connection closes.  `ts` is the timestamp for any ngtcp2 call this makes.
+        void packet_too_big(size_t size, uint64_t ts);
 
         // The last local address a packet arrived on, other than _path.local, that turned out not
         // to mean the host's source address had changed (e.g. asymmetric routing), so that further
@@ -480,7 +481,9 @@ namespace oxen::quic
 
         // If the host would now reach the peer from a different local address than _path.local
         // (i.e. the host's network changed), migrates the connection to it; returns true if it did.
-        bool check_local_address();
+        // Called during a flush, `ts` must be the flush's timestamp, which ngtcp2 goes on to be
+        // given for the rest of the flush.
+        bool check_local_address(uint64_t ts = get_timestamp().count());
 
         void schedule_packet_retransmit(std::chrono::steady_clock::time_point ts);
 
