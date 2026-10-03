@@ -1089,9 +1089,12 @@ namespace oxen::quic
       private:
         bool cancelled = false;
         Connection& conn;
-        uint64_t ts;
 
       public:
+        // The flush's timestamp.  The flush keeps writing packets with it, so any other ngtcp2 call
+        // made during the flush must use it too: ngtcp2 requires timestamps never to go backwards.
+        const uint64_t ts;
+
         pkt_tx_timer_updater(Connection& c, uint64_t ts) : conn{c}, ts{ts} {}
         pkt_tx_timer_updater(pkt_tx_timer_updater&& x) = delete;
         pkt_tx_timer_updater(const pkt_tx_timer_updater& x) = delete;
@@ -1129,7 +1132,7 @@ namespace oxen::quic
         auto rv = _endpoint.send_packets(
                 _path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, !is_outbound(), &too_big);
         if (too_big)
-            packet_too_big(too_big);
+            packet_too_big(too_big, pkt_updater.ts);
 
         if (rv.blocked())
         {
@@ -1842,7 +1845,7 @@ namespace oxen::quic
         return ngtcp2_conn_get_streams_bidi_left(*this);
     }
 
-    void Connection::packet_too_big(size_t size)
+    void Connection::packet_too_big(size_t size, uint64_t ts)
     {
         // PMTUD probes are larger than the path size ngtcp2 has confirmed, and failing is how it
         // finds the path's limit.
@@ -1850,9 +1853,14 @@ namespace oxen::quic
             return;
 
         // Anything else being refused means the path can no longer carry packets of the size
-        // ngtcp2 confirmed for it.  ngtcp2 can't lower that size, so every full-size packet would
-        // keep failing; closing lets the application reconnect, and the new connection discovers
-        // the path's size from scratch.
+        // ngtcp2 confirmed for it, most likely because the host's network changed under us; if our
+        // source address changed with it, migrating starts the new path off at the minimum size.
+        if (is_outbound() && check_local_address(ts))
+            return;
+
+        // Otherwise ngtcp2 can't lower the path's size, so every full-size packet would keep
+        // failing; closing lets the application reconnect, and the new connection discovers the
+        // path's size from scratch.
         log::warning(
                 log_cat,
                 "{} packet of {} bytes refused as too big for the path; closing the connection",
@@ -1871,7 +1879,7 @@ namespace oxen::quic
             _unconfirmed_local = arrived_on;
     }
 
-    bool Connection::check_local_address()
+    bool Connection::check_local_address(uint64_t ts)
     {
         assert(is_outbound());
 
@@ -1885,7 +1893,7 @@ namespace oxen::quic
         // A new path, with a new connection ID, makes ngtcp2 validate it and rediscover its PMTU
         // from the minimum, rather than carrying on at a size the new network may not allow.
         Path new_path{*source, _path.remote};
-        if (auto rv = ngtcp2_conn_initiate_immediate_migration(*this, new_path, get_timestamp().count()); rv != 0)
+        if (auto rv = ngtcp2_conn_initiate_immediate_migration(*this, new_path, ts); rv != 0)
         {
             log::warning(
                     log_cat,

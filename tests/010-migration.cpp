@@ -169,4 +169,67 @@ namespace oxen::quic::test
         stream->send("three"s);
         CHECK(wait_for_received("three"));
     }
+
+    TEST_CASE(
+            "010 - A packet refused as too big after a change of the host's source address migrates the connection",
+            "[010][migration][network][pmtud]")
+    {
+        // Declared before the Network, which closes the connection (calling this) as it shuts down.
+        std::promise<uint64_t> client_closed;
+        std::atomic<bool> closed_once{false};
+        connection_closed_callback on_client_closed = [&](Connection&, uint64_t ec) {
+            if (!closed_once.exchange(true))
+                client_closed.set_value(ec);
+        };
+
+        Network test_net{};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        constexpr size_t msg_size = 100'000;
+        std::promise<void> all_received;
+        size_t received = 0;
+        stream_data_callback server_data_cb = [&](Stream&, std::span<const std::byte> dat) {
+            received += dat.size();
+            if (received == msg_size)
+                all_received.set_value();
+        };
+
+        auto server_endpoint = test_net.endpoint(Address{"127.0.0.1", 0});
+        server_endpoint->listen(server_tls, server_data_cb);
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, "127.0.0.1", server_endpoint->local().port()};
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto client_endpoint = test_net.endpoint(Address{ipv4{}}, client_established, on_client_closed);
+        if (!TestHelper::simulate_local_address(*client_endpoint, std::nullopt))
+            SKIP("Simulating a change of the host's address requires a debug build of libquic");
+        const auto port = client_endpoint->local().port();
+
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+        for (int i = 0; i < 50 && TestHelper::path_max_udp_payload(*conn) < MAX_PMTUD_UDP_PAYLOAD; i++)
+            std::this_thread::sleep_for(20ms);
+        REQUIRE(TestHelper::path_max_udp_payload(*conn) == MAX_PMTUD_UDP_PAYLOAD);
+        // Let the last acknowledgements arrive, so that the first sign of the change is the refusal
+        // rather than a packet arriving on the new address.
+        std::this_thread::sleep_for(200ms);
+
+        // The host moves to a network whose path refuses packets above 1400 bytes.
+        const Address new_local{"127.0.0.2", port};
+        REQUIRE(TestHelper::simulate_local_address(*client_endpoint, new_local));
+        REQUIRE(TestHelper::simulate_mtu(*client_endpoint, 1400));
+
+        auto stream = conn->open_stream();
+        stream->send(std::string(msg_size, 'x'));
+
+        auto closed = client_closed.get_future();
+        require_future(all_received.get_future(), 5s);
+        CHECK(closed.wait_for(0s) == std::future_status::timeout);
+        CHECK(conn->local() == new_local);
+        CHECK(TestHelper::send_stats(*client_endpoint).too_big_drops > 0);
+
+        // The new path's size is discovered from scratch: 1452 fails, then 1372 succeeds.
+        for (int i = 0; i < 50 && TestHelper::path_max_udp_payload(*conn) != 1372; i++)
+            std::this_thread::sleep_for(50ms);
+        CHECK(TestHelper::path_max_udp_payload(*conn) == 1372);
+    }
 }  // namespace oxen::quic::test

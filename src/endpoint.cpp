@@ -1295,7 +1295,7 @@ namespace oxen::quic
             auto rv = send_packets(
                     owner->_path, b.buf.data(), b.size.data(), b.ecn.data(), b.n_packets, !owner->is_outbound(), &too_big);
             if (too_big)
-                owner->packet_too_big(too_big);
+                owner->packet_too_big(too_big, get_timestamp().count());
             if (rv.blocked())
             {
                 socket->when_writeable([this] { resume_stalled_send(); });
