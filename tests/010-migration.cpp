@@ -171,6 +171,69 @@ namespace oxen::quic::test
     }
 
     TEST_CASE(
+            "010 - Packets arriving on another local address don't migrate the connection if the source is unchanged",
+            "[010][migration][network]")
+    {
+        Network test_net{};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        std::mutex received_mutex;
+        std::string received;
+        std::condition_variable received_cv;
+        stream_data_callback server_data_cb = [&](Stream&, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mutex};
+            received += view(dat);
+            received_cv.notify_all();
+        };
+        auto wait_for_received = [&](std::string_view expected) {
+            std::unique_lock lock{received_mutex};
+            return received_cv.wait_for(lock, 5s, [&] { return received.ends_with(expected); });
+        };
+
+        auto server_endpoint = test_net.endpoint(Address{"127.0.0.1", 0});
+        server_endpoint->listen(server_tls, server_data_cb);
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, "127.0.0.1", server_endpoint->local().port()};
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto client_endpoint = test_net.endpoint(Address{ipv4{}}, client_established);
+        if (!TestHelper::simulate_arrival_address(*client_endpoint, std::nullopt))
+            SKIP("Simulating the address packets arrive on requires a debug build of libquic");
+        const auto port = client_endpoint->local().port();
+
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+        const auto original_local = conn->local();
+        REQUIRE(original_local == Address{"127.0.0.1", port});
+
+        auto stream = conn->open_stream();
+        stream->send("one"s);
+        REQUIRE(wait_for_received("one"));
+        std::this_thread::sleep_for(200ms);
+
+        // Replies start arriving on another of the host's addresses while it still sends from the
+        // original one, as with asymmetric routing on a multi-homed host.
+        REQUIRE(TestHelper::simulate_arrival_address(*client_endpoint, Address{"127.0.0.2", port}));
+        const auto lookups = TestHelper::route_lookups(*client_endpoint);
+
+        // Each is acknowledged, so several packets arrive on the other address.
+        for (auto msg : {"two"s, "three"s, "four"s})
+        {
+            stream->send(std::string{msg});
+            REQUIRE(wait_for_received(msg));
+            std::this_thread::sleep_for(100ms);
+        }
+
+        CHECK(conn->local() == original_local);
+        CHECK(TestHelper::ngtcp2_path_local(*conn) == original_local);
+        // Only the first packet to arrive there makes the connection look up its route.
+        CHECK(TestHelper::route_lookups(*client_endpoint) == lookups + 1);
+
+        REQUIRE(TestHelper::simulate_arrival_address(*client_endpoint, std::nullopt));
+        stream->send("five"s);
+        CHECK(wait_for_received("five"));
+    }
+
+    TEST_CASE(
             "010 - A packet refused as too big after a change of the host's source address migrates the connection",
             "[010][migration][network][pmtud]")
     {

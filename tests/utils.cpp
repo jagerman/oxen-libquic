@@ -110,7 +110,18 @@ namespace oxen::quic
 
     bool TestHelper::simulate_local_address(Endpoint& ep, std::optional<Address> addr)
     {
-        return ep.job_queue.call_get([&] { return ep._debug_simulate_local_address(std::move(addr)); });
+        return ep.job_queue.call_get(
+                [&] { return ep._debug_simulate_route_source(addr) && ep._debug_simulate_arrival_address(addr); });
+    }
+
+    bool TestHelper::simulate_arrival_address(Endpoint& ep, std::optional<Address> addr)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_simulate_arrival_address(std::move(addr)); });
+    }
+
+    size_t TestHelper::route_lookups(Endpoint& ep)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_route_lookups(); });
     }
 
     Address TestHelper::ngtcp2_path_local(Connection& conn)

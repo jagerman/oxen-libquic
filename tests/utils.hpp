@@ -111,8 +111,16 @@ namespace oxen::quic
         // nothing) if not a debug build.
         static bool fail_sends(Endpoint& ep, int err, size_t n_sends);
         // Simulates the host's address changing to `addr` (nullopt to stop), as seen by the
-        // endpoint.  Returns false (and does nothing) if not a debug build.
+        // endpoint: the route to a peer uses it, and packets arrive on it.  Returns false (and does
+        // nothing) if not a debug build.
         static bool simulate_local_address(Endpoint& ep, std::optional<Address> addr);
+        // Simulates packets arriving on `addr` (nullopt to stop) without the route to a peer
+        // changing, as with asymmetric routing.  Returns false (and does nothing) if not a debug
+        // build.
+        static bool simulate_arrival_address(Endpoint& ep, std::optional<Address> addr);
+        // Returns how many times the endpoint has looked up the local address used to reach a peer
+        // (always 0 if not a debug build).
+        static size_t route_lookups(Endpoint& ep);
         // Returns the local address of ngtcp2's current path for the connection.
         static Address ngtcp2_path_local(Connection& conn);
 

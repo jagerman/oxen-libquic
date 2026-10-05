@@ -92,9 +92,13 @@ namespace oxen::quic
         // The next `debug_fail_count` socket sends fail with `debug_fail_errno`.
         int debug_fail_errno = 0;
         size_t debug_fail_count = 0;
-        // When set, the host's address is treated as having changed to this (see
-        // Endpoint::_debug_simulate_local_address).
-        std::optional<Address> debug_local_address;
+        // When set, looking up the local address used to reach a peer returns this (see
+        // Endpoint::_debug_simulate_route_source).
+        std::optional<Address> debug_route_source;
+        // When set, received packets report this as the local address they arrived on (see
+        // Endpoint::_debug_simulate_arrival_address).
+        std::optional<Address> debug_arrival_address;
+        size_t debug_route_lookups = 0;
         size_t debug_stalls = 0;
         size_t debug_stall_skips = 0;
         size_t debug_stall_discards = 0;

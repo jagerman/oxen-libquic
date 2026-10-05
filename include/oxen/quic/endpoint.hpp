@@ -336,10 +336,15 @@ namespace oxen::quic
         bool _debug_mtu(size_t mtu);
         // Makes the next `n_sends` socket sends fail with `err`; returns false if unsupported.
         bool _debug_fail_sends(int err, size_t n_sends);
-        // Simulates the host's address changing to `addr` (nullopt to stop): looking up the local
-        // address used to reach a peer returns it, and received packets report it as the address
-        // they arrived on; returns false if unsupported.
-        bool _debug_simulate_local_address(std::optional<Address> addr);
+        // Makes looking up the local address used to reach a peer return `addr` (nullopt to stop),
+        // as though the host's routing had changed; returns false if unsupported.
+        bool _debug_simulate_route_source(std::optional<Address> addr);
+        // Makes received packets report `addr` (nullopt to stop) as the local address they arrived
+        // on; returns false if unsupported.
+        bool _debug_simulate_arrival_address(std::optional<Address> addr);
+        // Returns how many times the local address used to reach a peer has been looked up (0 if
+        // unsupported).
+        size_t _debug_route_lookups() const;
         struct debug_send_stats
         {
             size_t stalls = 0;           // Times the send batch stalled on a blocked socket

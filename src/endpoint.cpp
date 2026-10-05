@@ -364,7 +364,7 @@ namespace oxen::quic
         if (cptr->is_outbound())
         {
 #ifndef NDEBUG
-            if (const auto& simulated = batch().debug_local_address)
+            if (const auto& simulated = batch().debug_arrival_address)
                 pkt.path.local = *simulated;
 #endif
             // An outbound connection's local address is our label for the network it's on.  A
@@ -1363,7 +1363,8 @@ namespace oxen::quic
     std::optional<Address> Endpoint::local_address_for(const Address& remote) const
     {
 #ifndef NDEBUG
-        if (const auto& simulated = _send_batch->debug_local_address)
+        _send_batch->debug_route_lookups++;
+        if (const auto& simulated = _send_batch->debug_route_source)
             return simulated;
 #endif
         if (!socket)
@@ -1371,13 +1372,32 @@ namespace oxen::quic
         return socket->local_address_for(remote);
     }
 
-    bool Endpoint::_debug_simulate_local_address([[maybe_unused]] std::optional<Address> addr)
+    bool Endpoint::_debug_simulate_route_source([[maybe_unused]] std::optional<Address> addr)
     {
 #ifndef NDEBUG
-        batch().debug_local_address = std::move(addr);
+        batch().debug_route_source = std::move(addr);
         return true;
 #else
         return false;
+#endif
+    }
+
+    bool Endpoint::_debug_simulate_arrival_address([[maybe_unused]] std::optional<Address> addr)
+    {
+#ifndef NDEBUG
+        batch().debug_arrival_address = std::move(addr);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    size_t Endpoint::_debug_route_lookups() const
+    {
+#ifndef NDEBUG
+        return _send_batch->debug_route_lookups;
+#else
+        return 0;
 #endif
     }
 
