@@ -193,7 +193,7 @@ def main(ctx):
             cmake = {"CMAKE_BUILD_TYPE": "Debug", "BUILD_STATIC_DEPS": True},
         ),
         linux("Ubuntu latest", "ubuntu-rolling"),
-        linux("Ubuntu 24.04 noble", "ubuntu-jammy", setup = session_repo),
+        linux("Ubuntu 24.04 noble", "ubuntu-noble", setup = session_repo),
         linux("Ubuntu 22.04 jammy", "ubuntu-jammy", setup = session_repo),
         linux(
             "Ubuntu 20.04 focal",
