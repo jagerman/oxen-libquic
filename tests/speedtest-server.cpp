@@ -36,6 +36,9 @@ int main(int argc, char* argv[])
     bool verbose_speed = false;
     cli.add_flag("--verbose-speed", verbose_speed, "Prints current speed on a connection every 100ms.");
 
+    bool gso = false;
+    cli.add_flag("-G,--gso", gso, "Send with GSO, if libquic was built with it and the OS supports it.");
+
     try
     {
         cli.parse(argc, argv);
@@ -293,6 +296,9 @@ int main(int argc, char* argv[])
         std::optional<opt::max_udp_payload> mtu;
         if (disable_pmtud)
             mtu.emplace(opt::max_udp_payload::minimum());
+        std::optional<opt::allow_gso> allow_gso;
+        if (gso)
+            allow_gso.emplace();
 
         log::debug(test_cat, "Starting up endpoint");
         server = Endpoint::endpoint(
@@ -301,6 +307,7 @@ int main(int argc, char* argv[])
                 generate_static_secret(seed_string),
                 opt::inbound_alpn("speedtests"),
                 mtu,
+                allow_gso,
                 opt::enable_datagrams{Splitting::ACTIVE});
         server->listen(server_tls, stream_opened, stream_data, recv_dgram_cb);
     }

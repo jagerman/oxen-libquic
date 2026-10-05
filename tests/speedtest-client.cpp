@@ -127,6 +127,9 @@ int main(int argc, char* argv[])
     bool pregenerate = false;
     cli.add_flag("-g,--pregenerate", pregenerate, "Pregenerate all stream data in RAM before starting the test.");
 
+    bool gso = false;
+    cli.add_flag("-G,--gso", gso, "Send with GSO, if libquic was built with it and the OS supports it.");
+
     size_t chunk_size = 64_ki, chunk_num = 2;
     cli.add_option("--stream-chunk-size", chunk_size, "How much data to queue at once, per chunk");
     cli.add_option("--stream-chunks", chunk_num, "How much chunks to queue at once per stream")->check(CLI::Range(1, 100));
@@ -306,6 +309,9 @@ int main(int argc, char* argv[])
     std::optional<opt::max_udp_payload> mtu;
     if (disable_pmtud)
         mtu.emplace(opt::max_udp_payload::minimum());
+    std::optional<opt::allow_gso> allow_gso;
+    if (gso)
+        allow_gso.emplace();
 
     auto client = Endpoint::endpoint(
             loop,
@@ -313,6 +319,7 @@ int main(int argc, char* argv[])
             generate_static_secret(seed_string),
             opt::outbound_alpn("speedtests"),
             mtu,
+            allow_gso,
             opt::enable_datagrams{Splitting::ACTIVE});
     std::shared_ptr<Connection> client_ci;
     if (!ping)
