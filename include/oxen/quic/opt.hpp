@@ -94,6 +94,15 @@ namespace oxen::quic
         struct allow_gso
         {};
 
+        // Allow UDP GRO to be used when receiving (Linux 5.0+), where the kernel merges consecutive
+        // packets from the same sender into one buffer, so that a single receive can return many
+        // packets.  It takes larger receive buffers (512kB per endpoint rather than about 94kB), and
+        // is disabled by default.
+        //
+        // Ignored where the OS doesn't support it, or libquic was built without recvmmsg.
+        struct allow_gro
+        {};
+
         struct max_streams
         {
             uint64_t stream_count{DEFAULT_MAX_BIDI_STREAMS};

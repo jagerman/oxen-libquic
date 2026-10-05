@@ -985,8 +985,9 @@ namespace oxen::quic::test
     TEST_CASE("002 - Each packet in a batch is sent with its own ECN marking", "[002][ecn]")
     {
         // Equal-sized packets, so that only the differing ECN values can keep GSO from sending
-        // them all as a single batch.
+        // them all as a single batch (or GRO from merging them).
         const bool allow_gso = GENERATE(false, true);
+        const bool allow_gro = GENERATE(false, true);
         const auto localhost = GENERATE("127.0.0.1"s, "::1"s);
         constexpr std::array<uint8_t, 6> ecns{0, 2, 2, 0, 1, 3};
 
@@ -997,7 +998,10 @@ namespace oxen::quic::test
 
         loop.call_get([&] {
             receiver = std::make_unique<UDPSocket>(
-                    loop.get_event_base(), Address{localhost, 0}, UDPSocket::options{}, [&](Packet&& pkt) {
+                    loop.get_event_base(),
+                    Address{localhost, 0},
+                    UDPSocket::options{.allow_gro = allow_gro},
+                    [&](Packet&& pkt) {
                         received.emplace_back(static_cast<int>(pkt.data()[0]), pkt.pkt_info.ecn);
                         if (received.size() == ecns.size())
                             all_received.set_value();
@@ -1042,7 +1046,10 @@ namespace oxen::quic::test
         // Covers each GSO batching decision: full-size runs ending in one shorter packet (after two
         // or more full ones), a shorter packet that may not join a single full one, and a larger
         // packet followed by a smaller one (as with a PMTUD probe), which must not form a batch.
+        // On loopback a GRO socket receives each GSO batch as one merged buffer, which then has to
+        // be split back into the same packets.
         const bool allow_gso = GENERATE(false, true);
+        const bool allow_gro = GENERATE(false, true);
         constexpr std::array<size_t, 12> sizes{1000, 1000, 600, 1000, 1000, 1000, 500, 1000, 700, 1400, 600, 800};
 
         Loop loop;
@@ -1058,7 +1065,10 @@ namespace oxen::quic::test
 
         loop.call_get([&] {
             receiver = std::make_unique<UDPSocket>(
-                    loop.get_event_base(), Address{"127.0.0.1", 0}, UDPSocket::options{}, [&](Packet&& pkt) {
+                    loop.get_event_base(),
+                    Address{"127.0.0.1", 0},
+                    UDPSocket::options{.allow_gro = allow_gro},
+                    [&](Packet&& pkt) {
                         auto d = pkt.data();
                         bool intact = std::all_of(d.begin(), d.end(), [&](std::byte b) { return b == d[0]; });
                         received.push_back({static_cast<int>(d[0]), d.size(), intact});
@@ -1095,6 +1105,9 @@ namespace oxen::quic::test
                 CHECK(received[i].size == sizes[i]);
                 CHECK(received[i].intact);
             }
+            if (TestHelper::gso_enabled(*sender) && TestHelper::gro_enabled(*receiver))
+                if (auto merges = TestHelper::gro_merges(*receiver))
+                    CHECK(*merges > 0);
             sender.reset();
             receiver.reset();
         });
@@ -1540,6 +1553,50 @@ namespace oxen::quic::test
             CHECK(received == msg);
         }
         CHECK_FALSE(TestHelper::gso_enabled(*client_endpoint));
+    }
+
+    TEST_CASE("002 - A stream arrives intact at an endpoint receiving with GRO", "[002][gro]")
+    {
+        Network test_net{};
+
+        std::vector<std::byte> msg(1'000'000);
+        for (size_t i = 0; i < msg.size(); i++)
+            msg[i] = static_cast<std::byte>(i % 251);
+
+        std::mutex received_mut;
+        std::vector<std::byte> received;
+        std::promise<void> all_received;
+        stream_data_callback server_data_cb = [&](Stream&, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mut};
+            received.insert(received.end(), dat.begin(), dat.end());
+            if (received.size() == msg.size())
+                all_received.set_value();
+        };
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        auto server_endpoint = test_net.endpoint(Address{}, opt::allow_gro{});
+        REQUIRE_NOTHROW(server_endpoint->listen(server_tls, server_data_cb));
+        if (!TestHelper::gro_enabled(*server_endpoint))
+            SKIP("This build of libquic does not support GRO");
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, LOCALHOST, server_endpoint->local().port()};
+
+        auto client_endpoint = test_net.endpoint(Address{}, client_established, opt::allow_gso{});
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+
+        conn->open_stream()->send(msg, nullptr);
+
+        require_future(all_received.get_future(), 5s);
+        {
+            std::lock_guard lock{received_mut};
+            CHECK(received == msg);
+        }
+        // On loopback the client's GSO batches reach the server's socket as merged buffers.
+        if (TestHelper::gso_enabled(*client_endpoint))
+            if (auto merges = TestHelper::gro_merges(*server_endpoint))
+                CHECK(*merges > 0);
     }
 
     TEST_CASE("002 - max_udp_payload probe lists", "[002][pmtud]")

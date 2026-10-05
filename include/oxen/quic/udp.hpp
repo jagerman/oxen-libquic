@@ -95,6 +95,8 @@ namespace oxen::quic
             /// Send runs of packets as single GSO messages, where libquic was built with GSO
             /// support and the OS supports it.
             bool allow_gso = false;
+            /// Receive with UDP GRO, where libquic was built with recvmmsg and the OS supports it.
+            bool allow_gro = false;
         };
 
         /// Constructs a UDP socket bound to the given address.  Throws if binding fails.  If
@@ -166,17 +168,24 @@ namespace oxen::quic
 
       private:
         void process_packet(std::span<const std::byte> payload, msghdr& hdr);
+        // Passes on every packet in one received buffer (several, if GRO merged them), returning
+        // how many there were.
+        size_t process_received(std::span<const std::byte> data, msghdr& hdr);
         io_result receive();
 
         // Test hook, only functional in debug builds of libquic: makes this socket's upcoming sends
         // fail, in order, with `gso_errors` (for sends made using GSO) and `plain_errors` (for
         // sends made without it).  Returns false if unsupported.
         bool _debug_fail_sends(std::vector<int> gso_errors, std::vector<int> plain_errors);
+        // Test hook, only functional in debug builds of libquic: returns how many received buffers
+        // held more than one packet merged by GRO, or nullopt if unsupported.
+        std::optional<size_t> _debug_gro_merges() const;
 
         socket_t sock_;
         Address bound_;
 
         bool gso_;
+        bool gro_ = false;
 
         // The buffers recvmmsg receives into (null without recvmmsg support), allocated once rather
         // than on the stack, which they are too large for.

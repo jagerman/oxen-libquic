@@ -127,8 +127,10 @@ int main(int argc, char* argv[])
     bool pregenerate = false;
     cli.add_flag("-g,--pregenerate", pregenerate, "Pregenerate all stream data in RAM before starting the test.");
 
-    bool gso = false;
-    cli.add_flag("-G,--gso", gso, "Send with GSO, if libquic was built with it and the OS supports it.");
+    bool gso = false, gro = false;
+    cli.add_flag("--gso", gso, "Send with GSO, if libquic was built with it and the OS supports it.");
+    cli.add_flag("--gro", gro, "Receive with GRO, if libquic was built with it and the OS supports it.");
+    cli.add_flag_callback("-G", [&] { gso = gro = true; }, "Same as --gso --gro.");
 
     size_t chunk_size = 64_ki, chunk_num = 2;
     cli.add_option("--stream-chunk-size", chunk_size, "How much data to queue at once, per chunk");
@@ -312,6 +314,9 @@ int main(int argc, char* argv[])
     std::optional<opt::allow_gso> allow_gso;
     if (gso)
         allow_gso.emplace();
+    std::optional<opt::allow_gro> allow_gro;
+    if (gro)
+        allow_gro.emplace();
 
     // The datagram test queues all of its datagrams at once, so the queue has to hold them all (the
     // data, one more datagram, and the 8-byte count): anything over the limit would be dropped
@@ -323,6 +328,7 @@ int main(int argc, char* argv[])
             opt::outbound_alpn("speedtests"),
             mtu,
             allow_gso,
+            allow_gro,
             opt::enable_datagrams{Splitting::ACTIVE}.queue_limit(size + 64_ki));
     std::shared_ptr<Connection> client_ci;
     if (!ping)

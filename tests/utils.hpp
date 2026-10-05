@@ -141,6 +141,15 @@ namespace oxen::quic
         static bool fail_socket_sends(Endpoint& ep, std::vector<int> gso_errors, std::vector<int> plain_errors);
         // Returns whether the endpoint's socket is currently sending with GSO.
         static bool gso_enabled(Endpoint& ep);
+        // Returns whether the endpoint's socket is receiving with GRO.
+        static bool gro_enabled(Endpoint& ep);
+        // Returns how many buffers holding several GRO-merged packets the endpoint's socket has
+        // received, or nullopt if not a debug build.
+        static std::optional<size_t> gro_merges(Endpoint& ep);
+        // As above, for a socket used directly; these must be called on its loop's thread.
+        static bool gso_enabled(const UDPSocket& sock) { return sock.gso_; }
+        static bool gro_enabled(const UDPSocket& sock) { return sock.gro_; }
+        static std::optional<size_t> gro_merges(const UDPSocket& sock) { return sock._debug_gro_merges(); }
 
         // Returns the largest UDP payload ngtcp2 currently sends on the connection's path (i.e.
         // the size PMTUD has validated so far).

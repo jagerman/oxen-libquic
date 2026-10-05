@@ -93,6 +93,11 @@ extern "C"
 #define OXEN_LIBQUIC_UDP_SENDMMSG
 #endif
 
+// Receiving with GRO is only implemented for recvmmsg, and needs UDP_GRO from the system headers.
+#if defined(OXEN_LIBQUIC_RECVMMSG) && defined(UDP_GRO)
+#define OXEN_LIBQUIC_UDP_GRO
+#endif
+
 namespace oxen::quic
 {
 
@@ -100,6 +105,15 @@ namespace oxen::quic
     constexpr bool GSO_SUPPORTED = true;
 #else
     constexpr bool GSO_SUPPORTED = false;
+#endif
+
+#ifdef OXEN_LIBQUIC_UDP_GRO
+    // Each GRO buffer can hold many packets, so a few large slots replace the usual one-packet
+    // ones.  8 x 64kB still fits in many CPUs' per-core L2 cache, so a full batch hasn't been
+    // evicted by the time we process it.
+    constexpr size_t GRO_SLOTS = 8;
+    // The kernel never merges more than fits in one IP packet (whose length is 16 bits).
+    constexpr size_t GRO_SLOT_SIZE = 64_ki;
 #endif
 
 #ifdef _WIN32
@@ -119,8 +133,8 @@ namespace oxen::quic
 #endif
 
 #ifndef NDEBUG
-    // State for UDPSocket::_debug_fail_sends, kept here rather than in UDPSocket so that the
-    // class's layout doesn't depend on the build type.
+    // State for UDPSocket's test hooks, kept here rather than in UDPSocket so that the class's
+    // layout doesn't depend on the build type.
     namespace
     {
         struct send_failures
@@ -129,6 +143,9 @@ namespace oxen::quic
         };
         std::mutex debug_send_failures_mutex;
         std::unordered_map<const UDPSocket*, send_failures> debug_send_failures;
+
+        std::mutex debug_gro_merges_mutex;
+        std::unordered_map<const UDPSocket*, size_t> debug_gro_merges;
 
         // Returns the next error queued for a GSO (or non-GSO) send on `sock`, or 0 if none.
         int take_debug_send_failure(const UDPSocket* sock, bool gso)
@@ -158,6 +175,17 @@ namespace oxen::quic
         return true;
 #else
         return false;
+#endif
+    }
+
+    std::optional<size_t> UDPSocket::_debug_gro_merges() const
+    {
+#ifndef NDEBUG
+        std::lock_guard lock{debug_gro_merges_mutex};
+        auto it = debug_gro_merges.find(this);
+        return it == debug_gro_merges.end() ? 0 : it->second;
+#else
+        return std::nullopt;
 #endif
     }
 
@@ -320,6 +348,9 @@ namespace oxen::quic
         char ecn[CMSG_SPACE(sizeof(int))];  // a char most places but an int on windows because yay
         char pktinfo4[CMSG_SPACE(sizeof(in_pktinfo))];
         char pktinfo6[CMSG_SPACE(sizeof(in6_pktinfo))];
+#ifdef OXEN_LIBQUIC_UDP_GRO
+        char gro[CMSG_SPACE(sizeof(int))];
+#endif
     };
 
     struct UDPSocket::receive_batch
@@ -469,7 +500,21 @@ namespace oxen::quic
 #endif
 
 #ifdef OXEN_LIBQUIC_RECVMMSG
-        recv_ = std::make_unique<receive_batch>(MAX_RECEIVE_PER_LOOP, MAX_PMTUD_UDP_PAYLOAD);
+        size_t recv_slots = MAX_RECEIVE_PER_LOOP, recv_slot_size = MAX_PMTUD_UDP_PAYLOAD;
+#ifdef OXEN_LIBQUIC_UDP_GRO
+        if (opts.allow_gro)
+        {
+            if (setsockopt(sock_, IPPROTO_UDP, UDP_GRO, &sockopt_on, sizeof(sockopt_on)) == 0)
+            {
+                gro_ = true;
+                recv_slots = GRO_SLOTS;
+                recv_slot_size = GRO_SLOT_SIZE;
+            }
+            else
+                log::warning(log_cat, "Unable to enable UDP GRO ({}); receiving without it", std::strerror(errno));
+        }
+#endif
+        recv_ = std::make_unique<receive_batch>(recv_slots, recv_slot_size);
 #endif
 
         rev_.reset(event_new(
@@ -517,8 +562,12 @@ namespace oxen::quic
         ::close(sock_);
 #endif
 #ifndef NDEBUG
-        std::lock_guard lock{debug_send_failures_mutex};
-        debug_send_failures.erase(this);
+        {
+            std::lock_guard lock{debug_send_failures_mutex};
+            debug_send_failures.erase(this);
+        }
+        std::lock_guard lock{debug_gro_merges_mutex};
+        debug_gro_merges.erase(this);
 #endif
     }
 
@@ -588,29 +637,71 @@ namespace oxen::quic
         receive_callback_(Packet{bound_, payload, hdr});
     }
 
+    size_t UDPSocket::process_received(std::span<const std::byte> data, msghdr& hdr)
+    {
+        // GRO merges packets of the size it reports here, except that the last may be shorter.
+        size_t segment = 0;
+#ifdef OXEN_LIBQUIC_UDP_GRO
+        if (gro_)
+            for (auto* cm = CMSG_FIRSTHDR(&hdr); cm; cm = CMSG_NXTHDR(&hdr, cm))
+                if (cm->cmsg_level == IPPROTO_UDP && cm->cmsg_type == UDP_GRO)
+                {
+                    int size;
+                    std::memcpy(&size, CMSG_DATA(cm), sizeof(size));
+                    segment = static_cast<size_t>(size);
+                }
+#endif
+        if (segment == 0 || data.size() <= segment)
+        {
+            process_packet(data, hdr);
+            return 1;
+        }
+
+        size_t n = 0;
+        for (; !data.empty(); n++)
+        {
+            auto len = std::min(segment, data.size());
+            process_packet(data.first(len), hdr);
+            data = data.subspan(len);
+        }
+#ifndef NDEBUG
+        std::lock_guard lock{debug_gro_merges_mutex};
+        debug_gro_merges[this]++;
+#endif
+        return n;
+    }
+
     io_result UDPSocket::receive()
     {
 #ifdef OXEN_LIBQUIC_RECVMMSG
-        // The batch holds MAX_RECEIVE_PER_LOOP packets, so one call takes everything we read before
-        // returning to the event loop.
+        // Without GRO the batch holds MAX_RECEIVE_PER_LOOP packets, so the first call reaches the
+        // limit.  With it, each slot can hold many packets: we keep going while calls fill every
+        // slot, so we can end up some way past the limit.
         auto& b = *recv_;
-        b.reset();
-
-        int nread;
+        size_t count = 0;
         do
         {
-            nread = recvmmsg(sock_, b.msgs.data(), b.msgs.size(), 0, nullptr);
-        } while (nread == -1 && errno == EINTR);
+            b.reset();
 
-        if (nread < 0)
-        {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                return io_result{};
-            return io_result{errno};
-        }
+            int nread;
+            do
+            {
+                nread = recvmmsg(sock_, b.msgs.data(), b.msgs.size(), 0, nullptr);
+            } while (nread == -1 && errno == EINTR);
 
-        for (int i = 0; i < nread; i++)
-            process_packet(std::span{b.slot(i), b.msgs[i].msg_len}, b.msgs[i].msg_hdr);
+            if (nread < 0)
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    return io_result{};
+                return io_result{errno};
+            }
+
+            for (int i = 0; i < nread; i++)
+                count += process_received(std::span{b.slot(i), b.msgs[i].msg_len}, b.msgs[i].msg_hdr);
+
+            if (static_cast<size_t>(nread) < b.msgs.size())
+                break;  // The socket is drained
+        } while (count < MAX_RECEIVE_PER_LOOP);
 
         return io_result{};
 

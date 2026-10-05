@@ -223,6 +223,7 @@ namespace oxen::quic
         // nullopt means the default probe list (DEFAULT_PMTUD_PROBES).
         std::optional<opt::max_udp_payload> _max_udp_payload;
         bool _allow_gso{false};
+        bool _allow_gro{false};
 
         uint64_t _next_rid{0};
 
@@ -255,6 +256,7 @@ namespace oxen::quic
         void handle_ep_opt(opt::manual_routing mrouting);
         void handle_ep_opt(opt::max_udp_payload mup);
         void handle_ep_opt(opt::allow_gso);
+        void handle_ep_opt(opt::allow_gro);
 
         // Takes a std::optional-wrapped option that does nothing if the optional is empty,
         // otherwise passes it through to the above.  This is here to allow runtime-dependent

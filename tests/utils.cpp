@@ -159,6 +159,16 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep.get_socket()->gso_; });
     }
 
+    bool TestHelper::gro_enabled(Endpoint& ep)
+    {
+        return ep.job_queue.call_get([&] { return ep.get_socket()->gro_; });
+    }
+
+    std::optional<size_t> TestHelper::gro_merges(Endpoint& ep)
+    {
+        return ep.job_queue.call_get([&] { return ep.get_socket()->_debug_gro_merges(); });
+    }
+
     size_t TestHelper::path_max_udp_payload(Connection& conn)
     {
         return conn._endpoint.job_queue.call_get([&] { return ngtcp2_conn_get_path_max_tx_udp_payload_size(conn); });
