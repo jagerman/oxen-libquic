@@ -345,6 +345,9 @@ namespace oxen::quic
         // Returns how many times the local address used to reach a peer has been looked up (0 if
         // unsupported).
         size_t _debug_route_lookups() const;
+        // Makes the next `n` connection migrations fail as though there were no spare connection
+        // ID; returns false if unsupported.
+        bool _debug_block_migrations(size_t n);
         struct debug_send_stats
         {
             size_t stalls = 0;           // Times the send batch stalled on a blocked socket

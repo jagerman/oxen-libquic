@@ -124,6 +124,11 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_route_lookups(); });
     }
 
+    bool TestHelper::block_migrations(Endpoint& ep, size_t n)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_block_migrations(n); });
+    }
+
     Address TestHelper::ngtcp2_path_local(Connection& conn)
     {
         return conn._endpoint.job_queue.call_get([&] { return Address{ngtcp2_conn_get_path(conn)->local}; });

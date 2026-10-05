@@ -223,7 +223,7 @@ namespace oxen::quic
                 if (!conn->is_outbound())
                     continue;
                 // An arrival address checked on the old network says nothing about the new one.
-                conn->_unconfirmed_local = Address{};
+                conn->_unconfirmed_local.reset();
                 conn->check_local_address();
             }
         });
@@ -1398,6 +1398,16 @@ namespace oxen::quic
         return _send_batch->debug_route_lookups;
 #else
         return 0;
+#endif
+    }
+
+    bool Endpoint::_debug_block_migrations([[maybe_unused]] size_t n)
+    {
+#ifndef NDEBUG
+        batch().debug_blocked_migrations = n;
+        return true;
+#else
+        return false;
 #endif
     }
 

@@ -158,6 +158,25 @@ namespace oxen::quic::test
         {
             client_endpoint->network_changed();
         }
+        SECTION("Once a later packet arrives, when there was no spare connection ID")
+        {
+            // Both the attempt when the server's acknowledgement first arrives on the new address,
+            // and the retry once it has been read, find no spare connection ID.
+            REQUIRE(TestHelper::block_migrations(*client_endpoint, 2));
+            const auto lookups = TestHelper::route_lookups(*client_endpoint);
+            stream->send("two"s);
+            REQUIRE(wait_for_received("two"));
+            std::this_thread::sleep_for(100ms);
+            CHECK(conn->local() != new_local);
+
+            // The acknowledgement of this one completes the migration, without looking up the
+            // route again.
+            stream->send("two again"s);
+            REQUIRE(wait_for_received("two again"));
+            for (int i = 0; i < 100 && conn->local() != new_local; i++)
+                std::this_thread::sleep_for(10ms);
+            CHECK(TestHelper::route_lookups(*client_endpoint) == lookups + 1);
+        }
 
         for (int i = 0; i < 100 && conn->local() != new_local; i++)
             std::this_thread::sleep_for(10ms);

@@ -99,6 +99,9 @@ namespace oxen::quic
         // Endpoint::_debug_simulate_arrival_address).
         std::optional<Address> debug_arrival_address;
         size_t debug_route_lookups = 0;
+        // The next `debug_blocked_migrations` migrations fail as though there were no spare
+        // connection ID.
+        size_t debug_blocked_migrations = 0;
         size_t debug_stalls = 0;
         size_t debug_stall_skips = 0;
         size_t debug_stall_discards = 0;

@@ -121,6 +121,9 @@ namespace oxen::quic
         // Returns how many times the endpoint has looked up the local address used to reach a peer
         // (always 0 if not a debug build).
         static size_t route_lookups(Endpoint& ep);
+        // Makes the endpoint's next `n` connection migrations fail as though there were no spare
+        // connection ID.  Returns false (and does nothing) if not a debug build.
+        static bool block_migrations(Endpoint& ep, size_t n);
         // Returns the local address of ngtcp2's current path for the connection.
         static Address ngtcp2_path_local(Connection& conn);
 

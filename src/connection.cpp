@@ -856,6 +856,10 @@ namespace oxen::quic
         switch (rv)
         {
             case 0:
+                // Spare connection IDs only ever arrive in packets, so this is when a migration that
+                // was waiting for one can go ahead.
+                if (_pending_local)
+                    migrate_local(*_pending_local, ts);
                 packet_io_ready();
                 break;
             case NGTCP2_ERR_DRAINING:
@@ -1854,8 +1858,9 @@ namespace oxen::quic
 
         // Anything else being refused means the path can no longer carry packets of the size
         // ngtcp2 confirmed for it, most likely because the host's network changed under us; if our
-        // source address changed with it, migrating starts the new path off at the minimum size.
-        if (is_outbound() && check_local_address(ts))
+        // source address changed with it, migrating (now, or once a spare connection ID arrives)
+        // starts the new path off at the minimum size.
+        if (is_outbound() && check_local_address(ts) != local_check::unchanged)
             return;
 
         // Otherwise ngtcp2 can't lower the path's size, so every full-size packet would keep
@@ -1871,44 +1876,89 @@ namespace oxen::quic
 
     void Connection::local_address_mismatch(const Address& arrived_on)
     {
-        // ngtcp2 only allows migrating once the handshake is confirmed.
-        if (arrived_on == _unconfirmed_local || !handshake_confirmed)
+        // ngtcp2 only allows migrating once the handshake is confirmed, and a pending migration is
+        // already retried after every packet is read.
+        if (!handshake_confirmed || arrived_on == _unconfirmed_local || arrived_on == _pending_local)
             return;
 
-        if (!check_local_address())
+        if (check_local_address() == local_check::unchanged)
             _unconfirmed_local = arrived_on;
     }
 
-    bool Connection::check_local_address(uint64_t ts)
+    Connection::local_check Connection::check_local_address(uint64_t ts)
     {
         assert(is_outbound());
 
         if (!handshake_confirmed || draining || closing || dead)
-            return false;
+            return local_check::unchanged;
 
         auto source = _endpoint.local_address_for(_path.remote);
-        if (!source || *source == _path.local)
-            return false;
+        if (!source)
+            return local_check::unchanged;
+        if (*source == _path.local)
+        {
+            // The host's network may have changed and then changed back before we could migrate.
+            _pending_local.reset();
+            return local_check::unchanged;
+        }
+        return migrate_local(*source, ts);
+    }
+
+    Connection::local_check Connection::migrate_local(Address local, uint64_t ts)
+    {
+        if (draining || closing || dead)
+        {
+            _pending_local.reset();
+            return local_check::unchanged;
+        }
 
         // A new path, with a new connection ID, makes ngtcp2 validate it and rediscover its PMTU
         // from the minimum, rather than carrying on at a size the new network may not allow.
-        Path new_path{*source, _path.remote};
-        if (auto rv = ngtcp2_conn_initiate_immediate_migration(*this, new_path, ts); rv != 0)
+        Path new_path{local, _path.remote};
+        int rv = 0;
+#ifndef NDEBUG
+        if (auto& blocked = _endpoint.batch().debug_blocked_migrations; blocked > 0)
+        {
+            blocked--;
+            rv = NGTCP2_ERR_CONN_ID_BLOCKED;
+        }
+#endif
+        if (rv == 0)
+            rv = ngtcp2_conn_initiate_immediate_migration(*this, new_path, ts);
+
+        if (rv == NGTCP2_ERR_CONN_ID_BLOCKED)
+        {
+            // The peer replaces each connection ID we retire, so this only lasts until its
+            // replacement arrives (after the handshake, or after several migrations within a round
+            // trip).
+            if (_pending_local != local)
+                log::info(
+                        log_cat,
+                        "{} local address changed from {} to {}; migrating once the peer provides a connection ID",
+                        reference_id(),
+                        _path.local,
+                        local);
+            _pending_local = local;
+            return local_check::pending;
+        }
+
+        _pending_local.reset();
+        if (rv != 0)
         {
             log::warning(
                     log_cat,
                     "{} could not migrate from local address {} to {}: {}",
                     reference_id(),
                     _path.local,
-                    *source,
+                    local,
                     ngtcp2_strerror(rv));
-            return false;
+            return local_check::unchanged;
         }
 
-        log::info(log_cat, "{} local address changed from {} to {}; migrating", reference_id(), _path.local, *source);
+        log::info(log_cat, "{} local address changed from {} to {}; migrating", reference_id(), _path.local, local);
         _path = new_path;
-        _unconfirmed_local = Address{};
-        return true;
+        _unconfirmed_local.reset();
+        return local_check::migrated;
     }
 
     size_t Connection::get_max_datagram_piece() const
