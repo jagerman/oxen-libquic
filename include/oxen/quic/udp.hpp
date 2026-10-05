@@ -167,7 +167,6 @@ namespace oxen::quic
         ~UDPSocket();
 
       private:
-        void process_packet(std::span<const std::byte> payload, msghdr& hdr);
         // Passes on every packet in one received buffer (several, if GRO merged them), returning
         // how many there were.
         size_t process_received(std::span<const std::byte> data, msghdr& hdr);

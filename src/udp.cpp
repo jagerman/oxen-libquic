@@ -610,14 +610,14 @@ namespace oxen::quic
         return source;
     }
 
-    void UDPSocket::process_packet(std::span<const std::byte> payload, msghdr& hdr)
+    size_t UDPSocket::process_received(std::span<const std::byte> data, msghdr& hdr)
     {
-        if (payload.empty())
+        if (data.empty())
         {
             // This is unexpected, and not something a proper libquic client would ever send so
             // just drop it.
             log::warning(log_cat, "Dropping empty UDP packet");
-            return;
+            return 0;
         }
 
         // This flag means the packet payload couldn't fit in max_payload_size, but that should
@@ -631,14 +631,13 @@ namespace oxen::quic
         )
         {
             log::warning(log_cat, "Dropping truncated UDP packet");
-            return;
+            return 1;
         }
 
-        receive_callback_(Packet{bound_, payload, hdr});
-    }
+        // The addresses and ECN value apply equally to every packet GRO merged, so the control
+        // messages are only parsed once.
+        Packet pkt{bound_, data, hdr};
 
-    size_t UDPSocket::process_received(std::span<const std::byte> data, msghdr& hdr)
-    {
         // GRO merges packets of the size it reports here, except that the last may be shorter.
         size_t segment = 0;
 #ifdef OXEN_LIBQUIC_UDP_GRO
@@ -653,7 +652,7 @@ namespace oxen::quic
 #endif
         if (segment == 0 || data.size() <= segment)
         {
-            process_packet(data, hdr);
+            receive_callback_(std::move(pkt));
             return 1;
         }
 
@@ -661,7 +660,9 @@ namespace oxen::quic
         for (; !data.empty(); n++)
         {
             auto len = std::min(segment, data.size());
-            process_packet(data.first(len), hdr);
+            Packet seg{pkt.path, data.first(len)};
+            seg.pkt_info = pkt.pkt_info;
+            receive_callback_(std::move(seg));
             data = data.subspan(len);
         }
 #ifndef NDEBUG
@@ -765,7 +766,7 @@ namespace oxen::quic
             }
 #endif
 
-            process_packet(std::span{data.data(), static_cast<size_t>(nbytes)}, hdr);
+            process_received(std::span{data.data(), static_cast<size_t>(nbytes)}, hdr);
 
             count++;
 
