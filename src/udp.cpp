@@ -610,7 +610,7 @@ namespace oxen::quic
         return source;
     }
 
-    size_t UDPSocket::process_received(std::span<const std::byte> data, msghdr& hdr)
+    size_t UDPSocket::process_received(std::span<const std::byte> data, msghdr& hdr, std::optional<time_point> received)
     {
         if (data.empty())
         {
@@ -637,6 +637,7 @@ namespace oxen::quic
         // The addresses and ECN value apply equally to every packet GRO merged, so the control
         // messages are only parsed once.
         Packet pkt{bound_, data, hdr};
+        pkt.received = received;
 
         // GRO merges packets of the size it reports here, except that the last may be shorter.
         size_t segment = 0;
@@ -662,6 +663,7 @@ namespace oxen::quic
             auto len = std::min(segment, data.size());
             Packet seg{pkt.path, data.first(len)};
             seg.pkt_info = pkt.pkt_info;
+            seg.received = received;
             receive_callback_(std::move(seg));
             data = data.subspan(len);
         }
@@ -697,8 +699,9 @@ namespace oxen::quic
                 return io_result{errno};
             }
 
+            auto received = get_time();
             for (int i = 0; i < nread; i++)
-                count += process_received(std::span{b.slot(i), b.msgs[i].msg_len}, b.msgs[i].msg_hdr);
+                count += process_received(std::span{b.slot(i), b.msgs[i].msg_len}, b.msgs[i].msg_hdr, received);
 
             if (static_cast<size_t>(nread) < b.msgs.size())
                 break;  // The socket is drained
@@ -766,7 +769,7 @@ namespace oxen::quic
             }
 #endif
 
-            process_received(std::span{data.data(), static_cast<size_t>(nbytes)}, hdr);
+            process_received(std::span{data.data(), static_cast<size_t>(nbytes)}, hdr, std::nullopt);
 
             count++;
 

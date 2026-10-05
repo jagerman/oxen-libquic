@@ -132,6 +132,11 @@ namespace oxen::quic
 
     void Endpoint::manually_receive_packet(Packet&& pkt)
     {
+        // The application decides when (and in what order) it hands packets over, so a time it was
+        // received at could be older than one its connection has already been given; it is timed
+        // as it's handled instead.
+        pkt.received.reset();
+
         if (job_queue.inside())
             return handle_packet(std::move(pkt));
 
@@ -201,6 +206,7 @@ namespace oxen::quic
                             ctx,
                             alpns,
                             ctx->config.handshake_timeout.value_or(handshake_timeout),
+                            get_time(),
                             remote.get_remote_key());
                     return it_b->second;
                 }
@@ -328,6 +334,9 @@ namespace oxen::quic
 
     void Endpoint::handle_packet(Packet&& pkt)
     {
+        if (!pkt.received)
+            pkt.received = get_time();
+
         auto dcid_opt = handle_packet_connid(pkt);
 
         if (!dcid_opt)
@@ -380,7 +389,7 @@ namespace oxen::quic
             // connection checks the source address it would now send from before migrating.  (The
             // any-address means the OS didn't report the address at all.)
             if (!pkt.path.local.is_any_addr() && pkt.path.local != cptr->_path.local)
-                cptr->local_address_mismatch(pkt.path.local);
+                cptr->local_address_mismatch(pkt.path.local, ngtcp2_ts(*pkt.received));
 
             // Either way, ngtcp2 clients drop packets from a path they don't know, so the packet gets
             // the connection's own local address.
@@ -1041,6 +1050,7 @@ namespace oxen::quic
                             inbound_ctx,
                             inbound_alpns,
                             handshake_timeout,
+                            pkt.received.value(),
                             std::nullopt,
                             &hdr,
                             token_type,

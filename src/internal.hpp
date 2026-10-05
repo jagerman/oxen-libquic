@@ -119,6 +119,12 @@ namespace oxen::quic
         return tv;
     }
 
+    // ngtcp2's timestamps are steady clock times in nanoseconds.
+    inline uint64_t ngtcp2_ts(time_point t)
+    {
+        return std::chrono::nanoseconds{t.time_since_epoch()}.count();
+    }
+
 }  // namespace oxen::quic
 
 // IWYU pragma: end_exports

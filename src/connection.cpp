@@ -843,7 +843,7 @@ namespace oxen::quic
 
     io_result Connection::read_packet(const Packet& pkt)
     {
-        auto ts = get_timestamp().count();
+        auto ts = ngtcp2_ts(pkt.received.value());
         log::trace(log_cat, "Calling ngtcp2_conn_read_pkt...");
         auto data = pkt.data<uint8_t>();
         auto rv = ngtcp2_conn_read_pkt(*this, pkt.path, &pkt.pkt_info, data.data(), data.size(), ts);
@@ -1874,14 +1874,14 @@ namespace oxen::quic
         _endpoint.close_connection(*this, io_error{CONN_MTU_EXCEEDED});
     }
 
-    void Connection::local_address_mismatch(const Address& arrived_on)
+    void Connection::local_address_mismatch(const Address& arrived_on, uint64_t ts)
     {
         // ngtcp2 only allows migrating once the handshake is confirmed, and a pending migration is
         // already retried after every packet is read.
         if (!handshake_confirmed || arrived_on == _unconfirmed_local || arrived_on == _pending_local)
             return;
 
-        if (check_local_address() == local_check::unchanged)
+        if (check_local_address(ts) == local_check::unchanged)
             _unconfirmed_local = arrived_on;
     }
 
@@ -2005,7 +2005,8 @@ namespace oxen::quic
             ngtcp2_settings& settings,
             ngtcp2_transport_params& params,
             ngtcp2_callbacks& callbacks,
-            std::chrono::nanoseconds handshake_timeout)
+            std::chrono::nanoseconds handshake_timeout,
+            time_point now)
     {
         callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
         callbacks.path_validation = connection_callbacks::on_path_validation;
@@ -2049,7 +2050,7 @@ namespace oxen::quic
 
         ngtcp2_settings_default(&settings);
 
-        settings.initial_ts = get_timestamp().count();
+        settings.initial_ts = ngtcp2_ts(now);
 #ifndef NDEBUG
         settings.log_printf = log_printer;
 #endif
@@ -2131,6 +2132,7 @@ namespace oxen::quic
             std::shared_ptr<IOContext> ctx,
             std::span<const std::string> alpns,
             std::chrono::nanoseconds default_handshake_timeout,
+            time_point now,
             std::optional<std::vector<unsigned char>> remote_pk,
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
@@ -2192,7 +2194,7 @@ namespace oxen::quic
 
         auto handshake_timeout = context->config.handshake_timeout.value_or(default_handshake_timeout);
 
-        init(settings, params, callbacks, handshake_timeout);
+        init(settings, params, callbacks, handshake_timeout, now);
 
         // Clients should be the ones providing a remote pubkey here. This way we can emplace it into
         // the gnutlssession object to be verified. Servers should be verifying via callback
@@ -2372,6 +2374,7 @@ namespace oxen::quic
             std::shared_ptr<IOContext> ctx,
             std::span<const std::string> alpns,
             std::chrono::nanoseconds default_handshake_timeout,
+            time_point now,
             std::optional<std::vector<unsigned char>> remote_pk,
             ngtcp2_pkt_hd* hdr,
             std::optional<ngtcp2_token_type> token_type,
@@ -2387,6 +2390,7 @@ namespace oxen::quic
                 std::move(ctx),
                 alpns,
                 default_handshake_timeout,
+                now,
                 remote_pk,
                 hdr,
                 token_type,

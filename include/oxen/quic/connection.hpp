@@ -83,6 +83,8 @@ namespace oxen::quic
         //          the default will be set
         //      default_handshake_timeout: the default timeout for handshaking for the endpoint
         //          (individual connections might have this overridden via connect option).
+        //      now: the connection's starting time; for an inbound connection, when the packet that
+        //          opens it was received.
         //      remote_pk: optional parameter used by clients to verify the pubkey of the remote
         //          endpoint during handshake negotiation. For servers, omit this parameter or
         //          pass std::nullopt
@@ -96,6 +98,7 @@ namespace oxen::quic
                 std::shared_ptr<IOContext> ctx,
                 std::span<const std::string> alpns,
                 std::chrono::nanoseconds default_handshake_timeout,
+                time_point now,
                 std::optional<std::vector<unsigned char>> remote_pk = std::nullopt,
                 ngtcp2_pkt_hd* hdr = nullptr,
                 std::optional<ngtcp2_token_type> token_type = std::nullopt,
@@ -376,6 +379,7 @@ namespace oxen::quic
                 std::shared_ptr<IOContext> ctx,
                 std::span<const std::string> alpns,
                 std::chrono::nanoseconds default_handshake_timeout,
+                time_point now,
                 std::optional<std::vector<unsigned char>> remote_pk = std::nullopt,
                 ngtcp2_pkt_hd* hdr = nullptr,
                 std::optional<ngtcp2_token_type> token_type = std::nullopt,
@@ -482,8 +486,8 @@ namespace oxen::quic
         std::optional<Address> _pending_local;
 
         // Called (on an outbound connection) when a packet arrives on a local address other than
-        // _path.local.
-        void local_address_mismatch(const Address& arrived_on);
+        // _path.local; `ts` is the packet's receive time.
+        void local_address_mismatch(const Address& arrived_on, uint64_t ts);
 
         // What check_local_address() and migrate_local() did.
         enum class local_check {
@@ -555,7 +559,8 @@ namespace oxen::quic
                 ngtcp2_settings& settings,
                 ngtcp2_transport_params& params,
                 ngtcp2_callbacks& callbacks,
-                std::chrono::nanoseconds handshake_timeout);
+                std::chrono::nanoseconds handshake_timeout,
+                time_point now);
 
         io_result read_packet(const Packet& pkt);
 

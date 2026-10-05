@@ -39,6 +39,10 @@ namespace oxen::quic
         Path path;
         ngtcp2_pkt_info pkt_info{};
         std::variant<std::span<const std::byte>, std::vector<std::byte>> pkt_data;
+        // When the packet was received: set for all the packets from one socket read at once, and
+        // otherwise when the endpoint starts handling the packet.  Every step of handling it uses
+        // this one time, as ngtcp2 rejects a connection's time going backwards.
+        std::optional<time_point> received;
 
         size_t size() const
         {
@@ -167,9 +171,9 @@ namespace oxen::quic
         ~UDPSocket();
 
       private:
-        // Passes on every packet in one received buffer (several, if GRO merged them), returning
-        // how many there were.
-        size_t process_received(std::span<const std::byte> data, msghdr& hdr);
+        // Passes on every packet in one received buffer (several, if GRO merged them), stamped with
+        // `received`, returning how many there were.
+        size_t process_received(std::span<const std::byte> data, msghdr& hdr, std::optional<time_point> received);
         io_result receive();
 
         // Test hook, only functional in debug builds of libquic: makes this socket's upcoming sends
