@@ -311,6 +311,59 @@ namespace oxen::quic
     }
 #endif
 
+    // This needs room for every control message we enable on the socket at once: the kernel
+    // silently drops whichever ones don't fit (setting MSG_CTRUNC), and Linux delivers pktinfo
+    // before the TOS/TCLASS ECN value, so undersizing this loses the ECN value on every packet.
+    // (Dual-stack Windows sockets deliver both pktinfo types).
+    struct alignas(cmsghdr) recv_cmsg_data
+    {
+        char ecn[CMSG_SPACE(sizeof(int))];  // a char most places but an int on windows because yay
+        char pktinfo4[CMSG_SPACE(sizeof(in_pktinfo))];
+        char pktinfo6[CMSG_SPACE(sizeof(in6_pktinfo))];
+    };
+
+    struct UDPSocket::receive_batch
+    {
+#ifdef OXEN_LIBQUIC_RECVMMSG
+        receive_batch(size_t slots, size_t slot_size) :
+                slot_size{slot_size}, data(slots * slot_size), peers(slots), iovs(slots), msgs(slots), cmsgs(slots)
+        {
+            for (size_t i = 0; i < slots; i++)
+            {
+                iovs[i].iov_base = slot(i);
+                iovs[i].iov_len = slot_size;
+                auto& h = msgs[i].msg_hdr;
+                h.msg_iov = &iovs[i];
+                h.msg_iovlen = 1;
+                h.msg_name = &peers[i];
+                h.msg_control = &cmsgs[i];
+            }
+        }
+
+        const size_t slot_size;
+        std::vector<std::byte> data;
+        std::vector<sockaddr_in6> peers;
+        std::vector<iovec> iovs;
+        std::vector<mmsghdr> msgs;
+        std::vector<recv_cmsg_data> cmsgs;
+
+        std::byte* slot(size_t i) { return data.data() + i * slot_size; }
+
+        // The kernel overwrites each message's address and control lengths, and its flags, with
+        // what the packet it received used, so they need resetting before every call.
+        void reset()
+        {
+            for (size_t i = 0; i < msgs.size(); i++)
+            {
+                auto& h = msgs[i].msg_hdr;
+                h.msg_namelen = sizeof(peers[i]);
+                h.msg_controllen = sizeof(cmsgs[i]);
+                h.msg_flags = 0;
+            }
+        }
+#endif
+    };
+
     UDPSocket::UDPSocket(event_base* ev_loop, const Address& addr, bool allow_gso, receive_callback_t on_receive) :
             gso_{GSO_SUPPORTED && allow_gso}, ev_{ev_loop}, receive_callback_{std::move(on_receive)}
     {
@@ -413,6 +466,10 @@ namespace oxen::quic
         ioctlsocket(sock_, FIONBIO, &mode);
 #else
         check_rv(fcntl(sock_, F_SETFL, O_NONBLOCK), "set non-blocking");
+#endif
+
+#ifdef OXEN_LIBQUIC_RECVMMSG
+        recv_ = std::make_unique<receive_batch>(MAX_RECEIVE_PER_LOOP, MAX_PMTUD_UDP_PAYLOAD);
 #endif
 
         rev_.reset(event_new(
@@ -531,69 +588,29 @@ namespace oxen::quic
         receive_callback_(Packet{bound_, payload, hdr});
     }
 
-    // This needs room for every control message we enable on the socket at once: the kernel
-    // silently drops whichever ones don't fit (setting MSG_CTRUNC), and Linux delivers pktinfo
-    // before the TOS/TCLASS ECN value, so undersizing this loses the ECN value on every packet.
-    // (Dual-stack Windows sockets deliver both pktinfo types).
-    struct alignas(cmsghdr) recv_cmsg_data
-    {
-        char ecn[CMSG_SPACE(sizeof(int))];  // a char most places but an int on windows because yay
-        char pktinfo4[CMSG_SPACE(sizeof(in_pktinfo))];
-        char pktinfo6[CMSG_SPACE(sizeof(in6_pktinfo))];
-    };
-
     io_result UDPSocket::receive()
     {
 #ifdef OXEN_LIBQUIC_RECVMMSG
-        std::array<sockaddr_in6, DATAGRAM_BATCH_SIZE> peers;
-        std::array<iovec, DATAGRAM_BATCH_SIZE> iovs;
-        std::array<mmsghdr, DATAGRAM_BATCH_SIZE> msgs = {};
-        std::array<recv_cmsg_data, DATAGRAM_BATCH_SIZE> cmsgs = {};
+        // The batch holds MAX_RECEIVE_PER_LOOP packets, so one call takes everything we read before
+        // returning to the event loop.
+        auto& b = *recv_;
+        b.reset();
 
-        std::array<std::array<std::byte, MAX_PMTUD_UDP_PAYLOAD>, DATAGRAM_BATCH_SIZE> data;
-
-        for (size_t i = 0; i < DATAGRAM_BATCH_SIZE; i++)
-        {
-            iovs[i].iov_base = data[i].data();
-            iovs[i].iov_len = data[i].size();
-            auto& h = msgs[i].msg_hdr;
-            h.msg_iov = &iovs[i];
-            h.msg_iovlen = 1;
-            h.msg_name = &peers[i];
-            h.msg_namelen = sizeof(peers[i]);
-            h.msg_control = &cmsgs[i];
-            h.msg_controllen = sizeof(cmsgs[i]);
-        }
-
-        size_t count = 0;
+        int nread;
         do
         {
-            int nread;
-            do
-            {
-                nread = recvmmsg(sock_, msgs.data(), msgs.size(), 0, nullptr);
-            } while (nread == -1 && errno == EINTR);
+            nread = recvmmsg(sock_, b.msgs.data(), b.msgs.size(), 0, nullptr);
+        } while (nread == -1 && errno == EINTR);
 
-            if (nread == 0)  // No packets available to read
+        if (nread < 0)
+        {
+            if (errno == EAGAIN || errno == EWOULDBLOCK)
                 return io_result{};
+            return io_result{errno};
+        }
 
-            if (nread < 0)
-            {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    return io_result{};
-                return io_result{errno};
-            }
-
-            for (int i = 0; i < nread; i++)
-                process_packet(std::span{data[i].data(), msgs[i].msg_len}, msgs[i].msg_hdr);
-
-            count += nread;
-
-            if (nread < static_cast<int>(DATAGRAM_BATCH_SIZE))
-                // We didn't fill the recvmmsg array so must be done
-                return io_result{};
-
-        } while (count < MAX_RECEIVE_PER_LOOP);
+        for (int i = 0; i < nread; i++)
+            process_packet(std::span{b.slot(i), b.msgs[i].msg_len}, b.msgs[i].msg_hdr);
 
         return io_result{};
 

@@ -149,14 +149,13 @@ namespace oxen::quic
     // + 2 bytes datagram length.  (As above, should be optional but isn't with current ngtcp2).
     inline constexpr size_t DATAGRAM_OVERHEAD_0RTT = 1 + 4 + 1 + 20 + 1 + 20 + 2 + 4 + 1 + 2;
 
-    // Maximum number of packets we can send in one batch when using sendmmsg/GSO, and maximum we
-    // receive in one batch when using recvmmsg.
+    // Maximum number of packets we can send in one batch when using sendmmsg/GSO.
     inline constexpr size_t DATAGRAM_BATCH_SIZE = 24;
 
     // Maximum number of packets we will receive at once before returning control to the event loop
     // to re-call the packet receiver if there are additional packets.  (This limit is to prevent
-    // loop starvation in the face of heavy incoming packets.).  Note that When using recvmmsg then
-    // we can overrun up to the next integer multiple of DATAGRAM_BATCH_SIZE.
+    // loop starvation in the face of heavy incoming packets.)  recvmmsg receives up to this many in
+    // a single call.
     inline constexpr size_t MAX_RECEIVE_PER_LOOP = 64;
 
     // The minimum size stateless reset packet we will send, as proscribed by section 10.3.3 of the

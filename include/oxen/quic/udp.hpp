@@ -17,6 +17,7 @@ extern "C"
 #include "utils.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <variant>
 
@@ -168,6 +169,11 @@ namespace oxen::quic
         Address bound_;
 
         bool gso_;
+
+        // The buffers recvmmsg receives into (null without recvmmsg support), allocated once rather
+        // than on the stack, which they are too large for.
+        struct receive_batch;
+        std::unique_ptr<receive_batch> recv_;
 
         event_base* ev_ = nullptr;
 
