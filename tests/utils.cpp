@@ -119,6 +119,17 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_simulate_arrival_address(std::move(addr)); });
     }
 
+    bool TestHelper::switch_source_address(Endpoint& ep, std::optional<Address> addr)
+    {
+        return ep.job_queue.call_get(
+                [&] { return ep._debug_simulate_route_source(addr) && ep._debug_simulate_send_source(addr); });
+    }
+
+    Address TestHelper::ngtcp2_path_remote(Connection& conn)
+    {
+        return conn._endpoint.job_queue.call_get([&] { return Address{ngtcp2_conn_get_path(conn)->remote}; });
+    }
+
     size_t TestHelper::route_lookups(Endpoint& ep)
     {
         return ep.job_queue.call_get([&] { return ep._debug_route_lookups(); });

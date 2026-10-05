@@ -1169,6 +1169,8 @@ namespace oxen::quic
             }
             if (debug_result)
                 result = {*debug_result, 0};
+            else if (b.debug_send_source && !pin_source)
+                result = socket->send(Path{*b.debug_send_source, path.remote}, buf, bufsize, ecn, n_try, true);
             else
 #endif
             {
@@ -1386,6 +1388,16 @@ namespace oxen::quic
     {
 #ifndef NDEBUG
         batch().debug_arrival_address = std::move(addr);
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    bool Endpoint::_debug_simulate_send_source([[maybe_unused]] std::optional<Address> addr)
+    {
+#ifndef NDEBUG
+        batch().debug_send_source = std::move(addr);
         return true;
 #else
         return false;

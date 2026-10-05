@@ -342,6 +342,10 @@ namespace oxen::quic
         // Makes received packets report `addr` (nullopt to stop) as the local address they arrived
         // on; returns false if unsupported.
         bool _debug_simulate_arrival_address(std::optional<Address> addr);
+        // Makes packets sent without a pinned source (i.e. those of outbound connections) actually
+        // go out from `addr` (nullopt to stop), as they would once the kernel's routing changed;
+        // returns false if unsupported.
+        bool _debug_simulate_send_source(std::optional<Address> addr);
         // Returns how many times the local address used to reach a peer has been looked up (0 if
         // unsupported).
         size_t _debug_route_lookups() const;

@@ -98,6 +98,9 @@ namespace oxen::quic
         // When set, received packets report this as the local address they arrived on (see
         // Endpoint::_debug_simulate_arrival_address).
         std::optional<Address> debug_arrival_address;
+        // When set, packets sent without a pinned source go out from this address, as they would
+        // once the kernel's routing changed (see Endpoint::_debug_simulate_send_source).
+        std::optional<Address> debug_send_source;
         size_t debug_route_lookups = 0;
         // The next `debug_blocked_migrations` migrations fail as though there were no spare
         // connection ID.

@@ -118,6 +118,14 @@ namespace oxen::quic
         // changing, as with asymmetric routing.  Returns false (and does nothing) if not a debug
         // build.
         static bool simulate_arrival_address(Endpoint& ep, std::optional<Address> addr);
+        // Switches the host's source address to `addr` (nullopt to stop): unlike
+        // simulate_local_address, the endpoint's outbound packets really go out from it, so the
+        // peer sees them come from there and replies really arrive on it.  `addr` has to be one the
+        // host can send from (e.g. any of 127/8 on Linux).  Returns false (and does nothing) if not
+        // a debug build.
+        static bool switch_source_address(Endpoint& ep, std::optional<Address> addr);
+        // Returns the remote address of ngtcp2's current path for the connection.
+        static Address ngtcp2_path_remote(Connection& conn);
         // Returns how many times the endpoint has looked up the local address used to reach a peer
         // (always 0 if not a debug build).
         static size_t route_lookups(Endpoint& ep);

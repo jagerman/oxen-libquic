@@ -253,6 +253,75 @@ namespace oxen::quic::test
     }
 
     TEST_CASE(
+            "010 - A client migrates after the server has followed its change of source address",
+            "[010][migration][network]")
+    {
+#ifndef __linux__
+        SKIP("Sending from another loopback address needs Linux, where all of 127/8 is local");
+#endif
+        Network test_net{};
+        auto [client_tls, server_tls] = defaults::tls_creds_from_ed_keys();
+
+        std::mutex received_mutex;
+        std::string received;
+        std::condition_variable received_cv;
+        stream_data_callback server_data_cb = [&](Stream&, std::span<const std::byte> dat) {
+            std::lock_guard lock{received_mutex};
+            received += view(dat);
+            received_cv.notify_all();
+        };
+        auto wait_for_received = [&](std::string_view expected) {
+            std::unique_lock lock{received_mutex};
+            return received_cv.wait_for(lock, 5s, [&] { return received.ends_with(expected); });
+        };
+
+        auto server_endpoint = test_net.endpoint(Address{"127.0.0.1", 0});
+        server_endpoint->listen(server_tls, server_data_cb);
+        RemoteAddress server_remote{defaults::SERVER_PUBKEY, "127.0.0.1", server_endpoint->local().port()};
+
+        auto client_established = callback_waiter{[](Connection&) {}};
+        auto client_endpoint = test_net.endpoint(Address{ipv4{}}, client_established);
+        if (!TestHelper::switch_source_address(*client_endpoint, std::nullopt))
+            SKIP("Switching the host's source address requires a debug build of libquic");
+        const auto port = client_endpoint->local().port();
+
+        auto conn = client_endpoint->connect(server_remote, client_tls);
+        REQUIRE(client_established.wait());
+
+        auto stream = conn->open_stream();
+        stream->send("one"s);
+        REQUIRE(wait_for_received("one"));
+        std::this_thread::sleep_for(200ms);
+        auto server_conn = server_endpoint->get_all_conns(Direction::INBOUND).front();
+        REQUIRE(TestHelper::ngtcp2_path_remote(*server_conn) == Address{"127.0.0.1", port});
+
+        // The kernel starts sending from a new address before anything tells the client, so the
+        // server sees the client's packets, with the connection ID it already knows, arrive from
+        // somewhere new and follows them there; its replies then arrive on the new address.
+        const Address new_local{"127.0.0.2", port};
+        REQUIRE(TestHelper::switch_source_address(*client_endpoint, new_local));
+        stream->send("two"s);
+        REQUIRE(wait_for_received("two"));
+
+        for (int i = 0; i < 100 && conn->local() != new_local; i++)
+            std::this_thread::sleep_for(10ms);
+        CHECK(conn->local() == new_local);
+        CHECK(TestHelper::ngtcp2_path_local(*conn) == new_local);
+        CHECK(TestHelper::ngtcp2_path_remote(*server_conn) == new_local);
+
+        SECTION("The application reporting the change afterwards changes nothing")
+        {
+            client_endpoint->network_changed();
+            std::this_thread::sleep_for(50ms);
+            CHECK(conn->local() == new_local);
+            CHECK(TestHelper::ngtcp2_path_local(*conn) == new_local);
+        }
+
+        stream->send("three"s);
+        CHECK(wait_for_received("three"));
+    }
+
+    TEST_CASE(
             "010 - A packet refused as too big after a change of the host's source address migrates the connection",
             "[010][migration][network][pmtud]")
     {
