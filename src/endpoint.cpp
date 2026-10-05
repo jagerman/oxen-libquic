@@ -214,6 +214,7 @@ namespace oxen::quic
                 {
                     conns.erase(it_b);
                     conn_lookup.erase(it_a);
+                    forget_last_lookup();
                     throw;
                 }
             }
@@ -599,6 +600,7 @@ namespace oxen::quic
             // for `rid` being still in the endpoint and so, in that respect, we want the connection
             // to be considered gone even if its destructor doesn't fire yet.
             conns.erase(it);
+            forget_last_lookup();
             log::debug(log_cat, "Deleted connection ({})", rid);
         }
     }
@@ -699,6 +701,7 @@ namespace oxen::quic
                 log_cat, "{} dissociating CID:{} to {}", conn.is_inbound() ? "SERVER" : "CLIENT", qcid, conn.reference_id());
 
         conn_lookup.erase(qcid);
+        forget_last_lookup();
         conn.delete_associated_cid(qcid);
     }
 
@@ -711,11 +714,16 @@ namespace oxen::quic
 
     Connection* Endpoint::fetch_associated_conn(const quic_cid& ccid)
     {
+        if (_last_lookup_conn && ccid == _last_lookup_cid)
+            return _last_lookup_conn;
+
         if (auto it_a = conn_lookup.find(ccid); it_a != conn_lookup.end())
         {
-            if (auto it_b = conns.find(it_a->second); it_b != conns.end())
+            if (auto it_b = conns.find(it_a->second); it_b != conns.end() && it_b->second)
             {
-                return it_b->second.get();
+                _last_lookup_cid = ccid;
+                _last_lookup_conn = it_b->second.get();
+                return _last_lookup_conn;
             }
         }
 

@@ -459,6 +459,13 @@ namespace oxen::quic
 
         std::unordered_map<quic_cid, ConnectionID> conn_lookup;
 
+        // The connection fetch_associated_conn last found, and the connection ID it was found by:
+        // consecutive packets nearly always belong to the same connection, so this saves looking it
+        // up in both maps for each.  Has to be forgotten whenever an entry leaves either map.
+        quic_cid _last_lookup_cid;
+        Connection* _last_lookup_conn = nullptr;
+        void forget_last_lookup() { _last_lookup_conn = nullptr; }
+
         std::unordered_map<hashed_reset_token, ConnectionID> reset_token_conns;
 
         std::map<std::chrono::steady_clock::time_point, ConnectionID> draining_closing;
