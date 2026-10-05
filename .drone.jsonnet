@@ -233,7 +233,10 @@ local clang(version) = debian_pipeline(
   docker_base + 'debian-sid-clang',
   deps=['clang-' + version] + default_deps_base,
   cmake_extra='-DCMAKE_C_COMPILER=clang-' + version + ' -DCMAKE_CXX_COMPILER=clang++-' + version +
-              ' -DUSE_LTO=OFF '  // Enabling LTO in oxen-logging makes clang unhappy
+              ' -DUSE_LTO=OFF ' +  // Enabling LTO in oxen-logging makes clang unhappy
+              // clang's LTO objects need a linker that reads LLVM bitcode, which the default bfd
+              // linker here doesn't, so the static dependencies have to be built without it.
+              ' -DSESSIONDEPS_LTO=OFF'
 );
 
 local full_llvm(version, _allow_fail=false) = debian_pipeline(

@@ -158,8 +158,6 @@ namespace oxen::quic
 
     void sha3_256(uint8_t* out, std::span<const uint8_t> value, std::string_view domain = "");
     void sha3_256(uint8_t* out, std::span<const char> value, std::string_view domain = "");
-    void sha3_512(uint8_t* out, std::span<const uint8_t> value, std::string_view domain = "");
-    void sha3_512(uint8_t* out, std::span<const char> value, std::string_view domain = "");
 
     // Generates an Ed25519 keypair for testing purposes.  Returned values are the 32-byte seed and
     // 32-byte pubkey.  If you provide a seed_string, then that string is hashed to produce the

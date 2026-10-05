@@ -20,6 +20,7 @@
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
+#include <type_traits>
 
 namespace oxen::quic
 {
@@ -231,6 +232,20 @@ namespace oxen::quic
         return std::make_pair(std::move(client), std::move(server));
     }
 
+    // nettle 4.0 dropped the length argument from the *_digest functions, which now always write the
+    // full digest.  We build against both a distro nettle 3 and session-deps' nettle 4, so dispatch on
+    // whichever signature the nettle in use declares rather than on a version macro.  The call site
+    // asks for the full digest length, which is what nettle 3 needs and what nettle 4 assumes, so the
+    // two spellings compute the same thing.
+    template <auto digest, typename Ctx, typename Out>
+    static void nettle_digest(Ctx* ctx, size_t length, Out* out)
+    {
+        if constexpr (std::is_invocable_v<decltype(digest), Ctx*, size_t, Out*>)
+            digest(ctx, length, out);
+        else
+            digest(ctx, out);
+    }
+
     void sha3_256(uint8_t* out, std::span<const uint8_t> value, std::string_view domain)
     {
         sha3_256_ctx ctx;
@@ -239,25 +254,11 @@ namespace oxen::quic
             sha3_256_update(&ctx, domain.size(), reinterpret_cast<const uint8_t*>(domain.data()));
 
         sha3_256_update(&ctx, value.size(), value.data());
-        sha3_256_digest(&ctx, 32, out);
+        nettle_digest<sha3_256_digest>(&ctx, SHA3_256_DIGEST_SIZE, out);
     }
     void sha3_256(uint8_t* out, std::span<const char> value, std::string_view domain)
     {
         return sha3_256(out, {reinterpret_cast<const uint8_t*>(value.data()), value.size()}, domain);
-    }
-    void sha3_512(uint8_t* out, std::span<const uint8_t> value, std::string_view domain)
-    {
-        sha3_512_ctx ctx;
-        sha3_512_init(&ctx);
-        if (!domain.empty())
-            sha3_512_update(&ctx, domain.size(), reinterpret_cast<const uint8_t*>(domain.data()));
-
-        sha3_512_update(&ctx, value.size(), value.data());
-        sha3_512_digest(&ctx, 32, out);
-    }
-    void sha3_512(uint8_t* out, std::span<const char> value, std::string_view domain)
-    {
-        return sha3_512(out, {reinterpret_cast<const uint8_t*>(value.data()), value.size()}, domain);
     }
 
     std::pair<std::string, std::string> generate_ed25519(std::string_view seed_string)
