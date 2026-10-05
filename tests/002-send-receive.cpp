@@ -996,12 +996,15 @@ namespace oxen::quic::test
         std::unique_ptr<UDPSocket> sender, receiver;
 
         loop.call_get([&] {
-            receiver = std::make_unique<UDPSocket>(loop.get_event_base(), Address{localhost, 0}, false, [&](Packet&& pkt) {
-                received.emplace_back(static_cast<int>(pkt.data()[0]), pkt.pkt_info.ecn);
-                if (received.size() == ecns.size())
-                    all_received.set_value();
-            });
-            sender = std::make_unique<UDPSocket>(loop.get_event_base(), Address{localhost, 0}, allow_gso, [](Packet&&) {});
+            receiver = std::make_unique<UDPSocket>(
+                    loop.get_event_base(), Address{localhost, 0}, UDPSocket::options{}, [&](Packet&& pkt) {
+                        received.emplace_back(static_cast<int>(pkt.data()[0]), pkt.pkt_info.ecn);
+                        if (received.size() == ecns.size())
+                            all_received.set_value();
+                    });
+            sender = std::make_unique<UDPSocket>(
+                    loop.get_event_base(), Address{localhost, 0}, UDPSocket::options{.allow_gso = allow_gso}, [](Packet&&) {
+                    });
 
             std::array<std::byte, 100 * ecns.size()> bufs;
             std::array<size_t, ecns.size()> sizes;
@@ -1054,14 +1057,19 @@ namespace oxen::quic::test
         std::unique_ptr<UDPSocket> sender, receiver;
 
         loop.call_get([&] {
-            receiver = std::make_unique<UDPSocket>(loop.get_event_base(), Address{"127.0.0.1", 0}, false, [&](Packet&& pkt) {
-                auto d = pkt.data();
-                bool intact = std::all_of(d.begin(), d.end(), [&](std::byte b) { return b == d[0]; });
-                received.push_back({static_cast<int>(d[0]), d.size(), intact});
-                if (received.size() == sizes.size())
-                    all_received.set_value();
-            });
-            sender = std::make_unique<UDPSocket>(loop.get_event_base(), Address{"127.0.0.1", 0}, allow_gso, [](Packet&&) {});
+            receiver = std::make_unique<UDPSocket>(
+                    loop.get_event_base(), Address{"127.0.0.1", 0}, UDPSocket::options{}, [&](Packet&& pkt) {
+                        auto d = pkt.data();
+                        bool intact = std::all_of(d.begin(), d.end(), [&](std::byte b) { return b == d[0]; });
+                        received.push_back({static_cast<int>(d[0]), d.size(), intact});
+                        if (received.size() == sizes.size())
+                            all_received.set_value();
+                    });
+            sender = std::make_unique<UDPSocket>(
+                    loop.get_event_base(),
+                    Address{"127.0.0.1", 0},
+                    UDPSocket::options{.allow_gso = allow_gso},
+                    [](Packet&&) {});
 
             std::vector<std::byte> buf;
             for (size_t i = 0; i < sizes.size(); i++)
@@ -1262,7 +1270,7 @@ namespace oxen::quic::test
         std::unique_ptr<UDPSocket> receiver;
         test_net.loop()->call_get([&] {
             receiver = std::make_unique<UDPSocket>(
-                    test_net.loop()->get_event_base(), Address{LOCALHOST, 0}, false, [&](Packet&& pkt) {
+                    test_net.loop()->get_event_base(), Address{LOCALHOST, 0}, UDPSocket::options{}, [&](Packet&& pkt) {
                         auto d = pkt.data();
                         auto index = static_cast<int>(d[0]);
                         bool intact = std::all_of(d.begin(), d.end(), [&](std::byte b) { return b == d[0]; });
@@ -1751,7 +1759,9 @@ namespace oxen::quic::test
         Loop loop;
         std::unique_ptr<UDPSocket> sock;
         auto bind = [&](Address addr) {
-            loop.call_get([&] { sock = std::make_unique<UDPSocket>(loop.get_event_base(), addr, false, [](Packet&&) {}); });
+            loop.call_get([&] {
+                sock = std::make_unique<UDPSocket>(loop.get_event_base(), addr, UDPSocket::options{}, [](Packet&&) {});
+            });
             return sock->address().port();
         };
 

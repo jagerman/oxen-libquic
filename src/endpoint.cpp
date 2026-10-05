@@ -146,9 +146,10 @@ namespace oxen::quic
         if (not _manual_routing)
         {
             log::debug(log_cat, "Starting new UDP socket on {}", _local);
-            socket = std::make_unique<UDPSocket>(loop.get_event_base(), _local, _allow_gso, [this](Packet&& packet) {
-                handle_packet(std::move(packet));
-            });
+            socket = std::make_unique<UDPSocket>(
+                    loop.get_event_base(), _local, UDPSocket::options{.allow_gso = _allow_gso}, [this](Packet&& packet) {
+                        handle_packet(std::move(packet));
+                    });
 
             _local = socket->address();
         }

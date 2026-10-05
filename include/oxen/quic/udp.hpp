@@ -89,6 +89,14 @@ namespace oxen::quic
 
         UDPSocket() = delete;
 
+        /// Optional socket features, off by default.
+        struct options
+        {
+            /// Send runs of packets as single GSO messages, where libquic was built with GSO
+            /// support and the OS supports it.
+            bool allow_gso = false;
+        };
+
         /// Constructs a UDP socket bound to the given address.  Throws if binding fails.  If
         /// binding to an any address (or any port) you can retrieve the realized address via
         /// address() after construction.
@@ -96,7 +104,7 @@ namespace oxen::quic
         /// When packets are received they will be fed into the given callback.
         ///
         /// ev_loop must outlive this object.
-        UDPSocket(event_base* ev_loop, const Address& addr, bool allow_gso, receive_callback_t cb);
+        UDPSocket(event_base* ev_loop, const Address& addr, options opts, receive_callback_t cb);
 
         /// Non-copyable and non-moveable
         UDPSocket(const UDPSocket& s) = delete;

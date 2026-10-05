@@ -27,9 +27,10 @@ namespace oxen::quic
     void TestHelper::migrate_connection(Connection& conn, Address new_bind)
     {
         auto& current_sock = const_cast<std::unique_ptr<UDPSocket>&>(conn._endpoint.get_socket());
-        auto new_sock = std::make_unique<UDPSocket>(conn._loop.get_event_base(), new_bind, false, [&](auto&& packet) {
-            conn._endpoint.handle_packet(std::move(packet));
-        });
+        auto new_sock =
+                std::make_unique<UDPSocket>(conn._loop.get_event_base(), new_bind, UDPSocket::options{}, [&](auto&& packet) {
+                    conn._endpoint.handle_packet(std::move(packet));
+                });
 
         auto& new_addr = new_sock->address();
         Path new_path{new_addr, conn._path.remote};
@@ -45,9 +46,10 @@ namespace oxen::quic
     void TestHelper::migrate_connection_immediate(Connection& conn, Address new_bind)
     {
         auto& current_sock = const_cast<std::unique_ptr<UDPSocket>&>(conn._endpoint.get_socket());
-        auto new_sock = std::make_unique<UDPSocket>(conn._loop.get_event_base(), new_bind, false, [&](auto&& packet) {
-            conn._endpoint.handle_packet(std::move(packet));
-        });
+        auto new_sock =
+                std::make_unique<UDPSocket>(conn._loop.get_event_base(), new_bind, UDPSocket::options{}, [&](auto&& packet) {
+                    conn._endpoint.handle_packet(std::move(packet));
+                });
 
         auto& new_addr = new_sock->address();
         Path new_path{new_addr, conn._path.remote};
@@ -63,9 +65,10 @@ namespace oxen::quic
     void TestHelper::nat_rebinding(Connection& conn, Address new_bind)
     {
         auto& current_sock = const_cast<std::unique_ptr<UDPSocket>&>(conn._endpoint.get_socket());
-        auto new_sock = std::make_unique<UDPSocket>(conn._loop.get_event_base(), new_bind, false, [&](auto&& packet) {
-            conn._endpoint.handle_packet(std::move(packet));
-        });
+        auto new_sock =
+                std::make_unique<UDPSocket>(conn._loop.get_event_base(), new_bind, UDPSocket::options{}, [&](auto&& packet) {
+                    conn._endpoint.handle_packet(std::move(packet));
+                });
 
         auto& new_addr = new_sock->address();
         Path new_path{new_addr, conn._path.remote};
@@ -680,7 +683,7 @@ namespace oxen::quic
         ep = ep_;
 
         sock = std::make_unique<UDPSocket>(
-                ep_->loop.get_event_base(), ep_->local(), false, [wself = weak_from_this()](Packet&& pkt) {
+                ep_->loop.get_event_base(), ep_->local(), UDPSocket::options{}, [wself = weak_from_this()](Packet&& pkt) {
                     log::debug(log_cat, "incoming {}B udp packet from {}; delaying delivery", pkt.size(), pkt.path);
                     auto sself = wself.lock();
                     if (!sself)

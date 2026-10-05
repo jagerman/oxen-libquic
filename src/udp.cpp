@@ -364,8 +364,8 @@ namespace oxen::quic
 #endif
     };
 
-    UDPSocket::UDPSocket(event_base* ev_loop, const Address& addr, bool allow_gso, receive_callback_t on_receive) :
-            gso_{GSO_SUPPORTED && allow_gso}, ev_{ev_loop}, receive_callback_{std::move(on_receive)}
+    UDPSocket::UDPSocket(event_base* ev_loop, const Address& addr, options opts, receive_callback_t on_receive) :
+            gso_{GSO_SUPPORTED && opts.allow_gso}, ev_{ev_loop}, receive_callback_{std::move(on_receive)}
     {
         assert(ev_);
 
