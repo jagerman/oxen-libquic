@@ -313,6 +313,9 @@ int main(int argc, char* argv[])
     if (gso)
         allow_gso.emplace();
 
+    // The datagram test queues all of its datagrams at once, so the queue has to hold them all (the
+    // data, one more datagram, and the 8-byte count): anything over the limit would be dropped
+    // before being sent, and look like loss on the network.
     auto client = Endpoint::endpoint(
             loop,
             client_local,
@@ -320,7 +323,7 @@ int main(int argc, char* argv[])
             opt::outbound_alpn("speedtests"),
             mtu,
             allow_gso,
-            opt::enable_datagrams{Splitting::ACTIVE});
+            opt::enable_datagrams{Splitting::ACTIVE}.queue_limit(size + 64_ki));
     std::shared_ptr<Connection> client_ci;
     if (!ping)
     {
