@@ -42,6 +42,7 @@ namespace oxen::quic
         _packet_splitting = dc.split_packets;
         _policy = dc.mode;
         _rbufsize = dc.bufsize;
+        _dgram_reorder_limit = dc.dgram_reorder_limit.value_or(std::min(2 * dc.bufsize, 8192));
         _dgram_queue_limit = dc.dgram_queue_limit.value_or(0);
 
         log::trace(

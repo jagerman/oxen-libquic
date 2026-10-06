@@ -79,7 +79,7 @@ namespace oxen::quic
         static int disable_dgram_counter(Connection& conn);
         static int get_dgram_debug_counter(Connection& conn);
 
-        static int get_datagram_last_cleared(Datagrams& dg);
+        static int get_datagrams_stored(Datagrams& dg);
         static size_t get_dgram_drop_count(Datagrams& dg);
 
         // Bumps the connection's next reference id to make it easier to tell which connection is

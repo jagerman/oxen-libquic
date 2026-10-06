@@ -249,9 +249,9 @@ namespace oxen::quic
         return conn._loop.call_get([&conn] { return conn.debug_datagram_counter; });
     }
 
-    int TestHelper::get_datagram_last_cleared(Datagrams& dg)
+    int TestHelper::get_datagrams_stored(Datagrams& dg)
     {
-        return dg.recv_buffer.last_cleared;
+        return dg.job_queue.call_get([&dg] { return dg.datagrams_stored(); });
     }
 
     size_t TestHelper::get_dgram_drop_count(Datagrams& dg)

@@ -4,7 +4,8 @@
 #include "endpoint.hpp"
 #include "internal.hpp"
 
-#include <numeric>
+#include <bit>
+#include <span>
 
 namespace oxen::quic
 {
@@ -12,8 +13,7 @@ namespace oxen::quic
     Datagrams::Datagrams(Connection& c, Endpoint& e, dgram_data_callback data_cb, size_t dgram_queue_limit_) :
             IOChannel{c, e},
             dgram_data_cb{std::move(data_cb)},
-            rbufsize{endpoint.datagram_bufsize()},
-            recv_buffer{*this},
+            recv_buffer{endpoint.datagram_bufsize(), endpoint.datagram_reorder_limit()},
             _packet_splitting(_conn->packet_splitting_enabled())
     {
         if (dgram_queue_limit_)
@@ -114,100 +114,162 @@ namespace oxen::quic
 
     std::optional<std::vector<std::byte>> Datagrams::to_buffer(std::span<const std::byte> data, uint16_t dgid)
     {
-        log::trace(log_cat, "Datagrams handed datagram with endian swapped ID: {}", dgid);
+        assert(job_queue.inside());
+        assert(_conn);
+
+        if (_conn->debug_datagram_drop_enabled && recv_buffer.completes(dgid))
+        {
+            log::debug(log_cat, "enable_datagram_drop_test is true, inducing packet loss");
+            _conn->debug_datagram_counter++;
+            return std::nullopt;
+        }
 
         return recv_buffer.receive(data, dgid);
     }
 
     namespace dgram
     {
-        rotating_buffer::rotating_buffer(Datagrams& d) : datagram{d}, bufsize{d.rbufsize}, rowsize{d.rbufsize / 4}
+        namespace
         {
-            for (auto& v : buf)
-                v.resize(rowsize);
+            // The two least-significant bits of the dgid indicating whether packet splitting happened.
+            // 00 means no splitting, the 0b10 bit means this is a split packet, and the 0b01 bit
+            // indicates this is the second part.
+            constexpr uint16_t DGID_SPLIT_FIRST = 0b10;
+            constexpr uint16_t DGID_SPLIT_SECOND = 0b11;
+        }  // namespace
+
+        rotating_buffer::rotating_buffer(int bufsize, int reorder_limit) :
+                bufsize{bufsize},
+                block_shift{std::countr_zero(static_cast<unsigned>(bufsize / 2))},
+                nblocks{(1 << 14) >> block_shift},
+                reorder_blocks{(reorder_limit + bufsize / 2 - 1) >> block_shift}
+        {}
+
+        bool rotating_buffer::held_block(int block) const
+        {
+            // How far `block` is behind the newest one, counting back around the counter wrap.
+            int behind = (*newest - block) & (nblocks - 1);
+            return behind <= 1;
+        }
+
+        bool rotating_buffer::advance(uint16_t counter)
+        {
+            int block = counter >> block_shift;
+            if (!newest)
+            {
+                newest = block;
+                return true;
+            }
+            if (held_block(block))
+                return true;
+            if (((*newest - block) & (nblocks - 1)) < reorder_blocks)
+                return false;
+
+            // A newer block, or one too far back to be late, which can only mean that the IDs jumped
+            // forward after a burst of losses.  Whatever the half this block uses holds is now too
+            // old, as is the other half if the jump skipped the block in between.
+            clear_half(block & 1);
+            if (((block - *newest) & (nblocks - 1)) > 1)
+                clear_half((block - 1) & 1);
+            newest = block;
+            return true;
+        }
+
+        void rotating_buffer::clear_half(int half)
+        {
+            if (!held[half])
+                return;
+            log::trace(log_cat, "Clearing {} unpaired datagram pieces", held[half]);
+            const int block_size = bufsize / 2;
+            for (auto& slot : std::span{slots}.subspan(half * block_size, block_size))
+                if (slot)
+                {
+                    release_piece(slot - 1);
+                    slot = 0;
+                }
+            held[half] = 0;
+        }
+
+        uint16_t rotating_buffer::take_piece()
+        {
+            if (free_head == NO_PIECE)
+            {
+                pieces.emplace_back();
+                return static_cast<uint16_t>(pieces.size() - 1);
+            }
+            auto index = free_head;
+            free_head = pieces[index].next_free;
+            return index;
+        }
+
+        void rotating_buffer::release_piece(uint16_t index)
+        {
+            auto& p = pieces[index];
+            p.data = {};
+            p.next_free = free_head;
+            free_head = index;
+        }
+
+        void rotating_buffer::observe(uint16_t dgid)
+        {
+            advance(dgid >> 2);
+        }
+
+        bool rotating_buffer::completes(uint16_t dgid) const
+        {
+            uint16_t counter = dgid >> 2;
+            if (slots.empty() || !held_block(counter >> block_shift))
+                return false;
+            auto slot = slots[counter & (bufsize - 1)];
+            return slot && pieces[slot - 1].first != ((dgid & 0b11) == DGID_SPLIT_FIRST);
         }
 
         std::optional<std::vector<std::byte>> rotating_buffer::receive(std::span<const std::byte> data, uint16_t dgid)
         {
-            log::trace(log_cat, "{} called", __PRETTY_FUNCTION__);
-
-            assert(datagram.job_queue.inside());
-            assert(datagram._conn);
-
-            auto idx = dgid >> 2;
-            log::trace(
-                    log_cat,
-                    "dgid: {}, row: {}, col: {}, idx: {}, rowsize: {}, bufsize {}",
-                    dgid,
-                    row,
-                    col,
-                    idx,
-                    rowsize,
-                    bufsize);
-
-            row = (idx % bufsize) / rowsize;
-            col = idx % rowsize;
-
-            auto& b = buf[row][col];
-
-            if (b)
+            uint16_t counter = dgid >> 2;
+            if (!advance(counter))
             {
-                if (datagram._conn->debug_datagram_drop_enabled)
-                {
-                    log::debug(log_cat, "enable_datagram_drop_test is true, inducing packet loss");
-                    datagram._conn->debug_datagram_counter++;
-                    log::debug(log_cat, "test counter: {}", datagram._conn->debug_datagram_counter);
-                    return std::nullopt;
-                }
-                else
-                {
-                    log::debug(log_cat, "enable_datagram_drop_test is false, skipping optional logic");
-                }
-
-                log::trace(
-                        log_cat,
-                        "Pairing datagram (ID: {}) with {} half at buffer pos [{},{}]",
-                        dgid,
-                        b->first_part ? "first"sv : "second"sv,
-                        row,
-                        col);
-
-                std::vector<std::byte> out;
-                out.reserve(b->data_size + data.size());
-
-                if (b->first_part)
-                {
-                    out.insert(out.end(), b->data.begin(), b->data.begin() + b->data_size);
-                    out.insert(out.end(), data.begin(), data.end());
-                }
-                else
-                {
-                    out.insert(out.end(), data.begin(), data.end());
-                    out.insert(out.end(), b->data.begin(), b->data.begin() + b->data_size);
-                }
-                b.reset();
-
-                currently_held[row]--;
-
-                return out;
+                log::debug(log_cat, "Dropping late split datagram piece (ID: {})", dgid);
+                return std::nullopt;
             }
 
-            // Otherwise: new piece
-            log::trace(log_cat, "Storing datagram (ID: {}) at buffer pos [{},{}]", dgid, row, col);
+            if (slots.empty())
+                slots.resize(bufsize);
+            auto& slot = slots[counter & (bufsize - 1)];
+            auto& count = held[(counter >> block_shift) & 1];
+            const bool first = (dgid & 0b11) == DGID_SPLIT_FIRST;
 
-            b = std::make_unique<received>(dgid, data);
-            currently_held[row]++;
-
-            int to_clear = (row + 2) % 4;
-
-            if (to_clear == (last_cleared + 1) % 4)
+            if (!slot)
             {
-                clear_row(to_clear);
-                currently_held[to_clear] = 0;
-                last_cleared = to_clear;
+                log::trace(log_cat, "Storing split datagram piece (ID: {})", dgid);
+                auto index = take_piece();
+                auto& p = pieces[index];
+                p.data.assign(data.begin(), data.end());
+                p.first = first;
+                slot = index + 1;
+                ++count;
+                return std::nullopt;
             }
 
-            return std::nullopt;
+            auto& p = pieces[slot - 1];
+            if (p.first == first)
+            {
+                log::debug(log_cat, "Dropping duplicate split datagram piece (ID: {})", dgid);
+                return std::nullopt;
+            }
+
+            log::trace(log_cat, "Pairing split datagram piece (ID: {}) with its other half", dgid);
+            std::span<const std::byte> stored{p.data};
+            auto head = p.first ? stored : data, tail = p.first ? data : stored;
+            std::vector<std::byte> out;
+            out.reserve(head.size() + tail.size());
+            out.insert(out.end(), head.begin(), head.end());
+            out.insert(out.end(), tail.begin(), tail.end());
+
+            release_piece(slot - 1);
+            slot = 0;
+            --count;
+            return out;
         }
 
         void queue::early_data_begin()
@@ -267,20 +329,6 @@ namespace oxen::quic
             return early_data_head.value_or(0) >= buf.size();
         }
 
-        void rotating_buffer::clear_row(int index)
-        {
-            log::trace(log_cat, "Clearing buffer row {} (i = {}, j = {})", index, row, col);
-
-            for (auto& b : buf[index])
-                if (b)
-                    b.reset();
-        }
-
-        int rotating_buffer::datagrams_stored() const
-        {
-            return std::accumulate(currently_held.begin(), currently_held.end(), 0);
-        }
-
         prepared::prepared(bool splitting_enabled, uint16_t id, std::span<const std::byte> data) : id{id}, bufs_len{1}
         {
             auto vit = bufs.begin();
@@ -295,15 +343,6 @@ namespace oxen::quic
             vit->base = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(data.data()));
             vit->len = data.size();
         }
-
-        namespace
-        {
-            // The two least-significant bits of the dgid indicating whether packet splitting happened.
-            // 00 means no splitting, the 0b10 bit means this is a split packet, and the 0b01 bit
-            // indicates this is the second part.
-            constexpr uint16_t DGID_SPLIT_FIRST = 0b10;
-            constexpr uint16_t DGID_SPLIT_SECOND = 0b11;
-        }  // namespace
 
         std::optional<prepared> queue::fetch(size_t max_dgram_piece, bool prefer_small)
         {
