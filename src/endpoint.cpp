@@ -1481,6 +1481,11 @@ namespace oxen::quic
 #endif
     }
 
+    const Connection* Endpoint::_debug_stall_owner() const
+    {
+        return _send_batch->stalled ? _send_batch->owner : nullptr;
+    }
+
     void Endpoint::send_or_queue_packet(
             const Path& p, std::vector<std::byte> buf, uint8_t ecn, bool pin_source, std::function<void(io_result)> callback)
     {

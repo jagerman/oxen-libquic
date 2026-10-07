@@ -366,6 +366,9 @@ namespace oxen::quic
             size_t no_buffer_drops = 0;  // Packets dropped for lack of local buffer space (ENOBUFS)
         };
         debug_send_stats _debug_send_stats() const;
+        // Returns the connection whose packets are stalled in the send batch, if it is stalled and
+        // that connection is still around.
+        const Connection* _debug_stall_owner() const;
 
         // Drops a connection from the endpoint.  This is dangerous to call from *within* methods on
         // a connection itself, and generally should be deferred via a call_soon.

@@ -185,6 +185,11 @@ namespace oxen::quic
         return ep.job_queue.call_get([&] { return ep._debug_send_stats(); });
     }
 
+    const Connection* TestHelper::send_stall_owner(Endpoint& ep)
+    {
+        return ep.job_queue.call_get([&] { return ep._debug_stall_owner(); });
+    }
+
     void TestHelper::mark_dead(Connection& conn)
     {
         conn._endpoint.job_queue.call_get([&] { conn.dead = true; });

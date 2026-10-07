@@ -162,6 +162,9 @@ namespace oxen::quic
         // Returns the endpoint's send statistics so far (all zero in non-debug builds).
         static Endpoint::debug_send_stats send_stats(Endpoint& ep);
 
+        // Returns the connection whose packets are stalled in the endpoint's send batch, if any.
+        static const Connection* send_stall_owner(Endpoint& ep);
+
         // Marks the connection dead, as a fatal ngtcp2 error does, but without also scheduling its
         // close (so that the test controls what happens in between).
         static void mark_dead(Connection& conn);
