@@ -154,4 +154,22 @@ namespace oxen::quic::test
         SUCCEED("no post reached a freed waker");
     }
 
+    TEST_CASE("JobQueue - is_running says whether it has been stopped", "[jobqueue]")
+    {
+        Loop loop;
+        JobQueue jq{loop};
+
+        REQUIRE(jq.is_running());
+        REQUIRE(loop.call_get([&] { return jq.is_running(); }));
+
+        jq.stop();
+        REQUIRE_FALSE(jq.is_running());
+        REQUIRE_FALSE(loop.call_get([&] { return jq.is_running(); }));
+        REQUIRE_THROWS_AS(jq.call_soon([] {}), std::runtime_error);
+
+        // Stopping again is a no-op, and does not bring it back.
+        jq.stop();
+        REQUIRE_FALSE(jq.is_running());
+    }
+
 }  // namespace oxen::quic::test
