@@ -398,13 +398,13 @@ namespace oxen::quic
         template <std::invocable<> Callable>
         void call_soon(Callable f)
         {
-            {
-                std::lock_guard lock{job_queue_mutex};
-                if (!*running)
-                    throw std::runtime_error{"Attempting to queue job onto stopped loop."};
-                job_queue.emplace(std::move(f));
-            }
-
+            // The wake shares the stopped check's critical section: stop() frees `job_waker` under
+            // this mutex on the loop thread, so a caller on another thread that checked and then
+            // woke outside it could reach the event after it had been freed.
+            std::lock_guard lock{job_queue_mutex};
+            if (!*running)
+                throw std::runtime_error{"Attempting to queue job onto stopped loop."};
+            job_queue.emplace(std::move(f));
             activate(*job_waker);
         }
 
