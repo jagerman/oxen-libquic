@@ -158,6 +158,10 @@ namespace oxen::quic
     // a single call.
     inline constexpr size_t MAX_RECEIVE_PER_LOOP = 64;
 
+    // The UDP socket receive buffer size requested by default (the send buffer is left at the OS
+    // default); see opt::socket_buffers.
+    inline constexpr size_t DEFAULT_SOCKET_RECV_BUFFER = 4_Mi;
+
     // The minimum size stateless reset packet we will send, as proscribed by section 10.3.3 of the
     // RFC.  Each generated stateless reset packet is smaller than the one that triggered it, down
     // to this limit, to stop a potential infinite loop.

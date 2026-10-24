@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -103,6 +104,47 @@ namespace oxen::quic
         // Ignored where the OS doesn't support it, or libquic was built without recvmmsg.
         struct allow_gro
         {};
+
+        // Sets the sizes requested for the endpoint's UDP socket receive and send buffers, which
+        // hold packets between the OS and libquic.  Packets arriving while the receive buffer is
+        // full are dropped, and QUIC treats them as lost, so an endpoint receiving from many peers
+        // at once (such as a busy server) wants a large one.  A full send buffer only makes libquic
+        // wait for it to drain.
+        //
+        // For each direction, nullopt uses libquic's default, 0 leaves the OS default, and any other
+        // value requests a buffer of that many bytes, e.g.:
+        //
+        //     opt::socket_buffers{.recv = 4_Mi, .send = 1_Mi}
+        //
+        // A size given here is applied even if it is smaller than the OS default, subject only to
+        // the OS's limits below.
+        //
+        // libquic's defaults suit a client talking to a few servers: DEFAULT_SOCKET_RECV_BUFFER
+        // (4MiB) for receiving, and the OS default for sending.  The default only ever enlarges a
+        // buffer: it is skipped if the OS default is already at least as large.
+        //
+        // A size means the same on every OS, but what the socket gets depends on the OS:
+        // - Linux caps the request at the net.core.rmem_max (receive) or net.core.wmem_max (send)
+        //   sysctl, so that needs to be at least the size requested; both default to 208kiB.  It
+        //   then doubles the size, and reports the doubled size, because it counts each queued
+        //   packet's full kernel allocation (often 2-4kB for a 1.4kB packet) against the buffer:
+        //   the doubled buffer holds about as much packet data as the requested size does on other
+        //   OSes.  (The OS defaults come from the net.core.rmem_default and wmem_default sysctls,
+        //   and are not doubled.)
+        // - macOS and FreeBSD refuse sizes above about 8/9 of the kern.ipc.maxsockbuf sysctl; the
+        //   request is then halved until the OS accepts it (for libquic's default, only while it
+        //   would still enlarge the socket's existing buffer).
+        // - Windows uses the requested size as is.
+        // A size given here that the socket doesn't get logs a warning naming the limit to raise;
+        // libquic's default falling short (as it does with Linux's default limits) is only logged
+        // at debug level, as there is usually nothing an application can do about it.
+        //
+        // Ignored with manual_routing, which creates no socket.
+        struct socket_buffers
+        {
+            std::optional<size_t> recv = std::nullopt;
+            std::optional<size_t> send = std::nullopt;
+        };
 
         struct max_streams
         {
