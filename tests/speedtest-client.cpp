@@ -179,7 +179,7 @@ int main(int argc, char* argv[])
 
     bool ping_reconnect = false;
     cli.add_flag(
-            "-r,--ping-reconnect",
+            "--ping-reconnect",
             ping_reconnect,
             "Automatically reconnect upon connection closing (such as from interruption) when running in ping mode.  "
             "Without this option a connection close for any reason terminates the ping.");
