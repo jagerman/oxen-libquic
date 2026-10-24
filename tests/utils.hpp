@@ -239,6 +239,11 @@ namespace oxen::quic
             bool& enable_0rtt,
             std::filesystem::path& store_0rtt);
 
+    // Adds a -C/--congestion-control option selecting bbr (the default), cubic, or reno.
+    void add_congestion_control_opt(CLI::App& cli, opt::congestion_control& cc);
+
+    std::string_view congestion_control_name(opt::congestion_control cc);
+
     void setup_logging(std::string out, const std::string& level);
 
     void server_log_listening(

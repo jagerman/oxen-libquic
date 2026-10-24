@@ -2051,7 +2051,18 @@ namespace oxen::quic
 #ifndef NDEBUG
         settings.log_printf = log_printer;
 #endif
-        settings.cc_algo = NGTCP2_CC_ALGO_BBR;
+        switch (context->config.congestion_control)
+        {
+            case opt::congestion_control::bbr:
+                settings.cc_algo = NGTCP2_CC_ALGO_BBR;
+                break;
+            case opt::congestion_control::cubic:
+                settings.cc_algo = NGTCP2_CC_ALGO_CUBIC;
+                break;
+            case opt::congestion_control::reno:
+                settings.cc_algo = NGTCP2_CC_ALGO_RENO;
+                break;
+        }
         settings.initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT;
         settings.max_window = 24_Mi;
         settings.max_stream_window = 16_Mi;

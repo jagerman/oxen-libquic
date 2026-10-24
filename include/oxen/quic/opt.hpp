@@ -224,6 +224,19 @@ namespace oxen::quic
             explicit idle_timeout(std::chrono::milliseconds val) : timeout{val} {}
         };
 
+        // Selects the congestion control algorithm a connection uses for what it sends, passed to
+        // listen() or connect().  Defaults to bbr.
+        //
+        // ngtcp2's BBR is BBRv3, which only backs off once more than 2% of a round trip's packets
+        // are lost, while cubic and reno back off on any loss.  BBR thus keeps its rate through
+        // random loss that isn't caused by congestion, but also through drops at a receiver whose
+        // socket buffer is overflowing, which cubic or reno would ease off for.
+        enum class congestion_control {
+            bbr,  // First, so that a value-initialized congestion_control is the default
+            cubic,
+            reno,
+        };
+
         /// This can be initialized a few different ways. Simply passing a default constructed struct
         /// to Network::Endpoint(...) will enable datagrams without packet-splitting. From there, pass
         /// `Splitting::ACTIVE` to the constructor to enable packet-splitting.

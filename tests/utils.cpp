@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <stdexcept>
 #include <type_traits>
 
@@ -449,6 +450,32 @@ namespace oxen::quic
                 seed_string,
                 "If non-empty then the client key and endpoint private data will be generated from a hash of the given "
                 "seed, for reproducible keys and operation.  If omitted/empty a random seed is used.");
+    }
+
+    std::string_view congestion_control_name(opt::congestion_control cc)
+    {
+        switch (cc)
+        {
+            case opt::congestion_control::bbr:
+                return "bbr";
+            case opt::congestion_control::cubic:
+                return "cubic";
+            case opt::congestion_control::reno:
+                return "reno";
+        }
+        return "unknown";
+    }
+
+    void add_congestion_control_opt(CLI::App& cli, opt::congestion_control& cc)
+    {
+        std::map<std::string, opt::congestion_control> algos;
+        for (auto a : {opt::congestion_control::bbr, opt::congestion_control::cubic, opt::congestion_control::reno})
+            algos.emplace(congestion_control_name(a), a);
+
+        cli.add_option("-C,--congestion-control", cc, "Congestion control algorithm for connections: bbr, cubic, or reno")
+                ->transform(CLI::CheckedTransformer(algos, CLI::ignore_case).description(""))
+                ->type_name("ALGO")
+                ->default_str(std::string{congestion_control_name(cc)});
     }
 
     void server_log_listening(

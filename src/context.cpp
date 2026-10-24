@@ -48,6 +48,11 @@ namespace oxen::quic
         log::trace(log_cat, "User passed connection handshake_timeout config value: {}", config.handshake_timeout->count());
     }
 
+    void IOContext::handle_ioctx_opt(opt::congestion_control cc)
+    {
+        config.congestion_control = cc;
+    }
+
     void IOContext::handle_ioctx_opt(opt::outbound_alpns alpns)
     {
         config.out_alpns.emplace(std::move(alpns));
