@@ -27,7 +27,7 @@ namespace oxen::quic
         std::optional<std::chrono::nanoseconds> handshake_timeout{std::nullopt};
         // idle timeout
         std::chrono::milliseconds idle_timeout{DEFAULT_IDLE_TIMEOUT};
-        opt::congestion_control congestion_control{opt::congestion_control::bbr};
+        opt::congestion_control congestion_control{opt::congestion_control::cubic};
         opt::flow_control flow_control{};
         // datagram support
         bool datagram_support{false};
