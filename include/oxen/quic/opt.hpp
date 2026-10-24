@@ -237,6 +237,45 @@ namespace oxen::quic
             reno,
         };
 
+        // Sets the flow control windows a connection advertises, passed to listen() or connect().
+        // A window is how much data the other side may send beyond what libquic has passed on to
+        // the application: across the whole connection, and on each stream.  Each value left as
+        // nullopt keeps its default, e.g.:
+        //
+        //     opt::flow_control{.max_conn_window = 64_Mi}
+        //
+        // Each window starts at its initial size, and whenever the other side keeps using it up
+        // within about two round trips (that is, the window rather than the network is limiting
+        // it), it is doubled, up to its max:
+        // - the connection window from initial_conn_window (DEFAULT_INITIAL_CONN_WINDOW, 15MiB) to
+        //   at most max_conn_window (DEFAULT_MAX_CONN_WINDOW, 24MiB);
+        // - each stream's window from initial_stream_window (DEFAULT_INITIAL_STREAM_WINDOW, 6MiB) to
+        //   at most max_stream_window (DEFAULT_MAX_STREAM_WINDOW, 16MiB).  Every new stream starts
+        //   again from the initial size.
+        // A max no larger than its initial size (0 included) keeps that window at its initial size;
+        // the window is never cut down to the max.
+        //
+        // A sender can't send more than a window per round trip, so to not limit throughput a window
+        // needs to be at least the path's bandwidth times its round-trip time: 24MiB at a 100ms round
+        // trip allows about 250MB/s.  The cost is memory: data that arrives after a lost packet waits
+        // in libquic until the resent packet fills the gap, which can come to a connection window for
+        // each connection.  A stream the application has paused (see Stream::pause()) can still be
+        // sent up to a stream window's worth of data, which the application then has to hold.
+        //
+        // The initial sizes must be at least 1 (a window of 0 would never let any data through), and
+        // every value at most 2^62-1, the largest QUIC can carry; listen() or connect() throws
+        // std::invalid_argument otherwise.
+        //
+        // A server that accepts 0-RTT must not lower its initial sizes between restarts: a client
+        // that remembered the larger ones from before fails its 0-RTT connection (RFC 9000 §7.4.1).
+        struct flow_control
+        {
+            std::optional<uint64_t> initial_conn_window = std::nullopt;
+            std::optional<uint64_t> max_conn_window = std::nullopt;
+            std::optional<uint64_t> initial_stream_window = std::nullopt;
+            std::optional<uint64_t> max_stream_window = std::nullopt;
+        };
+
         /// This can be initialized a few different ways. Simply passing a default constructed struct
         /// to Network::Endpoint(...) will enable datagrams without packet-splitting. From there, pass
         /// `Splitting::ACTIVE` to the constructor to enable packet-splitting.

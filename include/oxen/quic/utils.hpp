@@ -76,6 +76,12 @@ namespace oxen::quic
     inline constexpr std::chrono::seconds DEFAULT_HANDSHAKE_TIMEOUT = 10s;
     inline constexpr std::chrono::seconds DEFAULT_IDLE_TIMEOUT = 30s;
 
+    // Flow control window defaults; see opt::flow_control.
+    inline constexpr uint64_t DEFAULT_INITIAL_CONN_WINDOW = 15_Mi;
+    inline constexpr uint64_t DEFAULT_MAX_CONN_WINDOW = 24_Mi;
+    inline constexpr uint64_t DEFAULT_INITIAL_STREAM_WINDOW = 6_Mi;
+    inline constexpr uint64_t DEFAULT_MAX_STREAM_WINDOW = 16_Mi;
+
     // NGTCP2 sets the path_pmtud_payload to 1200 on connection creation, then discovers upwards
     // to at most MAX_PMTUD_UDP_PAYLOAD. In 'lazy' mode, we take in split packets under the current
     // max pmtud size. In 'greedy' mode, we take in up to double the current pmtud size to split

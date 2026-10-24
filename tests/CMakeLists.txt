@@ -46,6 +46,7 @@ if(LIBQUIC_BUILD_TESTS)
         018-unencrypted.cpp
         019-socket-buffers.cpp
         020-congestion-control.cpp
+        021-flow-control.cpp
         job-queue.cpp
 
         case_logger.cpp
