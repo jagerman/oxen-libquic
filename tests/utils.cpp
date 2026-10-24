@@ -480,6 +480,24 @@ namespace oxen::quic
                 ->default_str(std::string{congestion_control_name(cc)});
     }
 
+    void add_socket_buffer_opts(CLI::App& cli, opt::socket_buffers& bufs)
+    {
+        cli.add_option(
+                   "--udp-recv-buffer",
+                   bufs.recv,
+                   "UDP socket receive buffer size to request, such as 4M or 512KiB; 0 leaves the OS default")
+                ->transform(CLI::AsSizeValue(false).description(""))
+                ->type_name("SIZE")
+                ->default_str("{}MiB"_format(DEFAULT_SOCKET_RECV_BUFFER / 1_Mi));
+        cli.add_option(
+                   "--udp-send-buffer",
+                   bufs.send,
+                   "UDP socket send buffer size to request, such as 1M or 512KiB; 0 leaves the OS default")
+                ->transform(CLI::AsSizeValue(false).description(""))
+                ->type_name("SIZE")
+                ->default_str("OS default");
+    }
+
     void server_log_listening(
             const Address& server_local,
             const Address& default_local,

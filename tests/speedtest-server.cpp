@@ -44,6 +44,9 @@ int main(int argc, char* argv[])
     auto cc = opt::congestion_control::bbr;
     add_congestion_control_opt(cli, cc);
 
+    opt::socket_buffers socket_buffers;
+    add_socket_buffer_opts(cli, socket_buffers);
+
     try
     {
         cli.parse(argc, argv);
@@ -323,6 +326,7 @@ int main(int argc, char* argv[])
                 mtu,
                 allow_gso,
                 allow_gro,
+                socket_buffers,
                 opt::enable_datagrams{Splitting::ACTIVE});
         server->listen(server_tls, stream_opened, stream_data, recv_dgram_cb, cc);
     }

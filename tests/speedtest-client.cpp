@@ -132,6 +132,9 @@ int main(int argc, char* argv[])
     auto cc = opt::congestion_control::bbr;
     add_congestion_control_opt(cli, cc);
 
+    opt::socket_buffers socket_buffers;
+    add_socket_buffer_opts(cli, socket_buffers);
+
     size_t chunk_size = 64_ki, chunk_num = 2;
     cli.add_option("--stream-chunk-size", chunk_size, "How much data to queue at once, per chunk");
     cli.add_option("--stream-chunks", chunk_num, "How much chunks to queue at once per stream")->check(CLI::Range(1, 100));
@@ -322,6 +325,7 @@ int main(int argc, char* argv[])
             mtu,
             allow_gso,
             allow_gro,
+            socket_buffers,
             opt::enable_datagrams{Splitting::ACTIVE}.queue_limit(size + 64_ki));
     std::shared_ptr<Connection> client_ci;
     if (!ping)
