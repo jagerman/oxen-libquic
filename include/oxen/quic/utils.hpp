@@ -38,38 +38,43 @@ namespace oxen::quic
 
     // SI (1000) and non-SI (1024-based) modifier prefix operators.  E.g.
     // 50_M is 50'000'000 and 50_Mi is 52'428'800.
-    constexpr unsigned long long operator""_k(unsigned long long int x)
+    //
+    // Code outside oxen::quic can use just these with `using namespace oxen::quic::literals;`.
+    inline namespace literals
     {
-        return x * 1000;
-    }
-    constexpr unsigned long long operator""_M(unsigned long long int x)
-    {
-        return x * 1000 * 1_k;
-    }
-    constexpr unsigned long long operator""_G(unsigned long long int x)
-    {
-        return x * 1000 * 1_M;
-    }
-    constexpr unsigned long long operator""_T(unsigned long long int x)
-    {
-        return x * 1000 * 1_G;
-    }
-    constexpr unsigned long long operator""_ki(unsigned long long int x)
-    {
-        return x * 1024;
-    }
-    constexpr unsigned long long operator""_Mi(unsigned long long int x)
-    {
-        return x * 1024 * 1_ki;
-    }
-    constexpr unsigned long long operator""_Gi(unsigned long long int x)
-    {
-        return x * 1024 * 1_Mi;
-    }
-    constexpr unsigned long long operator""_Ti(unsigned long long int x)
-    {
-        return x * 1024 * 1_Gi;
-    }
+        constexpr unsigned long long operator""_k(unsigned long long x)
+        {
+            return x * 1000;
+        }
+        constexpr unsigned long long operator""_M(unsigned long long x)
+        {
+            return x * 1000 * 1_k;
+        }
+        constexpr unsigned long long operator""_G(unsigned long long x)
+        {
+            return x * 1000 * 1_M;
+        }
+        constexpr unsigned long long operator""_T(unsigned long long x)
+        {
+            return x * 1000 * 1_G;
+        }
+        constexpr unsigned long long operator""_ki(unsigned long long x)
+        {
+            return x * 1024;
+        }
+        constexpr unsigned long long operator""_Mi(unsigned long long x)
+        {
+            return x * 1024 * 1_ki;
+        }
+        constexpr unsigned long long operator""_Gi(unsigned long long x)
+        {
+            return x * 1024 * 1_Mi;
+        }
+        constexpr unsigned long long operator""_Ti(unsigned long long x)
+        {
+            return x * 1024 * 1_Gi;
+        }
+    }  // namespace literals
 
     inline constexpr uint64_t DEFAULT_MAX_BIDI_STREAMS = 32;
 
