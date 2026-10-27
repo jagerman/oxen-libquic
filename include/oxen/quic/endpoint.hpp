@@ -8,6 +8,7 @@
 #include "datagram.hpp"
 #include "loop.hpp"
 #include "opt.hpp"
+#include "path.hpp"
 #include "result.hpp"
 #include "udp.hpp"
 #include "utils.hpp"

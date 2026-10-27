@@ -78,7 +78,9 @@ namespace oxen::quic
         conn._endpoint.set_local(new_addr);
 
         current_sock.swap(new_sock);
-        ngtcp2_conn_set_local_addr(conn, &new_addr._addr);
+        Address local{new_addr};
+        auto local_ref = ngtcp2_addr_ref(local);
+        ngtcp2_conn_set_local_addr(conn, &local_ref);
     }
 
     Connection* TestHelper::get_conn(std::shared_ptr<Endpoint>& ep, std::shared_ptr<Connection>& _conn)
@@ -131,7 +133,10 @@ namespace oxen::quic
 
     Address TestHelper::ngtcp2_path_remote(Connection& conn)
     {
-        return conn._endpoint.job_queue.call_get([&] { return Address{ngtcp2_conn_get_path(conn)->remote}; });
+        return conn._endpoint.job_queue.call_get([&] {
+            auto& remote = ngtcp2_conn_get_path(conn)->remote;
+            return Address{remote.addr, remote.addrlen};
+        });
     }
 
     size_t TestHelper::route_lookups(Endpoint& ep)
@@ -146,7 +151,10 @@ namespace oxen::quic
 
     Address TestHelper::ngtcp2_path_local(Connection& conn)
     {
-        return conn._endpoint.job_queue.call_get([&] { return Address{ngtcp2_conn_get_path(conn)->local}; });
+        return conn._endpoint.job_queue.call_get([&] {
+            auto& local = ngtcp2_conn_get_path(conn)->local;
+            return Address{local.addr, local.addrlen};
+        });
     }
 
     bool TestHelper::fail_socket_sends(Endpoint& ep, std::vector<int> gso_errors, std::vector<int> plain_errors)

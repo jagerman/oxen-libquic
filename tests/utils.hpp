@@ -16,6 +16,7 @@
 #include <oxen/quic/loop.hpp>
 #include <oxen/quic/network.hpp>
 #include <oxen/quic/opt.hpp>
+#include <oxen/quic/path.hpp>
 #include <oxen/quic/result.hpp>
 #include <oxen/quic/stream.hpp>
 #include <oxen/quic/udp.hpp>

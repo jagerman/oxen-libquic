@@ -57,8 +57,10 @@ namespace oxen::quic::test
             CHECK(empty_addr == Address{"::", 0});
             CHECK(good_addr.is_set());
 
-            CHECK(Address{static_cast<const ngtcp2_addr&>(good_addr)} == good_addr);
-            CHECK(Address{static_cast<const ngtcp2_addr&>(public_ipv6)} == public_ipv6);
+            auto good_ref = ngtcp2_addr_ref(good_addr);
+            CHECK(Address{good_ref.addr, good_ref.addrlen} == good_addr);
+            auto public_ipv6_ref = ngtcp2_addr_ref(public_ipv6);
+            CHECK(Address{public_ipv6_ref.addr, public_ipv6_ref.addrlen} == public_ipv6);
 
             CHECK(empty_addr.is_any_addr());
 #ifndef OXEN_QUIC_ADDRESS_NO_DUAL_STACK

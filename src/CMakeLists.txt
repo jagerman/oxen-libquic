@@ -24,6 +24,7 @@ add_library(quic
     ip.cpp
     loop.cpp
     network.cpp
+    path.cpp
     result.cpp
     stream.cpp
     udp.cpp
