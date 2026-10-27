@@ -34,6 +34,14 @@ namespace oxen::quic
 
         void set_new_remote(const ngtcp2_addr& new_remote);
 
+        // ngtcp2 records the length of an address it copies into `_path` there, not in the Address
+        // it points into, so the two only agree while ngtcp2 never changes an address's length
+        // (i.e. never switches it between IPv4 and IPv6).
+        bool ngtcp2_lengths_match() const
+        {
+            return _path.local.addrlen == local.socklen() && _path.remote.addrlen == remote.socklen();
+        }
+
       public:
         Path() = default;
         Path(const Address& l, const Address& r) : local{l}, remote{r} {}

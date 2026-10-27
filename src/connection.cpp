@@ -1307,6 +1307,7 @@ namespace oxen::quic
                         bufs.data(),
                         bufs.size(),
                         ts);
+                assert(_path.ngtcp2_lengths_match());
 
                 if (sending_fin && ndatalen >= 0)
                 {
@@ -1355,6 +1356,7 @@ namespace oxen::quic
                             dgram->data(),
                             dgram->size(),
                             ts);
+                    assert(_path.ngtcp2_lengths_match());
 
                     log::debug(log_cat, "ngtcp2_conn_writev_datagram returned a value of {}", nwrite);
 
