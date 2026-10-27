@@ -1,6 +1,6 @@
 #include "address.hpp"
 
-#include "internal.hpp"
+#include "utils_internal.hpp"
 
 #include <oxenc/endian.h>
 
