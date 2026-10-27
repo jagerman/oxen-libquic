@@ -3,9 +3,23 @@
 // IWYU pragma: begin_exports
 #include <oxen/log.hpp>
 #include <oxen/log/format.hpp>
-#include <oxen/quic.hpp>
+#include <oxen/quic/address.hpp>
+#include <oxen/quic/btstream.hpp>
+#include <oxen/quic/connection.hpp>
+#include <oxen/quic/connection_ids.hpp>
+#include <oxen/quic/crypto.hpp>
+#include <oxen/quic/datagram.hpp>
+#include <oxen/quic/endpoint.hpp>
 #include <oxen/quic/format.hpp>
 #include <oxen/quic/gnutls_crypto.hpp>
+#include <oxen/quic/ip.hpp>
+#include <oxen/quic/loop.hpp>
+#include <oxen/quic/network.hpp>
+#include <oxen/quic/opt.hpp>
+#include <oxen/quic/result.hpp>
+#include <oxen/quic/stream.hpp>
+#include <oxen/quic/udp.hpp>
+#include <oxen/quic/utils.hpp>
 #include <oxenc/base64.h>
 #include <oxenc/hex.h>
 
