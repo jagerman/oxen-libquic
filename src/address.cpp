@@ -136,23 +136,11 @@ namespace oxen::quic
         if (is_any_addr())
             return false;
         if (is_ipv4())
-        {
-            ipv4 addr{oxenc::big_to_host<uint32_t>(in4().sin_addr.s_addr)};
-            for (const auto& range : ipv4_nonpublic)
-                if (range.contains(addr))
-                    return false;
-        }
-        else if (is_ipv4_mapped_ipv6())
-        {
-            return unmapped_ipv4_from_ipv6().is_public();
-        }
-        else if (is_ipv6())
-        {
-            ipv6 addr{in6().sin6_addr};
-            for (const auto& range : ipv6_nonpublic)
-                if (range.contains(addr))
-                    return false;
-        }
+            return to_ipv4().is_public();
+        if (is_ipv4_mapped_ipv6())
+            return unmapped_ipv4_from_ipv6().to_ipv4().is_public();
+        if (is_ipv6())
+            return to_ipv6().is_public();
         return true;
     }
 
@@ -168,7 +156,7 @@ namespace oxen::quic
         if (is_ipv4())
             return ipv4_loopback.contains(ipv4{in4().sin_addr});
         if (is_ipv4_mapped_ipv6())
-            return unmapped_ipv4_from_ipv6().is_public();
+            return unmapped_ipv4_from_ipv6().is_loopback();
         if (is_ipv6())
             return ipv6{in6().sin6_addr} == ipv6_loopback;
         return false;

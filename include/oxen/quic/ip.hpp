@@ -100,6 +100,10 @@ namespace oxen::quic
 
         constexpr ipv4 to_base(uint8_t mask) const { return mask < 32 ? ipv4{(addr >> (32 - mask)) << (32 - mask)} : *this; }
 
+        /// Returns true if this address is publicly routable, i.e. not within any of the
+        /// `ipv4_nonpublic` ranges.
+        constexpr bool is_public() const;
+
         std::string to_string() const;
         constexpr static bool to_string_formattable = true;
     };
@@ -191,6 +195,10 @@ namespace oxen::quic
             }
             return b;
         }
+
+        /// Returns true if this address is publicly routable, i.e. not within any of the
+        /// `ipv6_nonpublic` ranges.
+        constexpr bool is_public() const;
 
         std::string to_string() const;
         constexpr static bool to_string_formattable = true;
@@ -379,6 +387,22 @@ namespace oxen::quic
             ipv6(0xfe80) / 10,                 // link-local unicast addressing
             ipv6(0xff00) / 8,                  // Multicast
     };
+
+    constexpr bool ipv4::is_public() const
+    {
+        for (const auto& range : ipv4_nonpublic)
+            if (range.contains(*this))
+                return false;
+        return true;
+    }
+
+    constexpr bool ipv6::is_public() const
+    {
+        for (const auto& range : ipv6_nonpublic)
+            if (range.contains(*this))
+                return false;
+        return true;
+    }
 
     namespace detail
     {

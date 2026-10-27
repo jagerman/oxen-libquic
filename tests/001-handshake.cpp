@@ -129,6 +129,19 @@ namespace oxen::quic::test
             CHECK(public_ipv6.is_addressable());
             CHECK_FALSE(public_ipv6.is_loopback());
 
+            CHECK(ipv4(1, 2, 3, 4).is_public());
+            CHECK_FALSE(ipv4(10, 1, 2, 3).is_public());
+            CHECK_FALSE(ipv4(198, 51, 100, 7).is_public());
+            CHECK(ipv6(0x2345, 0, 0, 0, 0, 0, 0, 1).is_public());
+            CHECK_FALSE(ipv6(0xfdab, 0x1234, 5, 0, 0, 0, 0, 1).is_public());
+
+            Address mapped_public{"::ffff:1.2.3.4", 0};
+            CHECK(mapped_public.is_public_ip());
+            CHECK_FALSE(mapped_public.is_public());
+            Address mapped_loopback{"::ffff:127.0.0.1", 80};
+            CHECK(mapped_loopback.is_loopback());
+            CHECK_FALSE(mapped_loopback.is_public_ip());
+
             CHECK(Address{"127.0.0.1", 2} < Address{"127.0.0.1", 256});
             CHECK(Address{"127.0.0.1", 256} < Address{"127.0.0.2", 2});
             CHECK(Address{"127.0.0.1", 256} < public_ipv6);
