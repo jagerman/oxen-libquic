@@ -29,6 +29,12 @@ namespace oxen::quic
         return tv;
     }
 
+    void event_deleter::operator()(::event* e) const
+    {
+        if (e)
+            ::event_free(e);
+    }
+
     static void setup_libevent_logging()
     {
         event_set_log_callback([](int severity, const char* msg) {

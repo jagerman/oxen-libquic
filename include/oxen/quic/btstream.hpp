@@ -1,6 +1,7 @@
 #pragma once
 #include "connection_ids.hpp"
 #include "endpoint.hpp"  // IWYU pragma: keep
+#include "event_ptr.hpp"
 #include "stream.hpp"
 #include "utils.hpp"
 
