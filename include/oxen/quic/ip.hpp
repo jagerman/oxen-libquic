@@ -96,9 +96,12 @@ namespace oxen::quic
 
         constexpr bool operator==(const ipv4& a) const { return (addr <=> a.addr) == 0; }
 
-        constexpr bool operator==(const in_addr& a) const { return (addr <=> a.s_addr) == 0; }
+        constexpr bool operator==(const in_addr& a) const { return addr == oxenc::big_to_host(a.s_addr); }
 
-        constexpr ipv4 to_base(uint8_t mask) const { return mask < 32 ? ipv4{(addr >> (32 - mask)) << (32 - mask)} : *this; }
+        constexpr ipv4 to_base(uint8_t mask) const
+        {
+            return mask == 0 ? ipv4{} : mask < 32 ? ipv4{(addr >> (32 - mask)) << (32 - mask)} : *this;
+        }
 
         /// Returns true if this address is publicly routable, i.e. not within any of the
         /// `ipv4_nonpublic` ranges.
@@ -190,7 +193,7 @@ namespace oxen::quic
             }
             else
             {
-                b.hi = (hi >> (64 - mask)) << (64 - mask);
+                b.hi = mask == 0 ? uint64_t{0} : (hi >> (64 - mask)) << (64 - mask);
                 b.lo = uint64_t{0};
             }
             return b;

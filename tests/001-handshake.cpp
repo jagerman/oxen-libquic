@@ -167,6 +167,12 @@ namespace oxen::quic::test
             CHECK((ipv4(10, 255, 255, 255) % 8).contains(ipv4(10, 123, 123, 123)));
             CHECK_FALSE((ipv4(10, 0, 0, 0) % 8).contains(ipv4(11, 0, 0, 0)));
             CHECK_FALSE((ipv4(10, 0, 0, 0) % 8).contains(ipv4(9, 255, 255, 255)));
+            CHECK((ipv4(10, 1, 2, 3) / 0).ip == ipv4{});
+            CHECK((ipv4(10, 1, 2, 3) / 0).contains(ipv4(200, 1, 2, 3)));
+            CHECK((ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1) / 0).contains(ipv6(0xfe80, 0, 0, 0, 0, 0, 0, 1)));
+
+            CHECK(ipv4(1, 2, 3, 4) == static_cast<in_addr>(ipv4(1, 2, 3, 4)));
+            CHECK_FALSE(ipv4(4, 3, 2, 1) == static_cast<in_addr>(ipv4(1, 2, 3, 4)));
 
             CHECK((ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0) / 32).contains(ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0)));
             CHECK((ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0) / 32).contains(ipv6(0x2001, 0xdb8, 0xffff, 0xffff, 0, 0, 0, 0)));
