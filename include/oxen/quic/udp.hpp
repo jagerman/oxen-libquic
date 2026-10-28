@@ -13,6 +13,8 @@ extern "C"
 }
 
 #include "address.hpp"
+#include "event_ptr.hpp"
+#include "path.hpp"
 #include "result.hpp"
 #include "utils.hpp"
 

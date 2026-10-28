@@ -3,6 +3,8 @@
 #include "address.hpp"
 #include "connection_ids.hpp"
 #include "crypto.hpp"
+#include "event_ptr.hpp"
+#include "path.hpp"
 #include "result.hpp"
 #include "stream.hpp"
 #include "utils.hpp"
