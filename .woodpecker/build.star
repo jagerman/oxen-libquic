@@ -157,86 +157,14 @@ def macos(name, arch, cmake = {}, run_tests = True, test_0rtt = True, jobs = 6):
 
 def main(ctx):
     return [
-        workflow("lint check", {"platform": "linux/amd64", "backend": "docker"}, [{
+        workflow("debug {} ({})".format(i, ('linux/amd64' if i < 12 else 'linux/arm64')), {"platform": ('linux/amd64' if i < 12 else 'linux/arm64'), "backend": "docker"}, [{
             "name": "build",
-            "image": registry + "lint",
+            "image": registry + "debian-sid",
             "pull": True,
             "commands": [
-                'echo "Building on $${CI_MACHINE}"',
-                apt_get + " update",
-                apt_get + " install -y eatmydata",
-                "eatmydata " + apt_get + " install --no-install-recommends -y git clang-format-19",
-                "./utils/ci/lint-check.sh",
+                'echo "DEBUG Building on $${CI_MACHINE}"',
+                'env',
+                'ls -l /cache/ccache',
+                'ccache --print-stats -d /cache/ccache'
             ],
-        }]),
-
-        linux("Debian sid", "debian-sid"),
-        linux("Debian sid Debug", "debian-sid", cmake = {"CMAKE_BUILD_TYPE": "Debug"}),
-        clang(19),
-        full_llvm(19),
-        linux("Debian sid -GSO", "debian-sid", cmake = {"LIBQUIC_SEND": "sendmmsg"}),
-        linux("Debian sid -mmsg", "debian-sid", cmake = {"LIBQUIC_SEND": "sendmsg", "LIBQUIC_RECVMMSG": False}),
-        linux("Debian sid -GSO Debug", "debian-sid", cmake = {"CMAKE_BUILD_TYPE": "Debug", "LIBQUIC_SEND": "sendmmsg"}),
-        linux(
-            "Debian sid -mmsg Debug",
-            "debian-sid",
-            cmake = {"CMAKE_BUILD_TYPE": "Debug", "LIBQUIC_SEND": "sendmsg", "LIBQUIC_RECVMMSG": False},
-        ),
-        linux("Debian testing (i386)", "debian-testing/i386"),
-        linux("Debian 13 static", "debian-trixie", deps = ["g++"], cmake = {"BUILD_STATIC_DEPS": True}),
-        linux("Debian 13 (i386)", "debian-trixie/i386"),
-        linux("Debian 12", "debian-bookworm", setup = session_repo),
-        linux(
-            "Debian 12 static Debug",
-            "debian-bookworm",
-            deps = ["g++"],
-            cmake = {"CMAKE_BUILD_TYPE": "Debug", "BUILD_STATIC_DEPS": True},
-        ),
-        linux("Ubuntu latest", "ubuntu-rolling"),
-        linux("Ubuntu 24.04 noble", "ubuntu-noble", setup = session_repo),
-        linux("Ubuntu 22.04 jammy", "ubuntu-jammy", setup = session_repo),
-        linux(
-            "Ubuntu 20.04 focal",
-            "ubuntu-focal",
-            deps = ["g++-10", "g++"] + old_lib_deps,
-            setup = session_repo + kitware_repo("focal"),
-            cmake = {"CMAKE_C_COMPILER": "gcc-10", "CMAKE_CXX_COMPILER": "g++-10"},
-        ),
-
-        # ARM builds; armhf builds in a 32-bit image on the arm64 agents.
-        linux("Debian sid (ARM64)", "debian-sid", arch = "arm64", jobs = 4),
-        linux(
-            "Debian 12 Debug (ARM64)",
-            "debian-bookworm",
-            arch = "arm64",
-            jobs = 4,
-            setup = session_repo,
-            cmake = {"CMAKE_BUILD_TYPE": "Debug"},
-            test_0rtt = False,
-        ),
-        linux("Debian 12 (armhf)", "debian-bookworm/arm32v7", arch = "arm64", jobs = 4, setup = session_repo),
-
-        # The tests are built, but not run.
-        linux(
-            "Windows (x64)",
-            "debian-win32-cross",
-            deps = ["build-essential", "ca-certificates", "g++-mingw-w64-x86-64-posix"],
-            cmake = {
-                "CMAKE_TOOLCHAIN_FILE": "../cmake/cross/mingw-x64.cmake",
-                "BUILD_STATIC_DEPS": True,
-                "WARNINGS_AS_ERRORS": False,
-            },
-            run_tests = False,
-        ),
-
-        macos("macOS (Release, ARM)", "arm64"),
-        macos("macOS (Debug, ARM)", "arm64", cmake = {"CMAKE_BUILD_TYPE": "Debug"}),
-        macos("macOS (Static, ARM)", "arm64", cmake = {"BUILD_STATIC_DEPS": True, "WITH_LTO": True}),
-        macos("macOS (Release, Intel)", "amd64", cmake = {"LIBQUIC_BUILD_TESTS": False}, run_tests = False),
-        macos(
-            "macOS (Debug, Intel)",
-            "amd64",
-            cmake = {"CMAKE_BUILD_TYPE": "Debug", "LIBQUIC_BUILD_TESTS": False},
-            run_tests = False,
-        ),
-    ]
+        }]) for i in range(18)]
